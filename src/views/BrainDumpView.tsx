@@ -7,10 +7,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { ClassificationPopup } from '../modals/ClassificationPopup';
+import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { db } from '../db/db';
 import { updateNoteContent, deleteNote, applyNoteSuggestedAction, ignoreNoteSuggestedAction } from '../db/queries/notes';
-import { createTask, recalcGoalProgress } from '../db/queries/tasks';
-import { updateGoalProgress } from '../db/queries/goals';
+import { createTask } from '../db/queries/tasks';
 import { parseExtractedTasks, parseRelevantDocs } from '../db/schema';
 
 // ─── TipTap editor ────────────────────────────────────────────────────────────
@@ -80,29 +80,32 @@ function NoteEditor() {
 
   const handleApply = async () => {
     if (!activeNote?.suggested_action_text) return;
-    await applyNoteSuggestedAction(activeNote.id, 'goal-1');
 
-    // Create task in goal-1 unless one with same title already exists (dedup)
+    const activeGoals = await db.goals.filter(g => !g.archived_at).sortBy('created_at');
+    const targetGoal = activeGoals[0];
+    if (!targetGoal) {
+      triggerToast('No active goals to link this task to.', 'error');
+      return;
+    }
+
+    await applyNoteSuggestedAction(activeNote.id, targetGoal.id);
+
     const existing = await db.tasks
-      .filter(t => t.goal_id === 'goal-1' && t.title === activeNote.suggested_action_text)
+      .filter(t => t.goal_id === targetGoal.id && t.title === activeNote.suggested_action_text)
       .first();
 
     if (!existing) {
       await createTask({
-        goal_id: 'goal-1', parent_task_id: null,
+        goal_id: targetGoal.id, parent_task_id: null,
         title: activeNote.suggested_action_text!,
         description: `Extracted from note: ${activeNote.title}`,
         status: 'todo', priority: 'medium', kind: 'ai_generated',
         critical_path_status: null, tags_json: '[]', due_date: null,
-        estimated_duration: 'Est. 1 hr', completed: false, position: 999,
+        estimated_duration: 'Est. 1 hr', estimated_minutes: null, completed: false, position: 999,
       });
     }
 
-    // Recalc goal-1 progress (baseline 75, ai_generated tasks)
-    const newProgress = await recalcGoalProgress('goal-1', 75, 'ai_generated');
-    await updateGoalProgress('goal-1', newProgress);
-
-    triggerToast('Extracted task linked to Design System goal!', 'success');
+    triggerToast(`Task linked to "${targetGoal.title}"!`, 'success');
   };
 
   const handleIgnore = async () => {
@@ -143,6 +146,7 @@ function NoteEditor() {
                 <div className="flex items-center gap-1.5 text-[#4648d4] text-[10px] font-mono uppercase tracking-wider font-bold mb-2">
                   <Sparkles size={11} />
                   <span>Suggested Action</span>
+                  <NeedsImplementationBadge className="ml-auto" />
                 </div>
                 <p className="text-xs text-gray-800 font-semibold mb-3">{activeNote.suggested_action_text}</p>
                 <div className="flex gap-2">
@@ -196,6 +200,7 @@ function ContextRail() {
         <div className="flex items-center gap-2 text-black font-mono text-[10px] uppercase tracking-wider font-bold mb-4">
           <Sparkles size={13} className="text-[#6063ee]" />
           <span>Context &amp; Insights</span>
+          <NeedsImplementationBadge className="ml-auto" />
         </div>
 
         <div className="mb-4">
@@ -238,7 +243,10 @@ function ContextRail() {
       </div>
 
       <div className="bg-[#EEF2FF] rounded-xl p-4 border border-[#4648d4]/10 text-xs">
-        <p className="font-bold text-[#4648d4] mb-1">Amina Mind-Link Helper</p>
+        <p className="font-bold text-[#4648d4] mb-1 flex items-center gap-2">
+          <span>Amina Mind-Link Helper</span>
+          <NeedsImplementationBadge />
+        </p>
         <p className="text-gray-600 leading-normal">
           Type <strong>OO</strong> at the end of a line to classify your thought. Select text to instantly map it to a goal.
         </p>

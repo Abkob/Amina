@@ -44,6 +44,7 @@ async function runSeed(): Promise<void> {
           deadline: g.targetQuarter,
           overdue: g.overdue,
           activity_level: g.activityLevel,
+          archived_at: null,
           created_at: now,
           updated_at: now,
         };

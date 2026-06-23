@@ -1,7 +1,9 @@
+import { useState, useEffect } from 'react';
 import { Sparkles, X, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
+import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { db } from '../db/db';
 import { rescheduleEvent, fixMyWeek as dbFixMyWeek } from '../db/queries/events';
 import { parseConnectedResource } from '../db/schema';
@@ -9,8 +11,34 @@ import { parseConnectedResource } from '../db/schema';
 const START_HOUR = 8;
 const HOURS = 16;
 const PX_PER_HOUR = 60;
-const DAYS = ['Mon 23', 'Tue 24', 'Wed 25', 'Thu 26', 'Fri 27', 'Sat 28', 'Sun 29'];
-const TODAY_IDX = 1;
+
+function getWeekInfo() {
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun, 1=Mon, …, 6=Sat
+  const mondayOffset = (dow + 6) % 7; // days since Monday (Mon=0 … Sun=6)
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - mondayOffset);
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}`;
+  });
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const weekLabel = `${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${sunday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+
+  return { days, todayIdx: mondayOffset, weekLabel };
+}
+
+function fmtHourLabel(hour: number) {
+  const h = Math.floor(hour);
+  const m = Math.round((hour - h) * 60);
+  const hh = h % 12 || 12;
+  const ampm = h < 12 ? 'AM' : 'PM';
+  return `${hh}:${String(m).padStart(2, '0')} ${ampm}`;
+}
 
 function fmtHour(h: number) {
   const hh = h % 12 || 12;
@@ -41,7 +69,10 @@ function AIDrawer() {
     return (
       <div className="bg-[#EEF2FF] rounded-xl p-5 border border-dashed border-[#4648d4]/20 text-center text-xs">
         <Sparkles size={24} className="text-[#4648d4] mx-auto mb-2.5 animate-pulse" />
-        <p className="font-bold text-[#4648d4] mb-1">Interactive Scheduler Guidance</p>
+        <p className="font-bold text-[#4648d4] mb-1 flex items-center justify-center gap-2">
+          <span>Interactive Scheduler Guidance</span>
+          <NeedsImplementationBadge />
+        </p>
         <p className="text-gray-600 leading-normal mb-3">
           Tap any block in the schedule grid to activate Amina OS reasoning profiles.
         </p>
@@ -78,6 +109,7 @@ function AIDrawer() {
           <div className="flex items-center gap-1.5 text-[#4648d4]">
             <Sparkles size={14} className="animate-pulse" />
             <h3 className="font-headline text-sm font-bold text-black uppercase tracking-wide">AI Reasoning</h3>
+            <NeedsImplementationBadge />
           </div>
           <button onClick={() => setIsDrawerOpen(false)} className="p-1 hover:bg-gray-100 rounded text-gray-400">
             <X size={14} />
@@ -132,6 +164,24 @@ export function ScheduleView() {
   const { selectedEventId, setSelectedEventId, setIsDrawerOpen, isOptimizing, setIsOptimizing, triggerToast } = useAppStore();
   const events = useLiveQuery(() => db.events.toArray()) ?? [];
 
+  const { days, todayIdx, weekLabel } = getWeekInfo();
+
+  const [currentHour, setCurrentHour] = useState(() => {
+    const now = new Date();
+    return now.getHours() + now.getMinutes() / 60;
+  });
+
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setCurrentHour(now.getHours() + now.getMinutes() / 60);
+    };
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const showTimeIndicator = currentHour >= START_HOUR && currentHour < START_HOUR + HOURS;
+
   const handleFixMyWeek = async () => {
     setIsOptimizing(true);
     triggerToast('AI analysis active. Resolving structural conflicts...', 'info');
@@ -146,8 +196,11 @@ export function ScheduleView() {
     <div className="max-w-[1100px] mx-auto px-4 md:px-10 py-6 flex flex-col animate-fade-in">
       <div className="flex justify-between items-end mb-6 shrink-0">
         <div>
-          <h2 className="font-headline text-2xl font-bold text-black">This Week</h2>
-          <p className="text-xs font-mono text-gray-400 uppercase tracking-widest mt-1">Oct 23 – Oct 29</p>
+          <div className="flex items-center gap-2">
+            <h2 className="font-headline text-2xl font-bold text-black">This Week</h2>
+            <NeedsImplementationBadge />
+          </div>
+          <p className="text-xs font-mono text-gray-400 uppercase tracking-widest mt-1">{weekLabel}</p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -157,6 +210,7 @@ export function ScheduleView() {
           >
             <Sparkles size={13} className={isOptimizing ? 'animate-spin' : 'animate-pulse'} />
             {isOptimizing ? 'Recalculating…' : 'Fix my Week'}
+            <NeedsImplementationBadge className="hidden xl:inline-flex" />
           </button>
           <div className="flex gap-1 border border-gray-200 rounded-lg p-0.5 bg-[#f8f9fa]">
             <button onClick={() => triggerToast('Previous week retrieved.', 'info')} className="p-1.5 hover:bg-gray-100 rounded text-gray-600">
@@ -174,8 +228,8 @@ export function ScheduleView() {
           {/* Day headers */}
           <div className="grid grid-cols-8 border-b border-gray-150 bg-gray-50 shrink-0">
             <div className="p-3 border-r border-gray-150/40 font-mono text-[9px] text-gray-400 uppercase tracking-wider flex items-center justify-center">GMT+3</div>
-            {DAYS.map((day, dIdx) => {
-              const isToday = dIdx === TODAY_IDX;
+            {days.map((day, dIdx) => {
+              const isToday = dIdx === todayIdx;
               const [name, date] = day.split(' ');
               return (
                 <div key={day} className={`p-2.5 border-r border-gray-150/40 flex flex-col items-center ${isToday ? 'bg-[#EEF2FF]/20' : ''}`}>
@@ -204,12 +258,14 @@ export function ScheduleView() {
               ))}
 
               {/* Current time indicator */}
-              <div className="absolute left-0 right-0 z-10 flex items-center pointer-events-none" style={{ top: `${(9.5 - START_HOUR) * PX_PER_HOUR}px` }}>
-                <div className="w-[62px] text-right pr-2.5 font-mono text-[9px] text-[#4648d4] font-bold shrink-0">9:30</div>
-                <div className="flex-1 border-t-2 border-[#4648d4] relative">
-                  <div className="absolute -left-1 -top-[5px] w-2.5 h-2.5 rounded-full bg-[#4648d4]" />
+              {showTimeIndicator && (
+                <div className="absolute left-0 right-0 z-10 flex items-center pointer-events-none" style={{ top: `${(currentHour - START_HOUR) * PX_PER_HOUR}px` }}>
+                  <div className="w-[62px] text-right pr-2.5 font-mono text-[9px] text-[#4648d4] font-bold shrink-0">{fmtHourLabel(currentHour)}</div>
+                  <div className="flex-1 border-t-2 border-[#4648d4] relative">
+                    <div className="absolute -left-1 -top-[5px] w-2.5 h-2.5 rounded-full bg-[#4648d4]" />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Event blocks */}
               <div className="absolute inset-0 pointer-events-none z-20" style={{ left: '62px' }}>

@@ -4,7 +4,7 @@ export const INITIAL_GOALS: Goal[] = [
   {
     id: 'goal-1',
     title: 'Launch v2.0 Design System',
-    category: 'Product Development',
+    category: 'Work',
     status: 'Safe',
     targetQuarter: 'Q3 2024',
     overdue: false,
@@ -71,7 +71,7 @@ export const INITIAL_GOALS: Goal[] = [
   {
     id: 'goal-2',
     title: 'Complete Spanish A2 Certification',
-    category: 'Languages',
+    category: 'Learning',
     status: 'Watch',
     targetQuarter: 'Oct 15',
     overdue: false,
@@ -129,7 +129,7 @@ export const INITIAL_GOALS: Goal[] = [
   {
     id: 'goal-3',
     title: 'Migrate Personal Data to NAS',
-    category: 'DevOps & Storage',
+    category: 'Home',
     status: 'Risky',
     targetQuarter: 'Aug 30',
     overdue: true,
@@ -187,7 +187,7 @@ export const INITIAL_GOALS: Goal[] = [
   {
     id: 'goal-4',
     title: 'Run Half Marathon',
-    category: 'Health & Fitness',
+    category: 'Health',
     status: 'Safe',
     targetQuarter: 'Nov 12',
     overdue: false,

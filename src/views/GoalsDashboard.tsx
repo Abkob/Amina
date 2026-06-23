@@ -1,34 +1,53 @@
-import { Target, Calendar, Trash2, CheckSquare, Square, Plus } from 'lucide-react';
+import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { ProgressRing } from '../components/ProgressRing';
 import { db } from '../db/db';
-import { deleteGoal, updateGoalProgress } from '../db/queries/goals';
+import { archiveGoal, restoreGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
+import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
+import { calculateGoalTaskMetrics, type GoalTaskMetrics } from '../utils/goalTaskMetrics';
 import type { DBGoal, DBTask } from '../db/schema';
 
 const STATUS_BG   = { Safe: 'bg-[#10B981]', Watch: 'bg-[#F59E0B]', Risky: 'bg-[#EF4444]' };
 const STATUS_TEXT = { Safe: 'text-[#10B981]', Watch: 'text-[#F59E0B]', Risky: 'text-[#EF4444]' };
 
 // ─── Goal Card ────────────────────────────────────────────────────────────────
-function GoalCard({ goal, nextAction }: { goal: DBGoal; nextAction?: DBTask }) {
+function GoalCard({
+  goal,
+  nextAction,
+  finishEstimate,
+  metrics,
+}: {
+  goal: DBGoal;
+  nextAction?: DBTask;
+  finishEstimate: GoalFinishEstimate;
+  metrics: GoalTaskMetrics;
+}) {
   const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
+  const isArchived = Boolean(goal.archived_at);
 
-  const handleDelete = (e: React.MouseEvent) => {
+  const handleArchiveToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    showConfirm(`Archive goal "${goal.title}"?`, async () => {
-      await deleteGoal(goal.id);
-      triggerToast('Goal archived.', 'info');
+    if (isArchived) {
+      showConfirm(`Restore goal "${goal.title}"?`, async () => {
+        await restoreGoal(goal.id);
+        triggerToast('Goal restored with progress intact.', 'success');
+      });
+      return;
+    }
+
+    showConfirm(`Archive goal "${goal.title}"? Your tasks, resources, and progress will be saved.`, async () => {
+      await archiveGoal(goal.id);
+      triggerToast('Goal archived. Progress saved.', 'info');
     });
   };
 
   const handleToggleNextAction = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!nextAction) return;
-    const { completed } = await toggleTask(nextAction.id);
-    const newProgress = Math.min(100, Math.max(0, goal.progress + (completed ? 5 : -5)));
-    await updateGoalProgress(goal.id, newProgress);
+    await toggleTask(nextAction.id);
   };
 
   return (
@@ -40,7 +59,7 @@ function GoalCard({ goal, nextAction }: { goal: DBGoal; nextAction?: DBTask }) {
       whileHover={{ y: -3 }}
       transition={{ duration: 0.2 }}
       onClick={() => setSelectedGoalId(goal.id)}
-      className="bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 shadow-card hover:shadow-card-hover relative overflow-hidden group cursor-pointer flex flex-col h-full"
+      className={`bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 shadow-card hover:shadow-card-hover relative overflow-hidden group cursor-pointer flex flex-col h-full ${isArchived ? 'opacity-75' : ''}`}
     >
       <div className={`absolute top-0 left-0 w-full h-1 ${STATUS_BG[goal.status]}`} />
 
@@ -49,8 +68,12 @@ function GoalCard({ goal, nextAction }: { goal: DBGoal; nextAction?: DBTask }) {
           <span className={`w-1.5 h-1.5 rounded-full ${STATUS_BG[goal.status]}`} />
           {goal.status}
         </div>
-        <button onClick={handleDelete} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
-          <Trash2 size={13} />
+        <button
+          onClick={handleArchiveToggle}
+          className="text-gray-300 hover:text-[#4648d4] opacity-0 group-hover:opacity-100 transition-all"
+          title={isArchived ? 'Restore goal' : 'Archive goal'}
+        >
+          {isArchived ? <RotateCcw size={13} /> : <Archive size={13} />}
         </button>
       </div>
 
@@ -59,14 +82,15 @@ function GoalCard({ goal, nextAction }: { goal: DBGoal; nextAction?: DBTask }) {
       </h3>
       <p className="font-mono text-[10px] text-gray-400 mb-6 flex items-center gap-1">
         <Calendar size={11} className="text-gray-400" />
-        {goal.deadline ?? '—'}
+        <span className="uppercase tracking-wider">{finishEstimate.caption}</span>
+        <span title={finishEstimate.title}>{finishEstimate.label}</span>
         {goal.overdue && (
           <span className="text-[#EF4444] font-bold ml-1 uppercase text-[9px]">(Overdue)</span>
         )}
       </p>
 
       <div className="flex items-center justify-between mt-auto mb-6">
-        <ProgressRing progress={goal.progress} activityLevel={goal.activity_level} status={goal.status} />
+        <ProgressRing progress={metrics.progress} activityLevel={metrics.activityLevel} status={goal.status} />
         <div className="text-right pl-4">
           <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Activity Level</p>
           <div className="flex gap-1 justify-end items-end h-4">
@@ -74,7 +98,7 @@ function GoalCard({ goal, nextAction }: { goal: DBGoal; nextAction?: DBTask }) {
               <div
                 key={lvl}
                 className={`w-1 rounded-full transition-all ${
-                  lvl <= goal.activity_level
+                  lvl <= metrics.activityLevel
                     ? goal.status === 'Safe' ? 'bg-[#4648d4] h-4' : goal.status === 'Watch' ? 'bg-[#F59E0B] h-3.5' : 'bg-[#EF4444] h-3'
                     : 'bg-gray-200 h-1.5'
                 }`}
@@ -116,20 +140,34 @@ export function GoalsDashboard() {
   const nextActions = useLiveQuery(() =>
     db.tasks.where('kind').equals('next_action').toArray()
   ) ?? [];
+  const allTasks = useLiveQuery(() => db.tasks.toArray()) ?? [];
 
   const nextActionMap = new Map(nextActions.map(t => [t.goal_id!, t]));
+  const tasksByGoal = allTasks.reduce<Record<string, DBTask[]>>((acc, task) => {
+    if (!task.goal_id) return acc;
+    acc[task.goal_id] = [...(acc[task.goal_id] ?? []), task];
+    return acc;
+  }, {});
+
+  const visibleGoals = goals.filter((g) => !g.archived_at);
+  const archivedGoals = goals.filter((g) => Boolean(g.archived_at));
 
   const filtered = goals.filter((g) => {
     const q = searchQuery.toLowerCase();
     const matchesSearch = !q || g.title.toLowerCase().includes(q) || g.category.toLowerCase().includes(q);
-    const matchesFilter = goalsFilter === 'Active' ? g.progress < 100 : g.progress === 100;
+    const isArchived = Boolean(g.archived_at);
+    const metrics = calculateGoalTaskMetrics(tasksByGoal[g.id] ?? []);
+    const matchesFilter =
+      goalsFilter === 'Archived'
+        ? isArchived
+        : !isArchived && (goalsFilter === 'Active' ? metrics.progress < 100 : metrics.progress === 100);
     return matchesSearch && matchesFilter;
   });
 
-  const total    = goals.length;
-  const onTrack  = goals.filter((g) => g.status === 'Safe').length;
-  const needsAttn= goals.filter((g) => g.status === 'Watch').length;
-  const atRisk   = goals.filter((g) => g.status === 'Risky').length;
+  const total    = visibleGoals.length;
+  const onTrack  = visibleGoals.filter((g) => g.status === 'Safe').length;
+  const needsAttn= visibleGoals.filter((g) => g.status === 'Watch').length;
+  const atRisk   = visibleGoals.filter((g) => g.status === 'Risky').length;
 
   return (
     <div className="max-w-[1000px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
@@ -142,7 +180,7 @@ export function GoalsDashboard() {
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 bg-[#f3f4f5] rounded-full p-1 border border-gray-200">
-            {(['Active', 'Completed'] as const).map((f) => (
+            {(['Active', 'Completed', 'Archived'] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setGoalsFilter(f)}
@@ -168,7 +206,7 @@ export function GoalsDashboard() {
           { label: 'Total Goals',     value: total,     color: 'text-black' },
           { label: 'On Track',        value: onTrack,   color: STATUS_TEXT.Safe },
           { label: 'Needs Attention', value: needsAttn, color: STATUS_TEXT.Watch },
-          { label: 'At Risk',         value: atRisk,    color: STATUS_TEXT.Risky },
+          { label: goalsFilter === 'Archived' ? 'Archived' : 'At Risk', value: goalsFilter === 'Archived' ? archivedGoals.length : atRisk, color: goalsFilter === 'Archived' ? 'text-gray-500' : STATUS_TEXT.Risky },
         ].map(({ label, value, color }) => (
           <div key={label} className="bg-[#f8f9fa] rounded-xl p-4 border border-gray-200 shadow-card">
             <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">{label}</p>
@@ -191,7 +229,13 @@ export function GoalsDashboard() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filtered.map((g) => (
-            <GoalCard key={g.id} goal={g} nextAction={nextActionMap.get(g.id)} />
+            <GoalCard
+              key={g.id}
+              goal={g}
+              nextAction={nextActionMap.get(g.id)}
+              finishEstimate={getGoalFinishEstimate(g, tasksByGoal[g.id] ?? [])}
+              metrics={calculateGoalTaskMetrics(tasksByGoal[g.id] ?? [])}
+            />
           ))}
         </div>
       )}

@@ -28,6 +28,7 @@ export interface DBGoal {
   deadline: string | null;             // ISO date or quarter string e.g. "Q3 2024"
   overdue: boolean;
   activity_level: number;              // 1–5
+  archived_at: string | null;          // null = visible, ISO date = archived
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +52,8 @@ export interface DBTask {
   tags_json: string;                   // JSON: string[]
   due_date: string | null;             // ISO date
   estimated_duration: string | null;   // e.g. "Est. 2 hrs"
+  estimated_minutes?: number | null;   // normalized time needed for scheduling
+  weight_percent?: number | null;      // optional explicit progress weight, 0-100
   completed: boolean;
   position: number;                    // ordering within sibling tasks
   created_at: string;
@@ -62,6 +65,17 @@ export interface DBTaskNote {
   id: string;
   task_id: string;
   content: string;
+  created_at: string;
+}
+
+// ─── Files attached to task-note journal entries ──────────────────────────────
+export interface DBTaskNoteFile {
+  id: string;
+  note_id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  blob: Blob;
   created_at: string;
 }
 

@@ -1,14 +1,49 @@
+import { useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { resetAndSeed } from '../db/seed';
 
 export function SettingsView() {
-  const { triggerToast, showConfirm } = useAppStore();
+  const {
+    triggerToast,
+    showConfirm,
+    goalCategories,
+    addGoalCategory,
+    removeGoalCategory,
+  } = useAppStore();
+  const [categoryInput, setCategoryInput] = useState('');
 
   const handleReset = () => {
     showConfirm('Reset all data to defaults? This will overwrite your custom items.', async () => {
       await resetAndSeed();
       triggerToast('All default copilot assets successfully restored!', 'info');
     });
+  };
+
+  const handleAddCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = categoryInput.trim();
+    if (!trimmed) {
+      triggerToast('Name the umbrella first.', 'error');
+      return;
+    }
+    if (goalCategories.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+      triggerToast('That umbrella already exists.', 'info');
+      return;
+    }
+    addGoalCategory(trimmed);
+    setCategoryInput('');
+    triggerToast(`Umbrella "${trimmed}" added.`, 'success');
+  };
+
+  const handleRemoveCategory = (category: string) => {
+    if (goalCategories.length <= 1) {
+      triggerToast('Keep at least one goal umbrella.', 'error');
+      return;
+    }
+    removeGoalCategory(category);
+    triggerToast(`Umbrella "${category}" removed from new goal options.`, 'info');
   };
 
   return (
@@ -23,7 +58,10 @@ export function SettingsView() {
       <div className="space-y-6">
         {/* Copilot Metadata */}
         <div className="bg-white border border-gray-200 p-5 rounded-xl shadow-sm">
-          <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black mb-3">Copilot Metadata</h3>
+          <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black mb-3 flex items-center gap-2">
+            <span>Copilot Metadata</span>
+            <NeedsImplementationBadge />
+          </h3>
           <div className="flex items-center gap-4">
             <div className="relative w-14 h-14 rounded-full border overflow-hidden shrink-0">
               <img
@@ -39,7 +77,7 @@ export function SettingsView() {
                 onClick={() => triggerToast('Amina self-diagnosis complete. Focus indexes optimized.', 'success')}
                 className="text-[10px] font-mono uppercase bg-black hover:opacity-90 text-white font-bold py-1 px-2.5 rounded mt-3.5"
               >
-                Diagnose Engine
+                Diagnose Engine <NeedsImplementationBadge className="ml-2 align-middle" />
               </button>
             </div>
           </div>
@@ -61,6 +99,47 @@ export function SettingsView() {
             >
               Factory Refactor
             </button>
+          </div>
+        </div>
+
+        {/* Goal Umbrellas */}
+        <div className="bg-white border border-gray-200 p-5 rounded-xl shadow-sm">
+          <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black mb-3">Goal Umbrellas</h3>
+
+          <form onSubmit={handleAddCategory} className="flex gap-2 mb-4">
+            <input
+              value={categoryInput}
+              onChange={(e) => setCategoryInput(e.target.value)}
+              placeholder="New umbrella"
+              className="flex-1 text-xs font-sans rounded-lg border border-gray-200 p-2.5 focus:ring-1 focus:ring-black outline-none"
+            />
+            <button
+              type="submit"
+              className="bg-black text-white rounded-lg px-3 flex items-center justify-center hover:opacity-90 active:scale-95 transition-all"
+              title="Add umbrella"
+            >
+              <Plus size={15} />
+            </button>
+          </form>
+
+          <div className="flex flex-wrap gap-2">
+            {goalCategories.map((category) => (
+              <span
+                key={category}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-[#f8f9fa] px-2.5 py-1.5 text-xs font-semibold text-gray-700"
+              >
+                {category}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveCategory(category)}
+                  className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-30 disabled:hover:text-gray-300"
+                  disabled={goalCategories.length <= 1}
+                  title="Remove umbrella"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </span>
+            ))}
           </div>
         </div>
 

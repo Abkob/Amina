@@ -1,21 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { createGoal } from '../db/queries/goals';
 import { createTask } from '../db/queries/tasks';
-import { addEdge } from '../db/queries/edges';
-
-const CATEGORIES = ['Product Development', 'Languages', 'DevOps & Storage', 'Health & Fitness', 'Strategy Planning'];
 
 export function NewGoalModal() {
-  const { closeNewGoalModal, triggerToast, goalTitlePrefill } = useAppStore();
+  const { closeNewGoalModal, triggerToast, goalTitlePrefill, goalCategories } = useAppStore();
+  const categoryOptions = goalCategories.length > 0 ? goalCategories : ['General'];
 
   const [title,    setTitle]    = useState(goalTitlePrefill);
-  const [category, setCategory] = useState('Product Development');
-  const [quarter,  setQuarter]  = useState('Q3 2024');
+  const [category, setCategory] = useState(categoryOptions[0]);
+  const [quarter,  setQuarter]  = useState('');
   const [status,   setStatus]   = useState<'Safe' | 'Watch' | 'Risky'>('Safe');
   const [desc,     setDesc]     = useState('');
+
+  useEffect(() => {
+    const options = goalCategories.length > 0 ? goalCategories : ['General'];
+    if (!options.includes(category)) setCategory(options[0]);
+  }, [goalCategories, category]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,53 +27,52 @@ export function NewGoalModal() {
       return;
     }
 
+    const targetDeadline = quarter.trim() || null;
     const goalId = await createGoal({
       title:          title.trim(),
-      description:    desc || 'Goal description outlining major parameters and milestones.',
+      description:    desc || (targetDeadline
+        ? `Goal targeting ${targetDeadline}.`
+        : 'Goal with finish estimated from tasks and subtasks.'),
       category,
       status,
       progress:       10,
-      deadline:       quarter,
+      deadline:       targetDeadline,
       overdue:        false,
       activity_level: Math.floor(Math.random() * 3) + 2,
     });
 
     // Seed initial tasks
-    const naId = await createTask({
+    await createTask({
       goal_id: goalId, parent_task_id: null,
       title: 'Initial strategy kickoff and scope definition.',
       description: '', status: 'todo', priority: 'high', kind: 'next_action',
       critical_path_status: null, tags_json: '[]', due_date: null,
       estimated_duration: null, completed: false, position: -1,
     });
-    await addEdge({ source_id: goalId, source_type: 'goal', target_id: naId, target_type: 'task', relationship: 'contains', metadata: JSON.stringify({ kind: 'next_action' }) });
 
-    const cp1 = await createTask({
+    await createTask({
       goal_id: goalId, parent_task_id: null,
       title: 'Scoping & Architecture', description: 'Assess base dependencies and coordinate initial milestone list.',
       status: 'in_progress', priority: 'medium', kind: 'critical_path',
       critical_path_status: 'In Progress', tags_json: '[]', due_date: null,
       estimated_duration: null, completed: false, position: 0,
     });
-    await addEdge({ source_id: goalId, source_type: 'goal', target_id: cp1, target_type: 'task', relationship: 'contains', metadata: JSON.stringify({ kind: 'critical_path' }) });
 
-    const cp2 = await createTask({
+    await createTask({
       goal_id: goalId, parent_task_id: null,
       title: 'Implementation', description: 'Execute the core milestones and refactor as needed.',
       status: 'todo', priority: 'medium', kind: 'critical_path',
       critical_path_status: 'Future', tags_json: '[]', due_date: null,
       estimated_duration: null, completed: false, position: 1,
     });
-    await addEdge({ source_id: goalId, source_type: 'goal', target_id: cp2, target_type: 'task', relationship: 'contains', metadata: JSON.stringify({ kind: 'critical_path' }) });
 
-    const ai1 = await createTask({
+    await createTask({
       goal_id: goalId, parent_task_id: null,
       title: 'Formulate timeline tasks', description: '',
       status: 'todo', priority: 'medium', kind: 'ai_generated',
       critical_path_status: null, tags_json: '[]', due_date: null,
       estimated_duration: 'Est. 1 hr', completed: false, position: 0,
     });
-    await addEdge({ source_id: goalId, source_type: 'goal', target_id: ai1, target_type: 'task', relationship: 'contains', metadata: JSON.stringify({ kind: 'ai_generated' }) });
 
     triggerToast(`Goal "${title.trim()}" created!`, 'success');
     closeNewGoalModal();
@@ -96,15 +98,15 @@ export function NewGoalModal() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Category</label>
+              <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Umbrella</label>
               <select value={category} onChange={(e) => setCategory(e.target.value)}
                 className="w-full text-xs font-sans rounded-lg border border-gray-200 p-2 focus:ring-1 focus:ring-black outline-none bg-white">
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                {categoryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Target Deadline</label>
-              <input type="text" required placeholder="e.g. Q3 2024" value={quarter} onChange={(e) => setQuarter(e.target.value)}
+              <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Target Deadline (optional)</label>
+              <input type="text" placeholder="Optional, e.g. Q3 2026" value={quarter} onChange={(e) => setQuarter(e.target.value)}
                 className="w-full text-xs font-sans rounded-lg border border-gray-200 p-2 focus:ring-1 focus:ring-black outline-none" />
             </div>
           </div>

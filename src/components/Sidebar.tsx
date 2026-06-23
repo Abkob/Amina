@@ -1,6 +1,7 @@
 import { BookOpen, Target, Calendar, FolderOpen, Settings as SettingsIcon, HelpCircle, Archive, Plus } from 'lucide-react';
 import { useAppStore, type Tab } from '../store/useAppStore';
 import { resetAndSeed } from '../db/seed';
+import { NeedsImplementationBadge } from './NeedsImplementationBadge';
 
 const NAV: { id: Tab; label: string; Icon: React.ElementType }[] = [
   { id: 'Brain Dump', label: 'Brain Dump', Icon: BookOpen },
@@ -72,6 +73,7 @@ export function Sidebar() {
         >
           <HelpCircle size={15} />
           <span>Help</span>
+          <NeedsImplementationBadge className="ml-auto" />
         </button>
         <button
           onClick={handleReset}

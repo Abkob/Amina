@@ -14,11 +14,14 @@ const KEYWORD_SEEDS: Record<string, string[]> = {
 };
 
 const CATEGORY_SEEDS: Record<string, string[]> = {
-  'Product Development':  ['User story mapping', 'Feature spec', 'Sprint planning', 'Customer validation', 'Roadmap update'],
-  'Languages':            ['Vocabulary drill (30 min)', 'Grammar exercises', 'Conversation session', 'Listening practice', 'Writing exercise'],
-  'Health & Fitness':     ['Baseline assessment', 'Training plan draft', 'Nutrition log setup', 'Recovery protocol', 'Progress check-in'],
-  'DevOps & Storage':     ['Infrastructure audit', 'Monitoring dashboards', 'Backup config', 'Security scan', 'Load test'],
-  'Strategy Planning':    ['SWOT analysis', 'OKR definition', 'Market research', 'KPI dashboard', 'Exec presentation'],
+  'Work':     ['Define scope', 'Stakeholder alignment', 'Draft next steps', 'Review deliverables', 'Share status update'],
+  'Personal': ['Clarify outcome', 'Break into next actions', 'Schedule focus time', 'Gather references', 'Review progress'],
+  'Health':   ['Baseline assessment', 'Training plan draft', 'Recovery protocol', 'Progress check-in', 'Habit review'],
+  'Learning': ['Practice session', 'Review notes', 'Knowledge check', 'Create study plan', 'Summarize takeaways'],
+  'Home':     ['Inventory current state', 'Purchase checklist', 'Setup plan', 'Maintenance review', 'Backup plan'],
+  'Money':    ['Budget review', 'Compare options', 'Update tracker', 'Risk check', 'Decision summary'],
+  'Creative': ['Outline concept', 'First draft', 'Asset pass', 'Feedback review', 'Publish prep'],
+  'Admin':    ['Inbox review', 'Document update', 'Schedule review', 'Follow-up list', 'Clean up backlog'],
 };
 
 const FALLBACKS = [

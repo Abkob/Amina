@@ -2,6 +2,7 @@ import { Sparkles, X, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
+import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { db } from '../db/db';
 import { linkNoteToGoal } from '../db/queries/notes';
 
@@ -44,6 +45,7 @@ export function ClassificationPopup() {
           <div className="flex items-center gap-2 text-[#4648d4]">
             <Sparkles size={16} className="animate-pulse" />
             <span className="font-headline text-sm font-bold text-black uppercase tracking-wide">Classify Entry</span>
+            <NeedsImplementationBadge />
           </div>
           <button onClick={closeOOPopup} className="p-1 hover:bg-gray-100 rounded text-gray-400"><X size={14} /></button>
         </div>

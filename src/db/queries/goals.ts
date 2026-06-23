@@ -14,9 +14,15 @@ export async function getGoalById(goalId: string): Promise<DBGoal | undefined> {
 }
 
 export async function createGoal(
-  data: Omit<DBGoal, 'id' | 'created_at' | 'updated_at'>
+  data: Omit<DBGoal, 'id' | 'created_at' | 'updated_at' | 'archived_at'> & { archived_at?: string | null }
 ): Promise<string> {
-  const goal: DBGoal = { ...data, id: id(), created_at: now(), updated_at: now() };
+  const goal: DBGoal = {
+    ...data,
+    archived_at: data.archived_at ?? null,
+    id: id(),
+    created_at: now(),
+    updated_at: now(),
+  };
   await db.goals.add(goal);
   return goal.id;
 }
@@ -58,6 +64,20 @@ export async function deleteGoal(goalId: string): Promise<void> {
 export async function updateGoalProgress(goalId: string, progress: number): Promise<void> {
   await db.goals.update(goalId, {
     progress: Math.min(100, Math.max(0, progress)),
+    updated_at: now(),
+  });
+}
+
+export async function archiveGoal(goalId: string): Promise<void> {
+  await db.goals.update(goalId, {
+    archived_at: now(),
+    updated_at: now(),
+  });
+}
+
+export async function restoreGoal(goalId: string): Promise<void> {
+  await db.goals.update(goalId, {
+    archived_at: null,
     updated_at: now(),
   });
 }

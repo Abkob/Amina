@@ -1,5 +1,6 @@
 import { Search, RefreshCw, Zap, Bell, X, Sparkles, AlertTriangle } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { NeedsImplementationBadge } from './NeedsImplementationBadge';
 
 export function Header() {
   const {
@@ -65,14 +66,18 @@ export function Header() {
           >
             <RefreshCw size={11} />
             <span>Sync AI</span>
+            <NeedsImplementationBadge className="hidden xl:inline-flex" />
           </button>
 
-          <button
-            onClick={() => triggerToast('Amina OS Diagnostic logs nominal (latency: 14ms).', 'info')}
-            className="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100"
-          >
-            <Zap size={15} />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => triggerToast('Amina OS Diagnostic logs nominal (latency: 14ms).', 'info')}
+              className="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100"
+            >
+              <Zap size={15} />
+            </button>
+            <NeedsImplementationBadge className="hidden xl:inline-flex" />
+          </div>
 
           <button
             onClick={() => setIsNotificationOpen(!isNotificationOpen)}
@@ -96,8 +101,11 @@ export function Header() {
       {/* Notification Panel */}
       {isNotificationOpen && (
         <div className="fixed top-16 right-4 w-72 bg-white/95 backdrop-blur shadow-2xl rounded-xl border border-gray-200 p-4 z-50 animate-fade-in text-xs">
-          <div className="flex justify-between items-center mb-3 text-black font-bold uppercase font-mono tracking-wider border-b border-gray-100 pb-2">
-            <span>Neural Notifications</span>
+          <div className="flex justify-between items-center gap-2 mb-3 text-black font-bold uppercase font-mono tracking-wider border-b border-gray-100 pb-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span>Neural Notifications</span>
+              <NeedsImplementationBadge />
+            </div>
             <button onClick={() => setIsNotificationOpen(false)} className="text-gray-400 hover:text-black">
               <X size={14} />
             </button>

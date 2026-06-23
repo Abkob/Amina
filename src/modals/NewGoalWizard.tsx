@@ -2,21 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Plus, Trash2, ChevronRight, ChevronDown, Sparkles, Rocket, CheckCircle2 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { createGoal } from '../db/queries/goals';
 import { createTask } from '../db/queries/tasks';
 import { generateSuggestions } from '../utils/subtaskSuggestions';
 import type { CriticalPathStatus } from '../db/schema';
-
-const CATEGORIES = [
-  'Product Development',
-  'Languages',
-  'Health & Fitness',
-  'DevOps & Storage',
-  'Strategy Planning',
-  'Creative',
-  'Finance',
-  'Other',
-];
 
 const DEADLINES = ['Q1 2025', 'Q2 2025', 'Q3 2025', 'Q4 2025', 'Q1 2026', 'Q2 2026', 'Q3 2026'];
 
@@ -79,14 +69,15 @@ function SuggestionChips({ chips, onPick }: { chips: string[]; onPick: (s: strin
 }
 
 export function NewGoalWizard() {
-  const { closeNewGoalModal, triggerToast, setSelectedGoalId, setCurrentTab } = useAppStore();
+  const { closeNewGoalModal, triggerToast, navigateToGoal, goalCategories } = useAppStore();
+  const categoryOptions = goalCategories.length > 0 ? goalCategories : ['General'];
 
   const [step, setStep] = useState(0);
 
   // ── Step 0 ──
   const [title, setTitle]       = useState('');
-  const [category, setCategory] = useState('Product Development');
-  const [deadline, setDeadline] = useState('Q3 2025');
+  const [category, setCategory] = useState(categoryOptions[0]);
+  const [deadline, setDeadline] = useState('');
   const [status, setStatus]     = useState<'Safe' | 'Watch' | 'Risky'>('Safe');
 
   // ── Step 1 ──
@@ -104,6 +95,10 @@ export function NewGoalWizard() {
   const titleRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { titleRef.current?.focus(); }, []);
+  useEffect(() => {
+    const options = goalCategories.length > 0 ? goalCategories : ['General'];
+    if (!options.includes(category)) setCategory(options[0]);
+  }, [goalCategories, category]);
 
   // ── Step 1 helpers ──
   const addMilestone = () => {
@@ -162,13 +157,16 @@ export function NewGoalWizard() {
     if (!title.trim() || milestones.length === 0) return;
     setSubmitting(true);
     try {
+      const targetDeadline = deadline.trim() || null;
       const goalId = await createGoal({
         title: title.trim(),
-        description: `${category} goal targeting ${deadline}.`,
+        description: targetDeadline
+          ? `${category} goal targeting ${targetDeadline}.`
+          : `${category} goal with finish estimated from tasks and subtasks.`,
         category,
         status,
         progress: 10,
-        deadline,
+        deadline: targetDeadline,
         overdue: false,
         activity_level: 3,
       });
@@ -212,8 +210,7 @@ export function NewGoalWizard() {
       }
 
       triggerToast(`Goal "${title.trim()}" created with ${milestones.length} milestones!`, 'success');
-      setSelectedGoalId(goalId);
-      setCurrentTab('Goals');
+      navigateToGoal(goalId);
       closeNewGoalModal();
     } catch {
       triggerToast('Failed to create goal. Please try again.', 'info');
@@ -266,22 +263,23 @@ export function NewGoalWizard() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-1.5">Category</label>
+                    <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-1.5">Umbrella</label>
                     <select
                       value={category}
                       onChange={e => setCategory(e.target.value)}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-800 bg-white focus:outline-none focus:border-[#4648d4] transition-all"
                     >
-                      {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                      {categoryOptions.map(c => <option key={c}>{c}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-1.5">Target Deadline</label>
+                    <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-1.5">Target Deadline (optional)</label>
                     <select
                       value={deadline}
                       onChange={e => setDeadline(e.target.value)}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-800 bg-white focus:outline-none focus:border-[#4648d4] transition-all"
                     >
+                      <option value="">Estimate from tasks</option>
                       {DEADLINES.map(d => <option key={d}>{d}</option>)}
                     </select>
                   </div>
@@ -419,6 +417,7 @@ export function NewGoalWizard() {
                           <div className="mt-2">
                             <p className="text-[9px] font-mono text-[#4648d4] uppercase tracking-widest mb-1.5 flex items-center gap-1">
                               <Sparkles size={8} /> AI suggests
+                              <NeedsImplementationBadge className="ml-1" />
                             </p>
                             <SuggestionChips
                               chips={chips}
@@ -440,7 +439,7 @@ export function NewGoalWizard() {
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div>
                       <h3 className="font-headline text-base font-black text-gray-900 leading-tight">{title}</h3>
-                      <p className="text-[10px] font-mono text-gray-400 mt-0.5">{category} · {deadline}</p>
+                      <p className="text-[10px] font-mono text-gray-400 mt-0.5">{category} · {deadline || 'Dynamic from tasks'}</p>
                     </div>
                     <span className={`font-mono text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shrink-0 ${
                       status === 'Safe'  ? 'bg-emerald-100 text-emerald-700' :

@@ -9,13 +9,26 @@ export interface ToastMsg {
   type: 'success' | 'info' | 'error';
 }
 
+const DEFAULT_GOAL_CATEGORIES = [
+  'Work',
+  'Personal',
+  'Health',
+  'Learning',
+  'Home',
+  'Money',
+  'Creative',
+  'Admin',
+];
+
 interface AppStore {
   // ─── Navigation (persisted) ───────────────────────────────────────────────
   currentTab:      Tab;
   selectedGoalId:  string | null;
+  focusedTaskId:   string | null;
   activeNoteId:    string;
-  goalsFilter:     'Active' | 'Completed';
+  goalsFilter:     'Active' | 'Completed' | 'Archived';
   searchQuery:     string;
+  goalCategories:  string[];
 
   // ─── Schedule UI (persisted) ──────────────────────────────────────────────
   selectedEventId: string | null;
@@ -41,9 +54,15 @@ interface AppStore {
   // ─── Setters ──────────────────────────────────────────────────────────────
   setCurrentTab:        (tab: Tab) => void;
   setSelectedGoalId:    (id: string | null) => void;
+  setFocusedTaskId:     (id: string | null) => void;
+  /** Atomically navigate to a goal detail page — avoids the two-set race where
+   *  setCurrentTab clears selectedGoalId before setSelectedGoalId restores it. */
+  navigateToGoal:       (goalId: string) => void;
   setActiveNoteId:      (id: string) => void;
-  setGoalsFilter:       (f: 'Active' | 'Completed') => void;
+  setGoalsFilter:       (f: 'Active' | 'Completed' | 'Archived') => void;
   setSearchQuery:       (q: string) => void;
+  addGoalCategory:      (name: string) => void;
+  removeGoalCategory:   (name: string) => void;
   setSelectedEventId:   (id: string | null) => void;
   setIsDrawerOpen:      (open: boolean) => void;
   setIsOptimizing:      (v: boolean) => void;
@@ -81,9 +100,11 @@ export const useAppStore = create<AppStore>()(
       // ─── Initial UI state ────────────────────────────────────────────────
       currentTab:      'Goals',
       selectedGoalId:  null,
+      focusedTaskId:   null,
       activeNoteId:    'note-1',
       goalsFilter:     'Active',
       searchQuery:     '',
+      goalCategories:  DEFAULT_GOAL_CATEGORIES,
 
       selectedEventId: 'evt-1',
       isDrawerOpen:    true,
@@ -107,11 +128,24 @@ export const useAppStore = create<AppStore>()(
       confirmOnOk:    null,
 
       // ─── Setters ──────────────────────────────────────────────────────────
-      setCurrentTab:         (tab)  => set({ currentTab: tab, selectedGoalId: null }),
-      setSelectedGoalId:     (id)   => set({ selectedGoalId: id }),
+      setCurrentTab:         (tab)  => set({ currentTab: tab, selectedGoalId: null, focusedTaskId: null }),
+      setSelectedGoalId:     (id)   => set({ selectedGoalId: id, focusedTaskId: null }),
+      setFocusedTaskId:      (id)   => set({ focusedTaskId: id }),
+      navigateToGoal:        (goalId) => set({ currentTab: 'Goals', selectedGoalId: goalId, focusedTaskId: null }),
       setActiveNoteId:       (id)   => set({ activeNoteId: id }),
       setGoalsFilter:        (f)    => set({ goalsFilter: f }),
       setSearchQuery:        (q)    => set({ searchQuery: q }),
+      addGoalCategory:       (name) => set((s) => {
+        const trimmed = name.trim();
+        if (!trimmed) return {};
+        const exists = s.goalCategories.some(c => c.toLowerCase() === trimmed.toLowerCase());
+        if (exists) return {};
+        return { goalCategories: [...s.goalCategories, trimmed] };
+      }),
+      removeGoalCategory:    (name) => set((s) => {
+        if (s.goalCategories.length <= 1) return {};
+        return { goalCategories: s.goalCategories.filter(c => c !== name) };
+      }),
       setSelectedEventId:    (id)   => set({ selectedEventId: id }),
       setIsDrawerOpen:       (open) => set({ isDrawerOpen: open }),
       setIsOptimizing:       (v)    => set({ isOptimizing: v }),
@@ -154,9 +188,11 @@ export const useAppStore = create<AppStore>()(
         currentTab:      state.currentTab,
         activeNoteId:    state.activeNoteId,
         selectedGoalId:  state.selectedGoalId,
+        focusedTaskId:   state.focusedTaskId,
         selectedEventId: state.selectedEventId,
         isDrawerOpen:    state.isDrawerOpen,
         goalsFilter:     state.goalsFilter,
+        goalCategories:  state.goalCategories,
       }),
     }
   )

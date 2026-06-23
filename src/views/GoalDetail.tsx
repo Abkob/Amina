@@ -1,16 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  ChevronLeft, Folder, Calendar, Target, Sparkles,
+  ChevronLeft, Clock, Folder, Calendar, Target, Sparkles,
   FolderOpen, Upload, FileText, CheckSquare, Square,
   Plus, Trash2, X, Paperclip, ChevronDown, ChevronRight, Check,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
+import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { db } from '../db/db';
-import { updateGoal, updateGoalProgress } from '../db/queries/goals';
-import { toggleTask, recalcGoalProgress, createTask, deleteTask, updateTask } from '../db/queries/tasks';
+import { archiveGoal, restoreGoal, updateGoal } from '../db/queries/goals';
+import { toggleTask, createTask, deleteTask, updateTask } from '../db/queries/tasks';
 import { createResource, deleteResource, detectResourceType, getAllResourcesGrouped } from '../db/queries/resources';
+import { getGoalFinishEstimate } from '../utils/goalFinishEstimate';
+import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
+import { calculateGoalTaskMetrics } from '../utils/goalTaskMetrics';
 import { generateSuggestions } from '../utils/subtaskSuggestions';
 import type { DBTask, DBResource, CriticalPathStatus } from '../db/schema';
 
@@ -38,6 +42,7 @@ function SuggestionChips({ chips, onPick }: { chips: string[]; onPick: (s: strin
   if (chips.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5 mt-2">
+      <NeedsImplementationBadge />
       {chips.map(chip => (
         <button
           key={chip}
@@ -72,6 +77,12 @@ function ResourceChip({ res, onDelete }: { res: DBResource; onDelete: () => void
 }
 
 // ─── Inline editable title ────────────────────────────────────────────────────
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function InlineTitle({
   value,
   onSave,
@@ -122,57 +133,323 @@ function InlineTitle({
   );
 }
 
-// ─── Subtask row ──────────────────────────────────────────────────────────────
-function SubtaskRow({
+// ─── Deadline pill ────────────────────────────────────────────────────────────
+function DeadlinePill({
+  value,
+  label = 'deadline',
+  onSave,
+}: {
+  value: string | null;
+  label?: string;
+  onSave: (date: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+
+  const isIso = value ? /^\d{4}-\d{2}-\d{2}/.test(value) : false;
+  const parsed = isIso ? new Date(`${value!.slice(0, 10)}T00:00:00`) : null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diffDays = parsed ? Math.round((parsed.getTime() - today.getTime()) / 86_400_000) : null;
+  const isOverdue = diffDays !== null && diffDays < 0;
+  const isSoon = diffDays !== null && diffDays >= 0 && diffDays <= 3;
+
+  const dateLabel = parsed
+    ? parsed.toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric',
+        year: parsed.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
+      })
+    : value;
+
+  const proximityBadge =
+    diffDays === 0 ? 'today' :
+    diffDays === 1 ? 'tmrw' :
+    diffDays !== null && diffDays > 0 && diffDays <= 6 ? `${diffDays}d` :
+    diffDays !== null && diffDays < 0 ? `${Math.abs(diffDays)}d ago` :
+    null;
+
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        type="date"
+        defaultValue={isIso ? value!.slice(0, 10) : ''}
+        onBlur={e => { onSave(e.target.value || null); setEditing(false); }}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditing(false); }}
+        className="h-[22px] rounded-full border border-[#4648d4]/40 bg-white px-2.5 text-[10px] text-[#4648d4] outline-none ring-1 ring-[#4648d4]/20"
+      />
+    );
+  }
+
+  if (!dateLabel) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        title={`Set ${label}`}
+        className="inline-flex h-[22px] items-center gap-1 rounded-full border border-dashed border-gray-200 px-2.5 text-[10px] text-gray-300 transition-all hover:border-[#4648d4]/30 hover:text-[#4648d4]/60"
+      >
+        <Calendar size={9} />
+        <span>+ due date</span>
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      title={isOverdue ? `Overdue by ${Math.abs(diffDays!)} day${Math.abs(diffDays!) === 1 ? '' : 's'}` : `Due: ${dateLabel}`}
+      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${
+        isOverdue
+          ? 'border-red-200 bg-red-50 text-red-500 hover:border-red-300 hover:bg-red-100'
+          : isSoon
+          ? 'border-amber-200 bg-amber-50 text-amber-600 hover:border-amber-300'
+          : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-[#4648d4]/30 hover:bg-[#4648d4]/5 hover:text-[#4648d4]'
+      }`}
+    >
+      <Calendar size={9} className="shrink-0" />
+      <span>{dateLabel}</span>
+      {proximityBadge && (
+        <span className={`rounded-full px-1 py-px text-[8px] font-bold ${
+          isOverdue ? 'bg-red-100 text-red-500' : isSoon ? 'bg-amber-100 text-amber-600' : 'bg-gray-100 text-gray-400'
+        }`}>
+          {proximityBadge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ─── Inline time-estimate pill (with rollup + remaining-time from progress) ───
+function InlineTimePill({
   task,
-  resources,
-  goalId,
-  onToggle,
-  onDelete,
-  onTitleSave,
-  onAttachResource,
-  onDeleteResource,
+  allTasks,
+  onSave,
 }: {
   task: DBTask;
-  resources: DBResource[];
-  goalId: string;
-  onToggle: () => void;
-  onDelete: () => void;
-  onTitleSave: (title: string) => void;
-  onAttachResource: (title: string, url: string | null, type: DBResource['type']) => void;
-  onDeleteResource: (resId: string) => void;
+  allTasks: DBTask[];
+  onSave: (minutes: number | null) => void;
 }) {
+  const { minutes, isRollup, conflict } = getRolledUpTime(task, allTasks);
+  const progress = getTaskLeafProgress(task, allTasks);
+  const ownMinutes = getTaskEstimatedMinutes(task);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(ownMinutes === null ? '' : formatTaskTime(ownMinutes));
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+  useEffect(() => {
+    if (!editing) setDraft(ownMinutes === null ? '' : formatTaskTime(ownMinutes));
+  }, [editing, task.estimated_minutes, task.estimated_duration]);
+
+  const commit = () => {
+    const t = draft.trim();
+    onSave(t === '' ? null : parseTaskTimeInput(t));
+    setEditing(false);
+  };
+
+  const isDone = progress >= 1;
+  const hasProgress = progress > 0 && !isDone;
+  const remainingMinutes = minutes !== null ? Math.max(0, Math.round(minutes * (1 - progress))) : null;
+
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        value={draft}
+        onChange={e => setDraft(e.target.value.replace(/[^\d.hm\s]/gi, ''))}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') { setDraft(ownMinutes === null ? '' : formatTaskTime(ownMinutes)); setEditing(false); }
+        }}
+        placeholder="e.g. 1h 30m"
+        className="h-[22px] w-20 rounded-full border border-[#4648d4]/40 bg-white px-2.5 text-[10px] text-[#4648d4] outline-none ring-1 ring-[#4648d4]/20"
+      />
+    );
+  }
+
+  if (minutes === null) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        title="Set time estimate"
+        className="inline-flex h-[22px] items-center gap-1 rounded-full border border-dashed border-gray-200 px-2.5 text-[10px] text-gray-300 transition-all hover:border-[#4648d4]/30 hover:text-[#4648d4]/60"
+      >
+        <Clock size={9} />
+        <span>+ time</span>
+      </button>
+    );
+  }
+
+  const tooltipText = isDone
+    ? `Done · estimated ${formatTaskTime(minutes)}`
+    : hasProgress
+    ? `${formatTaskTime(remainingMinutes)} remaining of ${formatTaskTime(minutes)} · ${Math.round(progress * 100)}% done`
+    : isRollup
+    ? `Summed from children: ${formatTaskTime(minutes)}`
+    : `Estimated: ${formatTaskTime(minutes)}`;
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <button
+        onClick={() => setEditing(true)}
+        title={tooltipText}
+        className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${
+          isDone
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:border-emerald-300'
+            : hasProgress
+            ? 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300'
+            : isRollup
+            ? 'border-[#4648d4]/20 bg-[#4648d4]/5 text-[#4648d4]/70 hover:border-[#4648d4]/40'
+            : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-[#4648d4]/30 hover:bg-[#4648d4]/5 hover:text-[#4648d4]'
+        }`}
+      >
+        <Clock size={9} className="shrink-0" />
+        {isRollup && !isDone && <span className="text-[8px] opacity-50 font-bold">Σ</span>}
+
+        {isDone ? (
+          <span className="flex items-center gap-1">
+            <Check size={9} />
+            <span>{formatTaskTime(minutes)}</span>
+          </span>
+        ) : hasProgress ? (
+          <span className="flex items-center gap-1">
+            <span className="font-semibold">{formatTaskTime(remainingMinutes)}</span>
+            <span className="text-[9px] opacity-40">/</span>
+            <span className="text-[9px] opacity-50">{formatTaskTime(minutes)}</span>
+          </span>
+        ) : (
+          <span>{formatTaskTime(minutes)}</span>
+        )}
+      </button>
+      {conflict && !isDone && (
+        <span title="Own estimate differs from children's sum" className="cursor-help text-amber-400 text-[11px] leading-none">⚠</span>
+      )}
+    </span>
+  );
+}
+
+// ─── Subtask row ──────────────────────────────────────────────────────────────
+function TaskTreeRow({
+  task,
+  allTasks,
+  childrenByParent,
+  taskResources,
+  depth = 0,
+  onToggleSubtask,
+  onDeleteSubtask,
+  onUpdateSubtaskTitle,
+  onAddSubtask,
+  onAttachResource,
+  onAttachFiles,
+  onDeleteResource,
+  onOpenFocus,
+  onUpdateDeadline,
+  onUpdateTime,
+}: {
+  task: DBTask;
+  allTasks: DBTask[];
+  childrenByParent: Record<string, DBTask[]>;
+  taskResources: Record<string, DBResource[]>;
+  depth?: number;
+  onToggleSubtask: (task: DBTask) => void;
+  onDeleteSubtask: (task: DBTask) => void;
+  onUpdateSubtaskTitle: (taskId: string, title: string) => void;
+  onAddSubtask: (parentTaskId: string, title: string) => Promise<void>;
+  onAttachResource: (taskId: string, title: string, url: string | null, type: DBResource['type']) => Promise<void>;
+  onAttachFiles: (taskId: string, files: FileList | null) => Promise<void>;
+  onDeleteResource: (resId: string) => void;
+  onOpenFocus: (taskId: string) => void;
+  onUpdateDeadline: (taskId: string, date: string | null) => void;
+  onUpdateTime: (taskId: string, minutes: number | null) => void;
+}) {
+  const children = childrenByParent[task.id] ?? [];
+  const resources = taskResources[task.id] ?? [];
+  const [expanded, setExpanded] = useState(depth === 0);
+  const [addingChild, setAddingChild] = useState(false);
+  const [childTitle, setChildTitle] = useState('');
   const [showResourceInput, setShowResourceInput] = useState(false);
   const [resourceInput, setResourceInput] = useState('');
   const resRef = useRef<HTMLInputElement>(null);
+  const childRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (showResourceInput) resRef.current?.focus(); }, [showResourceInput]);
+  useEffect(() => { if (addingChild) childRef.current?.focus(); }, [addingChild]);
 
   const submitResource = () => {
     const val = resourceInput.trim();
     if (!val) { setShowResourceInput(false); return; }
     const type = detectResourceType(val);
     const url = type !== 'document' ? val : null;
-    onAttachResource(val, url, type);
+    onAttachResource(task.id, val, url, type);
     setResourceInput('');
     setShowResourceInput(false);
   };
 
+  const submitChild = async () => {
+    const title = childTitle.trim();
+    if (!title) return;
+    await onAddSubtask(task.id, title);
+    setChildTitle('');
+    setAddingChild(false);
+    setExpanded(true);
+  };
+
   return (
-    <div className="group/sub flex flex-col gap-1 py-1.5 px-1 hover:bg-gray-50 rounded-lg transition-colors">
-      <div className="flex items-center gap-2">
-        <button onClick={onToggle} className="text-gray-300 hover:text-[#4648d4] shrink-0 transition-colors">
+    <div className="group/sub flex flex-col gap-1 py-1.5">
+      <div className="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className={`text-gray-300 hover:text-[#4648d4] shrink-0 transition-colors ${children.length === 0 ? 'invisible' : ''}`}
+          title={expanded ? 'Collapse child tasks' : 'Expand child tasks'}
+        >
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
+
+        <button onClick={() => onToggleSubtask(task)} className="text-gray-300 hover:text-[#4648d4] shrink-0 transition-colors">
           {task.completed ? <CheckSquare size={14} className="text-[#10B981]" /> : <Square size={14} />}
         </button>
 
         <InlineTitle
           value={task.title}
-          onSave={onTitleSave}
+          onSave={title => onUpdateSubtaskTitle(task.id, title)}
           strikethrough={task.completed}
           className="text-xs text-gray-700 font-medium flex-1 min-w-0"
         />
 
+        {children.length > 0 && (
+          <span className="text-[9px] font-mono text-gray-300 shrink-0">{children.length}</span>
+        )}
+
+        {/* Deadline + time — visible when set; shown on hover when empty */}
+        <div className={`flex items-center gap-1 shrink-0 ${!task.due_date && getTaskEstimatedMinutes(task) === null ? 'opacity-0 group-hover/sub:opacity-100' : ''} transition-opacity`}>
+          <DeadlinePill
+            value={task.due_date}
+            onSave={d => onUpdateDeadline(task.id, d)}
+          />
+          <InlineTimePill
+            task={task}
+            allTasks={allTasks}
+            onSave={m => onUpdateTime(task.id, m)}
+          />
+        </div>
+
         <div className="flex items-center gap-1 opacity-0 group-hover/sub:opacity-100 transition-opacity shrink-0">
+          <button
+            onClick={() => onOpenFocus(task.id)}
+            className="text-gray-300 hover:text-[#4648d4] transition-colors p-0.5 rounded"
+            title="Open focus page"
+          >
+            <FileText size={11} />
+          </button>
+          <button
+            onClick={() => { setAddingChild(v => !v); setExpanded(true); }}
+            className="text-gray-300 hover:text-[#4648d4] transition-colors p-0.5 rounded"
+            title="Add child task"
+          >
+            <Plus size={11} />
+          </button>
           <button
             onClick={() => setShowResourceInput(v => !v)}
             className="text-gray-300 hover:text-[#4648d4] transition-colors p-0.5 rounded"
@@ -181,7 +458,24 @@ function SubtaskRow({
             <Paperclip size={11} />
           </button>
           <button
-            onClick={onDelete}
+            onClick={() => fileInputRef.current?.click()}
+            className="text-gray-300 hover:text-[#4648d4] transition-colors p-0.5 rounded"
+            title="Upload files"
+          >
+            <Upload size={11} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={async (e) => {
+              await onAttachFiles(task.id, e.currentTarget.files);
+              e.currentTarget.value = '';
+            }}
+          />
+          <button
+            onClick={() => onDeleteSubtask(task)}
             className="text-gray-300 hover:text-red-400 transition-colors p-0.5 rounded"
           >
             <Trash2 size={11} />
@@ -221,6 +515,61 @@ function SubtaskRow({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {addingChild && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="ml-6 flex gap-2 overflow-hidden"
+          >
+            <input
+              ref={childRef}
+              value={childTitle}
+              onChange={e => setChildTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') submitChild(); if (e.key === 'Escape') { setAddingChild(false); setChildTitle(''); } }}
+              placeholder="Child task title..."
+              className="flex-1 bg-white border border-gray-200 rounded-lg px-2.5 py-1 text-[11px] text-gray-700 focus:outline-none focus:border-[#4648d4] transition-all"
+            />
+            <button onClick={submitChild} className="bg-[#4648d4] text-white rounded-lg px-2 py-1 hover:opacity-90 transition-colors">
+              <Check size={11} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence initial={false}>
+        {expanded && children.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="ml-4 border-l border-gray-100 pl-3 overflow-hidden"
+          >
+            {children.map(child => (
+              <TaskTreeRow
+                key={child.id}
+                task={child}
+                allTasks={allTasks}
+                childrenByParent={childrenByParent}
+                taskResources={taskResources}
+                depth={depth + 1}
+                onToggleSubtask={onToggleSubtask}
+                onDeleteSubtask={onDeleteSubtask}
+                onUpdateSubtaskTitle={onUpdateSubtaskTitle}
+                onAddSubtask={onAddSubtask}
+                onAttachResource={onAttachResource}
+                onAttachFiles={onAttachFiles}
+                onDeleteResource={onDeleteResource}
+                onOpenFocus={onOpenFocus}
+                onUpdateDeadline={onUpdateDeadline}
+                onUpdateTime={onUpdateTime}
+              />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -228,9 +577,9 @@ function SubtaskRow({
 // ─── Milestone card ───────────────────────────────────────────────────────────
 function MilestoneCard({
   milestone,
-  subtasks,
+  allTasks,
+  subtasksByParent,
   taskResources,
-  goalId,
   category,
   goalTitle,
   onToggleSubtask,
@@ -238,21 +587,30 @@ function MilestoneCard({
   onUpdateSubtaskTitle,
   onAddSubtask,
   onAttachResource,
+  onAttachFiles,
   onDeleteResource,
+  onOpenFocus,
+  onUpdateDeadline,
+  onUpdateTime,
 }: {
   milestone: DBTask;
-  subtasks: DBTask[];
+  allTasks: DBTask[];
+  subtasksByParent: Record<string, DBTask[]>;
   taskResources: Record<string, DBResource[]>;
-  goalId: string;
   category: string;
   goalTitle: string;
   onToggleSubtask: (task: DBTask) => void;
   onDeleteSubtask: (task: DBTask) => void;
   onUpdateSubtaskTitle: (taskId: string, title: string) => void;
-  onAddSubtask: (milestoneId: string, title: string) => Promise<void>;
+  onAddSubtask: (parentTaskId: string, title: string) => Promise<void>;
   onAttachResource: (taskId: string, title: string, url: string | null, type: DBResource['type']) => Promise<void>;
+  onAttachFiles: (taskId: string, files: FileList | null) => Promise<void>;
   onDeleteResource: (resourceId: string) => void;
+  onOpenFocus: (taskId: string) => void;
+  onUpdateDeadline: (taskId: string, date: string | null) => void;
+  onUpdateTime: (taskId: string, minutes: number | null) => void;
 }) {
+  const subtasks = subtasksByParent[milestone.id] ?? [];
   const [expanded, setExpanded] = useState(milestone.critical_path_status === 'In Progress');
   const [addInput, setAddInput] = useState('');
   const [chips, setChips] = useState<string[]>([]);
@@ -296,10 +654,14 @@ function MilestoneCard({
   return (
     <div className="bg-white rounded-xl border border-gray-150 shadow-sm overflow-hidden">
       {/* Milestone header */}
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f8f9fa] transition-colors"
-      >
+      <div className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f8f9fa] transition-colors">
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="text-gray-400 hover:text-[#4648d4] transition-colors shrink-0"
+          title={expanded ? 'Collapse milestone' : 'Expand milestone'}
+        >
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
         <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotCls}`} />
         <span className="flex-1 min-w-0">
           <InlineTitle
@@ -312,10 +674,24 @@ function MilestoneCard({
           {milestone.critical_path_status}
         </span>
         <span className="text-[10px] font-mono text-gray-400 shrink-0">{subtasks.length}</span>
-        {expanded
-          ? <ChevronDown size={13} className="text-gray-400 shrink-0" />
-          : <ChevronRight size={13} className="text-gray-400 shrink-0" />}
-      </button>
+        <DeadlinePill
+          value={milestone.due_date}
+          label="milestone deadline"
+          onSave={d => onUpdateDeadline(milestone.id, d)}
+        />
+        <InlineTimePill
+          task={milestone}
+          allTasks={allTasks}
+          onSave={m => onUpdateTime(milestone.id, m)}
+        />
+        <button
+          onClick={() => onOpenFocus(milestone.id)}
+          className="text-gray-300 hover:text-[#4648d4] transition-colors p-1 rounded"
+          title="Open focus page"
+        >
+          <FileText size={13} />
+        </button>
+      </div>
 
       {/* Expanded body */}
       <AnimatePresence initial={false}>
@@ -332,16 +708,22 @@ function MilestoneCard({
               {subtasks.length > 0 ? (
                 <div className="space-y-0.5 mb-3">
                   {subtasks.map(sub => (
-                    <SubtaskRow
+                    <TaskTreeRow
                       key={sub.id}
                       task={sub}
-                      resources={taskResources[sub.id] ?? []}
-                      goalId={goalId}
-                      onToggle={() => onToggleSubtask(sub)}
-                      onDelete={() => onDeleteSubtask(sub)}
-                      onTitleSave={title => onUpdateSubtaskTitle(sub.id, title)}
-                      onAttachResource={(title, url, type) => onAttachResource(sub.id, title, url, type)}
+                      allTasks={allTasks}
+                      childrenByParent={subtasksByParent}
+                      taskResources={taskResources}
+                      onToggleSubtask={onToggleSubtask}
+                      onDeleteSubtask={onDeleteSubtask}
+                      onUpdateSubtaskTitle={onUpdateSubtaskTitle}
+                      onAddSubtask={onAddSubtask}
+                      onAttachResource={onAttachResource}
+                      onAttachFiles={onAttachFiles}
                       onDeleteResource={onDeleteResource}
+                      onOpenFocus={onOpenFocus}
+                      onUpdateDeadline={onUpdateDeadline}
+                      onUpdateTime={onUpdateTime}
                     />
                   ))}
                 </div>
@@ -391,6 +773,7 @@ export function GoalDetail() {
   const {
     selectedGoalId,
     setSelectedGoalId,
+    setFocusedTaskId,
     setCurrentTab,
     openAddResourceModal,
     triggerToast,
@@ -402,6 +785,7 @@ export function GoalDetail() {
   const [editingGoalTitle, setEditingGoalTitle] = useState(false);
   const [goalTitleVal, setGoalTitleVal] = useState('');
   const goalTitleRef = useRef<HTMLInputElement>(null);
+  const goalFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (editingGoalTitle) goalTitleRef.current?.focus(); }, [editingGoalTitle]);
 
@@ -437,6 +821,8 @@ export function GoalDetail() {
   });
 
   const statusDot = goal.status === 'Safe' ? 'bg-[#10B981]' : goal.status === 'Watch' ? 'bg-[#F59E0B]' : 'bg-[#EF4444]';
+  const finishEstimate = getGoalFinishEstimate(goal, allTasks);
+  const taskMetrics = calculateGoalTaskMetrics(allTasks);
 
   // ── Goal title edit ──
   const startGoalTitleEdit = () => { setGoalTitleVal(goal.title); setEditingGoalTitle(true); };
@@ -462,6 +848,14 @@ export function GoalDetail() {
     await updateTask(taskId, { title });
   };
 
+  const handleUpdateDeadline = async (taskId: string, date: string | null) => {
+    await updateTask(taskId, { due_date: date });
+  };
+
+  const handleUpdateTime = async (taskId: string, minutes: number | null) => {
+    await updateTask(taskId, { estimated_minutes: minutes });
+  };
+
   const handleAddSubtask = async (milestoneId: string, title: string) => {
     const milestone = allTasks.find(t => t.id === milestoneId);
     if (!milestone) return;
@@ -478,6 +872,7 @@ export function GoalDetail() {
       tags_json: '[]',
       due_date: null,
       estimated_duration: null,
+      estimated_minutes: null,
       completed: false,
       position: pos,
     });
@@ -494,6 +889,20 @@ export function GoalDetail() {
     triggerToast('Resource attached.', 'success');
   };
 
+  const handleAttachFiles = async (taskId: string, files: FileList | null) => {
+    const selected = Array.from(files ?? []);
+    if (selected.length === 0) return;
+
+    for (const file of selected) {
+      await createResource(
+        { title: file.name, url: null, type: 'document', info: `${formatBytes(file.size)} from file picker` },
+        goal.id,
+        taskId,
+      );
+    }
+    triggerToast(`${selected.length} file${selected.length === 1 ? '' : 's'} attached.`, 'success');
+  };
+
   const handleDeleteResource = (resourceId: string) => {
     showConfirm('Remove this resource?', async () => {
       await deleteResource(resourceId);
@@ -501,22 +910,40 @@ export function GoalDetail() {
     });
   };
 
+  const handleRestoreGoal = async () => {
+    await restoreGoal(goal.id);
+    triggerToast('Goal restored with progress intact.', 'success');
+  };
+
+  const handleArchiveGoal = () => {
+    showConfirm(`Archive goal "${goal.title}"? Your tasks, resources, and progress will be saved.`, async () => {
+      await archiveGoal(goal.id);
+      triggerToast('Goal archived. Progress saved.', 'info');
+    });
+  };
+
   // ── AI task toggle ──
   const handleToggleAiTask = async (task: DBTask) => {
     await toggleTask(task.id);
-    const baseline = selectedGoalId === 'goal-1' ? 75 : 40;
-    const newProgress = await recalcGoalProgress(selectedGoalId!, baseline, 'ai_generated');
-    await updateGoalProgress(goal.id, newProgress);
   };
 
   // ── Goal-level resource drop ──
+  const handleGoalFiles = async (files: FileList | null) => {
+    const selected = Array.from(files ?? []);
+    if (selected.length === 0) return;
+
+    for (const file of selected) {
+      await createResource(
+        { title: file.name, url: null, type: 'document', info: `${formatBytes(file.size)} from file picker` },
+        goal.id,
+      );
+    }
+    triggerToast(`${selected.length} goal file${selected.length === 1 ? '' : 's'} attached.`, 'success');
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    await createResource(
-      { title: 'Uploaded Document Spec.pdf', url: null, type: 'document', info: 'added just now' },
-      goal.id,
-    );
-    triggerToast('File resource attached to goal!', 'success');
+    await handleGoalFiles(e.dataTransfer.files);
   };
 
   return (
@@ -567,12 +994,18 @@ export function GoalDetail() {
             {' · '}
             {allTasks.filter(t => t.parent_task_id).length} subtask{allTasks.filter(t => t.parent_task_id).length !== 1 ? 's' : ''}
             {' · '}
-            {allTasks.filter(t => t.completed).length} done
+            {taskMetrics.completedTasks}/{taskMetrics.totalTasks} done
+            {taskMetrics.usesExplicitWeights && (
+              <>
+                {' / '}
+                weighted progress
+              </>
+            )}
           </p>
         </div>
 
         <div className="flex items-center gap-4 bg-white rounded-xl p-4 border border-gray-100 shadow-ambient shrink-0">
-          <DetailRing progress={goal.progress} status={goal.status} />
+          <DetailRing progress={taskMetrics.progress} status={goal.status} />
           <div>
             <div className="font-headline text-base font-bold text-gray-900 flex items-center gap-1.5">
               <span className={`w-2 h-2 rounded-full ${statusDot}`} />
@@ -580,13 +1013,44 @@ export function GoalDetail() {
             </div>
             <div className="font-mono text-[10px] text-gray-400 flex items-center gap-1 mt-1">
               <Calendar size={11} />
-              Due {goal.deadline ?? '—'}
+              <span className="uppercase tracking-wider">{finishEstimate.caption}</span>
+              <span title={finishEstimate.title}>{finishEstimate.label}</span>
             </div>
+            <div className="mt-2">
+              <DeadlinePill
+                value={goal.deadline}
+                label="goal deadline"
+                onSave={async (date) => updateGoal(goal.id, { deadline: date })}
+              />
+            </div>
+            <button
+              onClick={goal.archived_at ? handleRestoreGoal : handleArchiveGoal}
+              className="mt-3 text-[9px] font-mono uppercase bg-[#f8f9fa] hover:bg-gray-100 text-gray-500 py-1 px-2 rounded border border-gray-200 transition-colors"
+            >
+              {goal.archived_at ? 'Restore Goal' : 'Archive Goal'}
+            </button>
           </div>
         </div>
       </header>
 
       <div className="space-y-8">
+        {goal.archived_at && (
+          <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-bold text-amber-900">Archived goal</p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                This goal is hidden from Active and Completed, but its tasks, resources, and progress are still saved.
+              </p>
+            </div>
+            <button
+              onClick={handleRestoreGoal}
+              className="bg-amber-900 text-white text-[10px] font-mono uppercase py-2 px-3 rounded-lg font-bold hover:opacity-90 shrink-0"
+            >
+              Restore Goal
+            </button>
+          </section>
+        )}
+
         {/* ── Critical Path ── */}
         <section>
           <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-4">
@@ -604,9 +1068,9 @@ export function GoalDetail() {
                 <MilestoneCard
                   key={milestone.id}
                   milestone={milestone}
-                  subtasks={subtasksByParent[milestone.id] ?? []}
+                  allTasks={allTasks}
+                  subtasksByParent={subtasksByParent}
                   taskResources={groupedResources.taskResources}
-                  goalId={goal.id}
                   category={goal.category}
                   goalTitle={goal.title}
                   onToggleSubtask={handleToggleSubtask}
@@ -614,7 +1078,11 @@ export function GoalDetail() {
                   onUpdateSubtaskTitle={handleUpdateSubtaskTitle}
                   onAddSubtask={handleAddSubtask}
                   onAttachResource={handleAttachResource}
+                  onAttachFiles={handleAttachFiles}
                   onDeleteResource={handleDeleteResource}
+                  onOpenFocus={setFocusedTaskId}
+                  onUpdateDeadline={handleUpdateDeadline}
+                  onUpdateTime={handleUpdateTime}
                 />
               ))}
             </div>
@@ -627,6 +1095,7 @@ export function GoalDetail() {
             <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-3">
               <Sparkles size={14} className="text-[#4648d4]" />
               AI Micro-tasks
+              <NeedsImplementationBadge />
             </h2>
             <div className="bg-[#EEF2FF] rounded-xl border border-[#4648d4]/10 p-4 space-y-2">
               {aiTasks.map(t => (
@@ -644,9 +1113,6 @@ export function GoalDetail() {
                     <p className={`text-xs font-semibold text-gray-800 leading-tight ${t.completed ? 'line-through text-gray-400' : ''}`}>
                       {t.title}
                     </p>
-                    {t.estimated_duration && (
-                      <p className="text-[9px] font-mono text-gray-400 mt-1">{t.estimated_duration}</p>
-                    )}
                   </div>
                 </div>
               ))}
@@ -661,23 +1127,45 @@ export function GoalDetail() {
               <FolderOpen size={14} className="text-gray-500" />
               Goal Resources
             </h2>
-            <button
-              onClick={() => openAddResourceModal(goal.id)}
-              className="text-[9px] font-mono uppercase bg-[#f8f9fa] hover:bg-gray-100 text-gray-500 py-1 px-2.5 rounded border border-gray-200 transition-colors"
-            >
-              Attach Link
-            </button>
+            <div className="flex items-center gap-2">
+              <input
+                ref={goalFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={async (e) => {
+                  await handleGoalFiles(e.currentTarget.files);
+                  e.currentTarget.value = '';
+                }}
+              />
+              <button
+                onClick={() => goalFileInputRef.current?.click()}
+                className="flex items-center gap-1 text-[9px] font-mono uppercase bg-[#f8f9fa] hover:bg-gray-100 text-gray-500 py-1 px-2.5 rounded border border-gray-200 transition-colors"
+              >
+                <Upload size={11} />
+                Upload Files
+              </button>
+              <button
+                onClick={() => openAddResourceModal(goal.id)}
+                className="text-[9px] font-mono uppercase bg-[#f8f9fa] hover:bg-gray-100 text-gray-500 py-1 px-2.5 rounded border border-gray-200 transition-colors"
+              >
+                Attach Link
+              </button>
+            </div>
           </div>
 
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
+            onClick={() => goalFileInputRef.current?.click()}
             className="border-2 border-dashed border-gray-200 hover:border-[#4648d4]/40 rounded-xl p-6 text-center bg-[#f8f9fa] hover:bg-white transition-all cursor-pointer flex flex-col items-center justify-center gap-2 mb-3"
           >
             <Upload className="text-gray-400" size={22} />
-            <p className="text-xs font-semibold text-gray-700">Drag &amp; drop specs here</p>
+            <p className="text-xs font-semibold text-gray-700 flex items-center justify-center gap-2">
+              <span>Drop files here or choose from file explorer</span>
+            </p>
             <p className="text-[10px] text-gray-400 max-w-[170px] leading-relaxed mx-auto">
-              Append Figma sheets, Notion logs, or guidelines into goal database.
+              File names and sizes are saved as goal resources.
             </p>
           </div>
 
