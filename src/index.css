@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", sans-serif;
@@ -15,7 +15,7 @@
   --color-status-blocked: #6B7280;
   --color-secondary-fixed-dim: #c0c1ff;
   --color-secondary-container: #6063ee;
-  
+
   --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   --shadow-card-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   --shadow-ambient: 0 4px 24px -4px rgba(0, 0, 0, 0.05);
@@ -54,4 +54,36 @@
 
 .animate-fade-in {
   animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* TipTap editor reset */
+.ProseMirror {
+  outline: none;
+  min-height: 250px;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #d1d5db;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.ProseMirror p {
+  margin: 0 0 0.5em;
+  line-height: 1.7;
+}
+
+.ProseMirror:focus {
+  outline: none;
+}
+
+/* Slow spin utility for Sync AI button */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
 }

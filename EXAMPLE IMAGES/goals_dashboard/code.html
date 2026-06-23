@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Goals Dashboard - Amina OS</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;900&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-tertiary-fixed": "#2c0051",
+                      "on-primary-container": "#858383",
+                      "surface-tint": "#5f5e5e",
+                      "secondary": "#4648d4",
+                      "primary": "#000000",
+                      "secondary-fixed-dim": "#c0c1ff",
+                      "on-secondary-fixed-variant": "#2f2ebe",
+                      "surface-container-high": "#e7e8e9",
+                      "inverse-surface": "#2e3132",
+                      "surface-dim": "#d9dadb",
+                      "inverse-on-surface": "#f0f1f2",
+                      "primary-fixed-dim": "#c8c6c5",
+                      "on-primary": "#ffffff",
+                      "on-tertiary-container": "#ac59fb",
+                      "outline": "#747878",
+                      "on-tertiary-fixed-variant": "#6900b3",
+                      "surface-variant": "#e1e3e4",
+                      "on-tertiary": "#ffffff",
+                      "on-surface-variant": "#444748",
+                      "on-error-container": "#93000a",
+                      "status-warning": "#F59E0B",
+                      "on-secondary-container": "#fffbff",
+                      "tertiary-fixed": "#f0dbff",
+                      "on-primary-fixed": "#1c1b1b",
+                      "tertiary-container": "#2c0051",
+                      "surface-container": "#edeeef",
+                      "primary-fixed": "#e5e2e1",
+                      "on-secondary": "#ffffff",
+                      "secondary-fixed": "#e1e0ff",
+                      "sidebar-bg": "#111827",
+                      "inverse-primary": "#c8c6c5",
+                      "on-surface": "#191c1d",
+                      "on-primary-fixed-variant": "#474746",
+                      "surface-container-highest": "#e1e3e4",
+                      "status-safe": "#10B981",
+                      "status-blocked": "#6B7280",
+                      "outline-variant": "#c4c7c7",
+                      "primary-container": "#1c1b1b",
+                      "error": "#ba1a1a",
+                      "secondary-container": "#6063ee",
+                      "surface-container-lowest": "#ffffff",
+                      "on-background": "#191c1d",
+                      "tertiary-fixed-dim": "#ddb7ff",
+                      "canvas-bg": "#FFFFFF",
+                      "surface": "#f8f9fa",
+                      "background": "#f8f9fa",
+                      "ai-highlight-soft": "#EEF2FF",
+                      "error-container": "#ffdad6",
+                      "on-secondary-fixed": "#07006c",
+                      "surface-container-low": "#f3f4f5",
+                      "on-error": "#ffffff",
+                      "surface-bright": "#f8f9fa",
+                      "tertiary": "#000000",
+                      "status-urgent": "#EF4444"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "gutter": "24px",
+                      "canvas-margin": "64px",
+                      "stack-md": "16px",
+                      "ai-rail-width": "320px",
+                      "stack-lg": "32px",
+                      "stack-sm": "8px",
+                      "sidebar-width": "260px"
+              },
+              "fontFamily": {
+                      "headline-lg": [
+                              "Hanken Grotesk"
+                      ],
+                      "display-lg": [
+                              "Hanken Grotesk"
+                      ],
+                      "label-sm": [
+                              "JetBrains Mono"
+                      ],
+                      "headline-md": [
+                              "Hanken Grotesk"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "headline-lg-mobile": [
+                              "Hanken Grotesk"
+                      ],
+                      "label-md": [
+                              "JetBrains Mono"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "headline-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "display-lg": [
+                              "48px",
+                              {
+                                      "lineHeight": "56px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "label-sm": [
+                              "11px",
+                              {
+                                      "lineHeight": "14px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "headline-md": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "15px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg-mobile": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-md": [
+                              "13px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.02em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "body-lg": [
+                              "18px",
+                              {
+                                      "lineHeight": "30px",
+                                      "fontWeight": "400"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.35s;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+      </style>
+</head>
+<body class="bg-canvas-bg text-on-surface font-body-md antialiased min-h-screen flex selection:bg-ai-highlight-soft selection:text-primary">
+<!-- Desktop Sidebar (Hidden on Mobile) -->
+<nav class="bg-sidebar-bg h-screen w-sidebar-width fixed left-0 top-0 flex flex-col p-stack-md hidden md:flex z-50">
+<!-- Brand -->
+<div class="mb-stack-lg px-stack-sm flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container flex items-center justify-center text-on-primary font-headline-md">
+                A
+            </div>
+<div>
+<h1 class="font-headline-md text-headline-md font-bold text-on-primary">Amina OS</h1>
+<p class="font-label-sm text-label-sm text-on-primary-container">Personal Copilot</p>
+</div>
+</div>
+<!-- Primary Action -->
+<button class="w-full bg-on-primary text-sidebar-bg font-label-md text-label-md py-3 rounded-lg mb-stack-lg flex items-center justify-center gap-2 hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined" data-weight="fill" style="font-variation-settings: 'FILL' 1;">add</span>
+            New Thought
+        </button>
+<!-- Navigation Links -->
+<div class="flex-1 flex flex-col gap-1">
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="edit_note">edit_note</span>
+<span class="font-label-md text-label-md">Brain Dump</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary bg-primary-container rounded-lg transition-colors duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="target" data-weight="fill" style="font-variation-settings: 'FILL' 1;">target</span>
+<span class="font-label-md text-label-md">Goals</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="calendar_view_week">calendar_view_week</span>
+<span class="font-label-md text-label-md">Schedule</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="menu_book">menu_book</span>
+<span class="font-label-md text-label-md">Journal</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="folder_open">folder_open</span>
+<span class="font-label-md text-label-md">Resources</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-label-md text-label-md">Settings</span>
+</a>
+</div>
+<!-- Footer Links -->
+<div class="flex flex-col gap-1 mt-auto pt-stack-md border-t border-on-primary-container/20">
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+<span class="font-label-md text-label-md">Help</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="archive">archive</span>
+<span class="font-label-md text-label-md">Archive</span>
+</a>
+</div>
+</nav>
+<!-- Top Navigation Bar (Desktop) -->
+<header class="fixed top-0 right-0 left-sidebar-width h-16 z-40 bg-surface/80 backdrop-blur-md hidden md:flex justify-between items-center px-gutter border-b border-outline-variant">
+<div class="flex items-center gap-6">
+<span class="font-headline-md text-headline-md font-black text-primary tracking-tight">Amina</span>
+<nav class="flex items-center gap-6">
+<a class="font-label-md text-label-md text-on-surface-variant hover:text-primary transition-opacity scale-95 duration-150" href="#">Focus</a>
+<a class="font-label-md text-label-md text-primary font-bold border-b-2 border-primary pb-1 scale-95 duration-150" href="#">Reflect</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<!-- Search (Right aligned as per JSON) -->
+<div class="relative group hidden lg:block">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-1.5 pl-9 pr-4 font-label-md text-label-md text-on-surface placeholder:text-on-surface-variant focus:ring-1 focus:ring-outline transition-shadow w-48 group-focus-within:w-64 duration-300" placeholder="Search..." type="text"/>
+</div>
+<button class="font-label-md text-label-md text-primary border border-outline-variant px-3 py-1.5 rounded-full hover:bg-surface-container-low transition-colors">Sync AI</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-low">
+<span class="material-symbols-outlined" data-icon="bolt">bolt</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-low relative">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+<span class="absolute top-1.5 right-1.5 w-2 h-2 bg-status-urgent rounded-full border border-surface"></span>
+</button>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-outline-variant ml-2 cursor-pointer">
+<img alt="Amina AI status" class="w-full h-full object-cover" data-alt="A highly detailed close-up portrait of a serene artificial intelligence avatar represented as a glowing ethereal face with soft white and subtle purple light accents, set against a dark clean background, reflecting a calm, smart, and modern corporate aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC77RLeDDakGJQ4MP9wYcxIvZx0LhA3x49A5xlJOg4S4uEo34dcUMSBQVhKcZBFlyy4DyGXswu_nmLlGrM96KKrsDwJqdiwgn3Fq-1eo360fT94FzZEXJWyGw3kA5xy1tcXh-Gg4OaNLhI4M59l6zGRFM5KFSYJoyowOybjI-zdIKlvmZsMT3OpWwBsr7ftzsvCJZ2rsyvmpgtTinuxohWed8GXUyi1k1-OEHrRZdXUVXtQTu_RRoElUV-UE_b0WSUfslNnagddlw"/>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-1 w-full md:pl-sidebar-width pt-0 md:pt-16 pb-24 md:pb-0 min-h-screen">
+<div class="max-w-[1000px] mx-auto px-4 md:px-canvas-margin py-stack-lg">
+<!-- Page Header -->
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-stack-lg">
+<div>
+<h2 class="font-display-lg text-display-lg text-primary mb-2">Goals</h2>
+<p class="font-body-md text-body-md text-on-surface-variant max-w-xl">Bird's-eye view of your current trajectories. Keep your primary objectives in focus.</p>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex items-center gap-2 bg-surface-container-low rounded-full p-1 border border-outline-variant">
+<button class="px-3 py-1 bg-surface rounded-full shadow-sm font-label-md text-label-md text-primary">Active</button>
+<button class="px-3 py-1 rounded-full font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors">Completed</button>
+</div>
+<button class="bg-primary text-on-primary w-10 h-10 rounded-full flex items-center justify-center shadow-md hover:bg-primary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="add">add</span>
+</button>
+</div>
+</div>
+<!-- Dashboard Overview Stats -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-stack-lg">
+<div class="bg-surface rounded-xl p-4 border border-outline-variant card-shadow">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Total Goals</p>
+<p class="font-headline-lg text-headline-lg text-primary">8</p>
+</div>
+<div class="bg-surface rounded-xl p-4 border border-outline-variant card-shadow">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">On Track</p>
+<p class="font-headline-lg text-headline-lg text-status-safe">5</p>
+</div>
+<div class="bg-surface rounded-xl p-4 border border-outline-variant card-shadow">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Needs Attention</p>
+<p class="font-headline-lg text-headline-lg text-status-warning">2</p>
+</div>
+<div class="bg-surface rounded-xl p-4 border border-outline-variant card-shadow">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">At Risk</p>
+<p class="font-headline-lg text-headline-lg text-status-urgent">1</p>
+</div>
+</div>
+<!-- Goals Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+<!-- Goal Card 1: On Track -->
+<div class="bg-canvas-bg rounded-xl p-5 border border-outline-variant card-shadow card-hover transition-all duration-300 relative overflow-hidden group cursor-pointer flex flex-col h-full">
+<div class="absolute top-0 left-0 w-full h-1 bg-status-safe"></div>
+<div class="flex justify-between items-start mb-4">
+<div class="bg-surface-container px-2 py-1 rounded text-xs font-label-md text-on-surface-variant flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-status-safe"></span> Safe
+                        </div>
+<button class="text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm" data-icon="more_horiz">more_horiz</span>
+</button>
+</div>
+<h3 class="font-headline-md text-headline-md text-primary mb-1">Launch v2.0 Design System</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-6 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="event">event</span> Q3 2024
+                    </p>
+<div class="flex items-center justify-between mt-auto mb-6">
+<!-- Progress Ring -->
+<div class="relative w-16 h-16">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<!-- Background ring -->
+<circle class="text-surface-variant stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="6"></circle>
+<!-- Progress ring (Activity - Inner) -->
+<circle class="text-secondary-fixed-dim stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="32" stroke-dasharray="201" stroke-dashoffset="100" stroke-linecap="round" stroke-width="4"></circle>
+<!-- Progress ring (Finalization - Outer) -->
+<circle class="text-secondary stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251" stroke-dashoffset="62.75" stroke-linecap="round" stroke-width="6"></circle>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center font-label-md text-label-md text-primary font-bold">
+                                75%
+                            </div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Activity Level</p>
+<div class="flex gap-1 justify-end">
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="border-t border-outline-variant pt-4">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-2">Next Action</p>
+<div class="flex items-start gap-2 bg-surface-container-low p-2 rounded-lg">
+<div class="mt-0.5 w-4 h-4 rounded border border-outline flex-shrink-0"></div>
+<p class="font-body-md text-body-md text-on-surface text-sm">Review component naming conventions with dev team.</p>
+</div>
+</div>
+</div>
+<!-- Goal Card 2: Watch -->
+<div class="bg-canvas-bg rounded-xl p-5 border border-outline-variant card-shadow card-hover transition-all duration-300 relative overflow-hidden group cursor-pointer flex flex-col h-full">
+<div class="absolute top-0 left-0 w-full h-1 bg-status-warning"></div>
+<div class="flex justify-between items-start mb-4">
+<div class="bg-surface-container px-2 py-1 rounded text-xs font-label-md text-on-surface-variant flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-status-warning"></span> Watch
+                        </div>
+<button class="text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm" data-icon="more_horiz">more_horiz</span>
+</button>
+</div>
+<h3 class="font-headline-md text-headline-md text-primary mb-1">Complete Spanish A2 Certification</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-6 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="event">event</span> Oct 15
+                    </p>
+<div class="flex items-center justify-between mt-auto mb-6">
+<!-- Progress Ring -->
+<div class="relative w-16 h-16">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<!-- Background ring -->
+<circle class="text-surface-variant stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="6"></circle>
+<!-- Progress ring (Activity - Inner) -->
+<circle class="text-secondary-fixed-dim stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="32" stroke-dasharray="201" stroke-dashoffset="160" stroke-linecap="round" stroke-width="4"></circle>
+<!-- Progress ring (Finalization - Outer) -->
+<circle class="text-status-warning stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251" stroke-dashoffset="150.6" stroke-linecap="round" stroke-width="6"></circle>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center font-label-md text-label-md text-primary font-bold">
+                                40%
+                            </div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Activity Level</p>
+<div class="flex gap-1 justify-end">
+<div class="w-1.5 h-4 bg-status-warning rounded-full"></div>
+<div class="w-1.5 h-4 bg-status-warning rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="border-t border-outline-variant pt-4">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-2">Next Action</p>
+<div class="flex items-start gap-2 bg-surface-container-low p-2 rounded-lg">
+<div class="mt-0.5 w-4 h-4 rounded border border-outline flex-shrink-0"></div>
+<p class="font-body-md text-body-md text-on-surface text-sm">Schedule 3 practice sessions for this week.</p>
+</div>
+</div>
+</div>
+<!-- Goal Card 3: Risky -->
+<div class="bg-canvas-bg rounded-xl p-5 border border-outline-variant card-shadow card-hover transition-all duration-300 relative overflow-hidden group cursor-pointer flex flex-col h-full">
+<div class="absolute top-0 left-0 w-full h-1 bg-status-urgent"></div>
+<div class="flex justify-between items-start mb-4">
+<div class="bg-surface-container px-2 py-1 rounded text-xs font-label-md text-on-surface-variant flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-status-urgent"></span> Risky
+                        </div>
+<button class="text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm" data-icon="more_horiz">more_horiz</span>
+</button>
+</div>
+<h3 class="font-headline-md text-headline-md text-primary mb-1">Migrate Personal Data to NAS</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-6 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="event">event</span> Aug 30 <span class="text-status-urgent font-bold ml-1">(Overdue)</span>
+</p>
+<div class="flex items-center justify-between mt-auto mb-6">
+<!-- Progress Ring -->
+<div class="relative w-16 h-16">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<!-- Background ring -->
+<circle class="text-surface-variant stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="6"></circle>
+<!-- Progress ring (Activity - Inner) -->
+<circle class="text-secondary-fixed-dim stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="32" stroke-dasharray="201" stroke-dashoffset="190" stroke-linecap="round" stroke-width="4"></circle>
+<!-- Progress ring (Finalization - Outer) -->
+<circle class="text-status-urgent stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251" stroke-dashoffset="200.8" stroke-linecap="round" stroke-width="6"></circle>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center font-label-md text-label-md text-primary font-bold">
+                                20%
+                            </div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Activity Level</p>
+<div class="flex gap-1 justify-end">
+<div class="w-1.5 h-4 bg-status-urgent rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="border-t border-outline-variant pt-4">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-2">Next Action</p>
+<div class="flex items-start gap-2 bg-surface-container-low p-2 rounded-lg">
+<div class="mt-0.5 w-4 h-4 rounded border border-outline flex-shrink-0"></div>
+<p class="font-body-md text-body-md text-on-surface text-sm">Purchase 2x 8TB drives for RAID setup.</p>
+</div>
+</div>
+</div>
+<!-- Goal Card 4: Safe -->
+<div class="bg-canvas-bg rounded-xl p-5 border border-outline-variant card-shadow card-hover transition-all duration-300 relative overflow-hidden group cursor-pointer flex flex-col h-full">
+<div class="absolute top-0 left-0 w-full h-1 bg-status-safe"></div>
+<div class="flex justify-between items-start mb-4">
+<div class="bg-surface-container px-2 py-1 rounded text-xs font-label-md text-on-surface-variant flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-status-safe"></span> Safe
+                        </div>
+<button class="text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm" data-icon="more_horiz">more_horiz</span>
+</button>
+</div>
+<h3 class="font-headline-md text-headline-md text-primary mb-1">Run Half Marathon</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-6 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="event">event</span> Nov 12
+                    </p>
+<div class="flex items-center justify-between mt-auto mb-6">
+<!-- Progress Ring -->
+<div class="relative w-16 h-16">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<!-- Background ring -->
+<circle class="text-surface-variant stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="6"></circle>
+<!-- Progress ring (Activity - Inner) -->
+<circle class="text-secondary-fixed-dim stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="32" stroke-dasharray="201" stroke-dashoffset="60" stroke-linecap="round" stroke-width="4"></circle>
+<!-- Progress ring (Finalization - Outer) -->
+<circle class="text-secondary stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251" stroke-dashoffset="100.4" stroke-linecap="round" stroke-width="6"></circle>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center font-label-md text-label-md text-primary font-bold">
+                                60%
+                            </div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Activity Level</p>
+<div class="flex gap-1 justify-end">
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-secondary rounded-full"></div>
+<div class="w-1.5 h-4 bg-surface-variant rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="border-t border-outline-variant pt-4">
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider mb-2">Next Action</p>
+<div class="flex items-start gap-2 bg-surface-container-low p-2 rounded-lg">
+<div class="mt-0.5 w-4 h-4 rounded border border-outline flex-shrink-0"></div>
+<p class="font-body-md text-body-md text-on-surface text-sm">Long run: 12 miles this Sunday.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation Bar (Mobile) -->
+<nav class="bg-surface dark:bg-inverse-surface fixed bottom-0 w-full z-50 md:hidden rounded-t-xl shadow-lg bg-surface/90 backdrop-blur-xl border-t border-outline-variant transition-transform duration-200 active:scale-90 fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-2 pb-safe">
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 active:bg-surface-container-high w-16 h-14" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="add_circle">add_circle</span>
+<span class="font-label-sm text-label-sm">Capture</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-xl p-2 active:bg-surface-container-high w-16 h-14" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="stars" data-weight="fill" style="font-variation-settings: 'FILL' 1;">stars</span>
+<span class="font-label-sm text-label-sm font-bold">Goals</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 active:bg-surface-container-high w-16 h-14" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="auto_awesome">auto_awesome</span>
+<span class="font-label-sm text-label-sm">AI</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 active:bg-surface-container-high w-16 h-14" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="menu">menu</span>
+<span class="font-label-sm text-label-sm">Menu</span>
+</a>
+</nav>
+<!-- AI Helper FAB (Hidden on this screen as per rules, but included for completeness if needed elsewhere, commented out) -->
+<!--
+    <button class="fixed bottom-24 right-4 md:bottom-8 md:right-8 bg-secondary text-on-secondary w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:scale-105 transition-transform z-40">
+        <span class="material-symbols-outlined" data-icon="smart_toy">smart_toy</span>
+    </button>
+    -->
+</body></html>

@@ -1,0 +1,200 @@
+import { Target, Calendar, Trash2, CheckSquare, Square, Plus } from 'lucide-react';
+import { motion } from 'motion/react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { useAppStore } from '../store/useAppStore';
+import { ProgressRing } from '../components/ProgressRing';
+import { db } from '../db/db';
+import { deleteGoal, updateGoalProgress } from '../db/queries/goals';
+import { toggleTask } from '../db/queries/tasks';
+import type { DBGoal, DBTask } from '../db/schema';
+
+const STATUS_BG   = { Safe: 'bg-[#10B981]', Watch: 'bg-[#F59E0B]', Risky: 'bg-[#EF4444]' };
+const STATUS_TEXT = { Safe: 'text-[#10B981]', Watch: 'text-[#F59E0B]', Risky: 'text-[#EF4444]' };
+
+// ─── Goal Card ────────────────────────────────────────────────────────────────
+function GoalCard({ goal, nextAction }: { goal: DBGoal; nextAction?: DBTask }) {
+  const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
+
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    showConfirm(`Archive goal "${goal.title}"?`, async () => {
+      await deleteGoal(goal.id);
+      triggerToast('Goal archived.', 'info');
+    });
+  };
+
+  const handleToggleNextAction = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!nextAction) return;
+    const { completed } = await toggleTask(nextAction.id);
+    const newProgress = Math.min(100, Math.max(0, goal.progress + (completed ? 5 : -5)));
+    await updateGoalProgress(goal.id, newProgress);
+  };
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 8 }}
+      whileHover={{ y: -3 }}
+      transition={{ duration: 0.2 }}
+      onClick={() => setSelectedGoalId(goal.id)}
+      className="bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 shadow-card hover:shadow-card-hover relative overflow-hidden group cursor-pointer flex flex-col h-full"
+    >
+      <div className={`absolute top-0 left-0 w-full h-1 ${STATUS_BG[goal.status]}`} />
+
+      <div className="flex justify-between items-start mb-4">
+        <div className="bg-[#f8f9fa] border border-gray-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-gray-600 flex items-center gap-1.5 uppercase tracking-wide">
+          <span className={`w-1.5 h-1.5 rounded-full ${STATUS_BG[goal.status]}`} />
+          {goal.status}
+        </div>
+        <button onClick={handleDelete} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      <h3 className="font-headline text-base font-bold text-gray-900 group-hover:text-[#4648d4] transition-colors mb-1 leading-snug">
+        {goal.title}
+      </h3>
+      <p className="font-mono text-[10px] text-gray-400 mb-6 flex items-center gap-1">
+        <Calendar size={11} className="text-gray-400" />
+        {goal.deadline ?? '—'}
+        {goal.overdue && (
+          <span className="text-[#EF4444] font-bold ml-1 uppercase text-[9px]">(Overdue)</span>
+        )}
+      </p>
+
+      <div className="flex items-center justify-between mt-auto mb-6">
+        <ProgressRing progress={goal.progress} activityLevel={goal.activity_level} status={goal.status} />
+        <div className="text-right pl-4">
+          <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Activity Level</p>
+          <div className="flex gap-1 justify-end items-end h-4">
+            {[1, 2, 3, 4, 5].map((lvl) => (
+              <div
+                key={lvl}
+                className={`w-1 rounded-full transition-all ${
+                  lvl <= goal.activity_level
+                    ? goal.status === 'Safe' ? 'bg-[#4648d4] h-4' : goal.status === 'Watch' ? 'bg-[#F59E0B] h-3.5' : 'bg-[#EF4444] h-3'
+                    : 'bg-gray-200 h-1.5'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-gray-100 pt-4" onClick={(e) => e.stopPropagation()}>
+        <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-2 font-bold">Next Action</p>
+        {nextAction ? (
+          <div
+            onClick={handleToggleNextAction}
+            className="flex items-start gap-2.5 bg-[#f8f9fa] p-2 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors"
+          >
+            <button className="shrink-0 mt-0.5 text-gray-400 hover:text-black transition-colors">
+              {nextAction.completed
+                ? <CheckSquare size={14} className="text-[#4648d4]" />
+                : <Square size={14} />}
+            </button>
+            <p className={`text-xs text-gray-700 leading-normal ${nextAction.completed ? 'line-through text-gray-400' : ''}`}>
+              {nextAction.title}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400 italic">No next action set.</p>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Goals Dashboard ──────────────────────────────────────────────────────────
+export function GoalsDashboard() {
+  const { goalsFilter, setGoalsFilter, searchQuery, openNewGoalModal } = useAppStore();
+
+  const goals       = useLiveQuery(() => db.goals.toArray()) ?? [];
+  const nextActions = useLiveQuery(() =>
+    db.tasks.where('kind').equals('next_action').toArray()
+  ) ?? [];
+
+  const nextActionMap = new Map(nextActions.map(t => [t.goal_id!, t]));
+
+  const filtered = goals.filter((g) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch = !q || g.title.toLowerCase().includes(q) || g.category.toLowerCase().includes(q);
+    const matchesFilter = goalsFilter === 'Active' ? g.progress < 100 : g.progress === 100;
+    return matchesSearch && matchesFilter;
+  });
+
+  const total    = goals.length;
+  const onTrack  = goals.filter((g) => g.status === 'Safe').length;
+  const needsAttn= goals.filter((g) => g.status === 'Watch').length;
+  const atRisk   = goals.filter((g) => g.status === 'Risky').length;
+
+  return (
+    <div className="max-w-[1000px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+        <div>
+          <h2 className="font-headline text-2xl font-bold text-black mb-1">Goals</h2>
+          <p className="text-sm text-gray-500 max-w-xl">
+            Bird's-eye view of your current trajectories. Keep your primary objectives in focus.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-[#f3f4f5] rounded-full p-1 border border-gray-200">
+            {(['Active', 'Completed'] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setGoalsFilter(f)}
+                className={`px-3 py-1 font-mono text-xs uppercase tracking-wider rounded-full transition-all ${
+                  goalsFilter === f ? 'bg-white text-black font-bold shadow-sm' : 'text-gray-400 hover:text-black'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => openNewGoalModal()}
+            className="bg-black text-white w-10 h-10 rounded-full flex items-center justify-center shadow-md hover:scale-[1.03] transition-all active:scale-[0.98]"
+          >
+            <Plus size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        {[
+          { label: 'Total Goals',     value: total,     color: 'text-black' },
+          { label: 'On Track',        value: onTrack,   color: STATUS_TEXT.Safe },
+          { label: 'Needs Attention', value: needsAttn, color: STATUS_TEXT.Watch },
+          { label: 'At Risk',         value: atRisk,    color: STATUS_TEXT.Risky },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="bg-[#f8f9fa] rounded-xl p-4 border border-gray-200 shadow-card">
+            <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">{label}</p>
+            <p className={`font-headline text-2xl font-bold ${color}`}>{value}</p>
+          </div>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-center py-16 bg-[#f8f9fa] rounded-xl border border-dashed border-gray-200">
+          <Target size={36} className="text-gray-300 mx-auto mb-3 animate-pulse" />
+          <p className="text-gray-800 font-semibold mb-1">No goals match selection filter</p>
+          <p className="text-xs text-gray-400 max-w-xs mx-auto mb-4">
+            Capture a new strategic goal using the button below.
+          </p>
+          <button onClick={() => openNewGoalModal()} className="bg-black text-white text-xs font-mono py-2 px-4 rounded-xl font-bold shadow-sm">
+            Initialize New Goal
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filtered.map((g) => (
+            <GoalCard key={g.id} goal={g} nextAction={nextActionMap.get(g.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

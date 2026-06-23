@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Weekly AI Schedule - Amina OS</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;900&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-fixed": "#2c0051",
+                        "on-primary-container": "#858383",
+                        "surface-tint": "#5f5e5e",
+                        "secondary": "#4648d4",
+                        "primary": "#000000",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "on-secondary-fixed-variant": "#2f2ebe",
+                        "surface-container-high": "#e7e8e9",
+                        "inverse-surface": "#2e3132",
+                        "surface-dim": "#d9dadb",
+                        "inverse-on-surface": "#f0f1f2",
+                        "primary-fixed-dim": "#c8c6c5",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-container": "#ac59fb",
+                        "outline": "#747878",
+                        "on-tertiary-fixed-variant": "#6900b3",
+                        "surface-variant": "#e1e3e4",
+                        "on-tertiary": "#ffffff",
+                        "on-surface-variant": "#444748",
+                        "on-error-container": "#93000a",
+                        "status-warning": "#F59E0B",
+                        "on-secondary-container": "#fffbff",
+                        "tertiary-fixed": "#f0dbff",
+                        "on-primary-fixed": "#1c1b1b",
+                        "tertiary-container": "#2c0051",
+                        "surface-container": "#edeeef",
+                        "primary-fixed": "#e5e2e1",
+                        "on-secondary": "#ffffff",
+                        "secondary-fixed": "#e1e0ff",
+                        "sidebar-bg": "#111827",
+                        "inverse-primary": "#c8c6c5",
+                        "on-surface": "#191c1d",
+                        "on-primary-fixed-variant": "#474746",
+                        "surface-container-highest": "#e1e3e4",
+                        "status-safe": "#10B981",
+                        "status-blocked": "#6B7280",
+                        "outline-variant": "#c4c7c7",
+                        "primary-container": "#1c1b1b",
+                        "error": "#ba1a1a",
+                        "secondary-container": "#6063ee",
+                        "surface-container-lowest": "#ffffff",
+                        "on-background": "#191c1d",
+                        "tertiary-fixed-dim": "#ddb7ff",
+                        "canvas-bg": "#FFFFFF",
+                        "surface": "#f8f9fa",
+                        "background": "#f8f9fa",
+                        "ai-highlight-soft": "#EEF2FF",
+                        "error-container": "#ffdad6",
+                        "on-secondary-fixed": "#07006c",
+                        "surface-container-low": "#f3f4f5",
+                        "on-error": "#ffffff",
+                        "surface-bright": "#f8f9fa",
+                        "tertiary": "#000000",
+                        "status-urgent": "#EF4444"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "gutter": "24px",
+                        "canvas-margin": "64px",
+                        "stack-md": "16px",
+                        "ai-rail-width": "320px",
+                        "stack-lg": "32px",
+                        "stack-sm": "8px",
+                        "sidebar-width": "260px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Hanken Grotesk"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "label-sm": ["JetBrains Mono"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "body-md": ["Inter"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "label-md": ["JetBrains Mono"],
+                        "body-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "body-md": ["15px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-md": ["13px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }],
+                        "body-lg": ["18px", { "lineHeight": "30px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined[data-weight="fill"] {
+            font-variation-settings: 'FILL' 1;
+        }
+        /* Custom scrollbar for calendar body */
+        .calendar-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .calendar-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .calendar-scroll::-webkit-scrollbar-thumb {
+            background-color: #e1e3e4;
+            border-radius: 10px;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.05);
+        }
+        
+        /* Grid definitions for calendar */
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: 60px repeat(7, 1fr);
+            grid-template-rows: auto repeat(24, 60px); /* 1 row for header, 24 for hours */
+        }
+        
+        .time-label {
+            transform: translateY(-50%);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background antialiased min-h-screen overflow-hidden">
+<!-- Top Navigation Area -->
+<header class="fixed top-0 right-0 left-sidebar-width h-16 z-40 bg-surface/80 backdrop-blur-md border-b border-outline-variant transition-all duration-300 md:left-sidebar-width left-0" id="top-nav">
+<div class="flex justify-between items-center px-gutter w-full h-full max-w-screen-2xl mx-auto">
+<!-- Brand / Active Context -->
+<div class="flex items-center gap-4">
+<div class="md:hidden">
+<button aria-label="Menu" class="p-2 text-primary hover:bg-surface-container rounded-lg">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<h1 class="font-headline-md text-headline-md font-black text-primary hidden md:block">Schedule</h1>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile font-black text-primary md:hidden">Schedule</h1>
+<div class="hidden md:flex gap-6 ml-8">
+<a class="font-label-md text-label-md text-primary font-bold border-b-2 border-primary pb-1" href="#">Focus</a>
+<a class="font-label-md text-label-md text-on-surface-variant hover:text-primary transition-opacity" href="#">Reflect</a>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-4">
+<button class="hidden sm:flex items-center gap-2 px-4 py-2 bg-ai-highlight-soft text-secondary border border-secondary-fixed-dim rounded-lg hover:bg-secondary-fixed-dim/20 transition-colors">
+<span class="material-symbols-outlined text-[18px]" data-icon="auto_awesome" data-weight="fill">auto_awesome</span>
+<span class="font-label-md text-label-md font-bold">Fix my Week</span>
+</button>
+<div class="flex items-center gap-2">
+<button aria-label="Quick action bolt" class="p-2 text-on-surface-variant hover:text-primary transition-opacity rounded-full hover:bg-surface-container">
+<span class="material-symbols-outlined" data-icon="bolt">bolt</span>
+</button>
+<button aria-label="Notifications" class="p-2 text-on-surface-variant hover:text-primary transition-opacity rounded-full hover:bg-surface-container">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+</div>
+<div class="w-8 h-8 rounded-full bg-surface-variant overflow-hidden border border-outline-variant flex items-center justify-center shrink-0">
+<img alt="Amina AI status" class="w-full h-full object-cover" data-alt="A small, professional portrait photograph of an AI avatar representing a personal assistant. Clean lighting, minimalist background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAv95mP55VEwSnIctXqTPgzEYdq5cSMQcJ791RiuNbaKn_hGbwU7A9-d8_N9plhBT3lVwaafmcWpzAVzSd_gmYioEykoSXiCZ5D6bb_QXax_Enwu1VKc8MJRZzBxxaB1EDY63l9YXY-_FgTTiTUwefdBdjH4QEGJwROzbM0i3cP6aqKPdlRzaEmQcvBQTUSDKwifS2hTAJs-LLxBK_Y3q82KjtsoxHHiaJgiyuSM_6gXgCFs1QQjKGRJQqBCybaDz9o4icn4GDrSQ"/>
+</div>
+</div>
+</div>
+</header>
+<!-- Side Navigation (Desktop) -->
+<nav class="h-screen w-sidebar-width fixed left-0 top-0 bg-sidebar-bg hidden md:flex flex-col p-stack-md z-50 text-on-primary">
+<!-- Header -->
+<div class="mb-8 px-2 pt-4">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-secondary to-tertiary-container flex items-center justify-center shadow-inner">
+<span class="material-symbols-outlined text-on-primary" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<div>
+<div class="font-headline-md text-headline-md font-bold text-on-primary leading-tight">Amina OS</div>
+<div class="font-label-sm text-label-sm text-secondary-fixed-dim">Personal Copilot</div>
+</div>
+</div>
+<button class="w-full flex items-center justify-center gap-2 bg-on-primary text-sidebar-bg py-2.5 rounded-lg font-label-md text-label-md font-bold hover:bg-primary-fixed transition-colors">
+<span class="material-symbols-outlined text-[18px]" data-icon="add">add</span>
+                New Thought
+            </button>
+</div>
+<!-- Main Nav Links -->
+<div class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2.5 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg group" href="#">
+<span class="material-symbols-outlined group-hover:text-secondary-fixed-dim transition-colors" data-icon="edit_note">edit_note</span>
+                Brain Dump
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg group" href="#">
+<span class="material-symbols-outlined group-hover:text-secondary-fixed-dim transition-colors" data-icon="target">target</span>
+                Goals
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 font-body-md text-body-md text-on-primary bg-primary-container rounded-lg group" href="#">
+<span class="material-symbols-outlined text-secondary-fixed-dim" data-icon="calendar_view_week" data-weight="fill">calendar_view_week</span>
+<span class="font-medium">Schedule</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg group" href="#">
+<span class="material-symbols-outlined group-hover:text-secondary-fixed-dim transition-colors" data-icon="menu_book">menu_book</span>
+                Journal
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg group" href="#">
+<span class="material-symbols-outlined group-hover:text-secondary-fixed-dim transition-colors" data-icon="folder_open">folder_open</span>
+                Resources
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg group" href="#">
+<span class="material-symbols-outlined group-hover:text-secondary-fixed-dim transition-colors" data-icon="settings">settings</span>
+                Settings
+            </a>
+</div>
+<!-- Footer Links -->
+<div class="mt-auto pt-4 border-t border-primary-container/50 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+                Help
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 font-body-md text-body-md text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="archive">archive</span>
+                Archive
+            </a>
+</div>
+</nav>
+<!-- Main Canvas Area -->
+<main class="md:ml-sidebar-width pt-16 h-screen flex flex-col bg-canvas-bg transition-all duration-300">
+<!-- Calendar Container -->
+<div class="flex-1 flex flex-col max-w-screen-2xl mx-auto w-full p-4 md:p-stack-lg overflow-hidden relative">
+<!-- Context Header (Week Select) -->
+<div class="flex justify-between items-end mb-6 shrink-0">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-primary">This Week</h2>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1">Oct 23 - Oct 29</p>
+</div>
+<div class="flex gap-2">
+<button class="p-2 border border-outline-variant rounded-lg text-on-surface hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined" data-icon="chevron_left">chevron_left</span>
+</button>
+<button class="p-2 border border-outline-variant rounded-lg text-on-surface hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+</div>
+<!-- The Calendar -->
+<div class="flex-1 bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm flex flex-col relative">
+<!-- Day Headers -->
+<div class="grid grid-cols-[60px_repeat(7,1fr)] border-b border-outline-variant bg-surface shrink-0">
+<div class="p-3 border-r border-outline-variant/50 text-center">
+<span class="font-label-sm text-label-sm text-on-surface-variant block">GMT-7</span>
+</div>
+<!-- Mon -->
+<div class="p-3 border-r border-outline-variant/50 text-center">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider block">Mon</span>
+<span class="font-headline-md text-headline-md text-primary mt-1 block">23</span>
+</div>
+<!-- Tue -->
+<div class="p-3 border-r border-outline-variant/50 text-center bg-ai-highlight-soft/30">
+<span class="font-label-sm text-label-sm text-secondary uppercase tracking-wider block font-bold">Tue</span>
+<span class="font-headline-md text-headline-md text-secondary mt-1 block bg-secondary text-on-secondary rounded-full w-8 h-8 mx-auto leading-8">24</span>
+</div>
+<!-- Wed -->
+<div class="p-3 border-r border-outline-variant/50 text-center">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider block">Wed</span>
+<span class="font-headline-md text-headline-md text-primary mt-1 block">25</span>
+</div>
+<!-- Thu -->
+<div class="p-3 border-r border-outline-variant/50 text-center">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider block">Thu</span>
+<span class="font-headline-md text-headline-md text-primary mt-1 block">26</span>
+</div>
+<!-- Fri -->
+<div class="p-3 border-r border-outline-variant/50 text-center">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider block">Fri</span>
+<span class="font-headline-md text-headline-md text-primary mt-1 block">27</span>
+</div>
+<!-- Sat -->
+<div class="p-3 border-r border-outline-variant/50 text-center bg-surface-container-low">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider block opacity-70">Sat</span>
+<span class="font-headline-md text-headline-md text-primary mt-1 block opacity-70">28</span>
+</div>
+<!-- Sun -->
+<div class="p-3 text-center bg-surface-container-low">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider block opacity-70">Sun</span>
+<span class="font-headline-md text-headline-md text-primary mt-1 block opacity-70">29</span>
+</div>
+</div>
+<!-- Scrollable Body -->
+<div class="flex-1 overflow-y-auto calendar-scroll relative bg-canvas-bg" id="calendar-body">
+<!-- Background Grid Lines -->
+<div class="absolute inset-0 grid grid-cols-[60px_repeat(7,1fr)] pointer-events-none z-0 min-h-[1440px]"> <!-- 24h * 60px -->
+<!-- Time Column -->
+<div class="border-r border-outline-variant/50 relative">
+<!-- JS will generate hours here -->
+<script>
+                                for(let i=1; i<24; i++) {
+                                    let ampm = i < 12 ? 'AM' : 'PM';
+                                    let hour = i % 12 || 12;
+                                    document.write(`<div class="absolute w-full text-right pr-2 time-label font-label-sm text-label-sm text-on-surface-variant opacity-60" style="top: ${i*60}px">${hour} ${ampm}</div>`);
+                                }
+                            </script>
+</div>
+<!-- Days Columns -->
+<div class="border-r border-outline-variant/30"></div>
+<div class="border-r border-outline-variant/30 bg-ai-highlight-soft/10"></div>
+<div class="border-r border-outline-variant/30"></div>
+<div class="border-r border-outline-variant/30"></div>
+<div class="border-r border-outline-variant/30"></div>
+<div class="border-r border-outline-variant/30 bg-surface-container-low/50"></div>
+<div class="bg-surface-container-low/50"></div>
+<!-- Horizontal Hour Lines -->
+<script>
+                            for(let i=1; i<24; i++) {
+                                document.write(`<div class="absolute left-[60px] right-0 border-t border-outline-variant/20" style="top: ${i*60}px"></div>`);
+                            }
+                        </script>
+</div>
+<!-- Current Time Indicator -->
+<div class="absolute left-0 right-0 z-10 flex items-center pointer-events-none" style="top: 570px;"> <!-- e.g., 9:30 AM (9.5 * 60) -->
+<div class="w-[60px] text-right pr-2 font-label-sm text-label-sm text-secondary font-bold time-label">9:30</div>
+<div class="flex-1 border-t-2 border-secondary relative">
+<div class="absolute -left-[5px] -top-[5px] w-[8px] h-[8px] rounded-full bg-secondary"></div>
+</div>
+</div>
+<!-- Events Container -->
+<div class="absolute inset-0 grid grid-cols-[60px_repeat(7,1fr)] z-20 min-h-[1440px]">
+<div></div> <!-- Time Col padding -->
+<!-- Monday -->
+<div class="relative px-1">
+<!-- Focus Block (Project A) -->
+<div class="absolute left-1 right-1 rounded-md border border-tertiary-fixed-dim bg-tertiary-fixed/30 p-2 overflow-hidden shadow-sm group hover:shadow-md transition-shadow cursor-pointer block-event" data-id="evt-1" style="top: 600px; height: 120px;">
+<div class="w-1 absolute left-0 top-0 bottom-0 bg-tertiary-container"></div>
+<div class="flex justify-between items-start">
+<span class="font-label-sm text-label-sm text-tertiary-container font-bold bg-surface-container/50 px-1 rounded">Focus</span>
+<button aria-label="Explain placement" class="text-tertiary-container/50 hover:text-tertiary-container opacity-0 group-hover:opacity-100 transition-opacity p-0.5 ai-explain-btn">
+<span class="material-symbols-outlined text-[16px]" data-icon="auto_awesome">auto_awesome</span>
+</button>
+</div>
+<h3 class="font-body-md text-body-md font-semibold text-primary mt-1 leading-tight">Deep Work: Q4 Strategy</h3>
+<p class="font-label-md text-label-md text-on-surface-variant truncate mt-1">10:00 - 12:00</p>
+</div>
+</div>
+<!-- Tuesday (Today) -->
+<div class="relative px-1">
+<!-- Catch-up block -->
+<div class="absolute left-1 right-1 rounded-md border border-outline-variant border-dashed bg-surface-container-lowest/80 p-2 overflow-hidden shadow-sm group hover:shadow-md transition-shadow cursor-pointer block-event" data-id="evt-2" style="top: 480px; height: 60px;">
+<div class="flex justify-between items-start">
+<span class="font-label-sm text-label-sm text-on-surface-variant font-bold bg-surface-container px-1 rounded">Buffer</span>
+</div>
+<h3 class="font-body-md text-body-md text-on-surface-variant mt-0.5 leading-tight italic">Email &amp; Slack Catch-up</h3>
+</div>
+<!-- Resource Review Block -->
+<div class="absolute left-1 right-1 rounded-md border border-status-safe/30 bg-status-safe/10 p-2 overflow-hidden shadow-sm group hover:shadow-md transition-shadow cursor-pointer block-event" data-id="evt-3" style="top: 660px; height: 90px;">
+<div class="w-1 absolute left-0 top-0 bottom-0 bg-status-safe"></div>
+<div class="flex justify-between items-start">
+<span class="font-label-sm text-label-sm text-status-safe font-bold bg-surface-container/50 px-1 rounded flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]" data-icon="menu_book">menu_book</span> Review
+                                    </span>
+<button aria-label="Explain placement" class="text-status-safe/70 hover:text-status-safe opacity-0 group-hover:opacity-100 transition-opacity p-0.5 ai-explain-btn">
+<span class="material-symbols-outlined text-[16px]" data-icon="auto_awesome">auto_awesome</span>
+</button>
+</div>
+<h3 class="font-body-md text-body-md font-semibold text-primary mt-1 leading-tight">Read: Competitor Analysis</h3>
+</div>
+<!-- Focus Block (Secondary Goal) -->
+<div class="absolute left-1 right-1 rounded-md border border-secondary-fixed-dim bg-secondary-fixed/30 p-2 overflow-hidden shadow-sm group hover:shadow-md transition-shadow cursor-pointer block-event" data-id="evt-4" style="top: 840px; height: 120px;">
+<div class="w-1 absolute left-0 top-0 bottom-0 bg-secondary"></div>
+<div class="flex justify-between items-start">
+<span class="font-label-sm text-label-sm text-secondary font-bold bg-surface-container/50 px-1 rounded">Focus</span>
+<button aria-label="Explain placement" class="text-secondary/70 hover:text-secondary opacity-0 group-hover:opacity-100 transition-opacity p-0.5 ai-explain-btn">
+<span class="material-symbols-outlined text-[16px]" data-icon="auto_awesome">auto_awesome</span>
+</button>
+</div>
+<h3 class="font-body-md text-body-md font-semibold text-primary mt-1 leading-tight">Draft Product Specs</h3>
+<div class="mt-2 flex gap-1">
+<div class="w-5 h-5 rounded-full bg-surface-variant border border-outline-variant flex items-center justify-center overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Small avatar icon showing a simple document symbol, representing a text file." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBxn2cFUvnSnaWrVnwkdQUKArBJz8JaJ8Zd36FIaquaqw8EO00BrAXmVabcfrcVkhhHpoQ2MEcmrWTrdy7vVHs2CeKMM9Cy6agP15cp0Dyj7cvrGN6rnoOEpITB3ZqTIrpwd3kzddCjxUECOuN2_p1BorRAXRDaMgaC5bE8K8Wn9GuHlRYlaE_8xxuqXVyGQtjl79k8SPHK_uuJKKXl1f7JWsRTedFkhHlWacwN7q8_Lij1iU7r0DGUFCiuPSv61P1Q2MzLZpTuqQ"/>
+</div>
+</div>
+</div>
+</div>
+<!-- Wednesday -->
+<div class="relative px-1">
+<div class="absolute left-1 right-1 rounded-md border border-tertiary-fixed-dim bg-tertiary-fixed/30 p-2 overflow-hidden shadow-sm group hover:shadow-md transition-shadow cursor-pointer block-event" data-id="evt-5" style="top: 540px; height: 180px;">
+<div class="w-1 absolute left-0 top-0 bottom-0 bg-tertiary-container"></div>
+<div class="flex justify-between items-start">
+<span class="font-label-sm text-label-sm text-tertiary-container font-bold bg-surface-container/50 px-1 rounded">Focus</span>
+<button aria-label="Explain placement" class="text-tertiary-container/50 hover:text-tertiary-container opacity-0 group-hover:opacity-100 transition-opacity p-0.5 ai-explain-btn">
+<span class="material-symbols-outlined text-[16px]" data-icon="auto_awesome">auto_awesome</span>
+</button>
+</div>
+<h3 class="font-body-md text-body-md font-semibold text-primary mt-1 leading-tight">Q4 Strategy: Data Modeling</h3>
+<p class="font-label-md text-label-md text-on-surface-variant truncate mt-1">9:00 - 12:00</p>
+</div>
+</div>
+<!-- Thursday -->
+<div class="relative px-1"></div>
+<!-- Friday -->
+<div class="relative px-1">
+<div class="absolute left-1 right-1 rounded-md border border-status-warning/30 bg-status-warning/10 p-2 overflow-hidden shadow-sm group hover:shadow-md transition-shadow cursor-pointer block-event" data-id="evt-6" style="top: 780px; height: 60px;">
+<div class="w-1 absolute left-0 top-0 bottom-0 bg-status-warning"></div>
+<div class="flex justify-between items-start">
+<span class="font-label-sm text-label-sm text-status-warning font-bold bg-surface-container/50 px-1 rounded">Admin</span>
+</div>
+<h3 class="font-body-md text-body-md font-semibold text-primary mt-1 leading-tight">Weekly Review</h3>
+</div>
+</div>
+<!-- Sat -->
+<div class="relative px-1"></div>
+<!-- Sun -->
+<div class="relative px-1"></div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation (Mobile) -->
+<nav class="fixed bottom-0 w-full z-50 md:hidden rounded-t-xl shadow-lg bg-surface/90 backdrop-blur-xl border-t border-outline-variant pb-safe" id="bottom-nav">
+<div class="flex justify-around items-center px-4 py-2">
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 active:bg-surface-container-high transition-transform duration-200 active:scale-90 rounded-xl" href="#">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+<span class="font-label-sm text-label-sm mt-1">Capture</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 active:bg-surface-container-high transition-transform duration-200 active:scale-90 rounded-xl" href="#">
+<span class="material-symbols-outlined" data-icon="stars">stars</span>
+<span class="font-label-sm text-label-sm mt-1">Goals</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-xl p-2 active:bg-surface-container-high transition-transform duration-200 active:scale-90" href="#">
+<span class="material-symbols-outlined" data-icon="auto_awesome">auto_awesome</span>
+<span class="font-label-sm text-label-sm mt-1">AI</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 active:bg-surface-container-high transition-transform duration-200 active:scale-90 rounded-xl" href="#">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+<span class="font-label-sm text-label-sm mt-1">Menu</span>
+</a>
+</div>
+</nav>
+<!-- Right AI Explanation Rail (Glassmorphism Overlay) -->
+<aside class="fixed top-16 right-0 bottom-0 w-ai-rail-width glass-panel transform translate-x-full transition-transform duration-300 ease-in-out z-40 border-l border-outline-variant/30 flex flex-col hidden md:flex" id="ai-drawer">
+<div class="p-stack-md flex justify-between items-center border-b border-outline-variant/20">
+<div class="flex items-center gap-2 text-secondary">
+<span class="material-symbols-outlined" data-icon="auto_awesome" data-weight="fill">auto_awesome</span>
+<h3 class="font-headline-md text-headline-md font-semibold">AI Reasoning</h3>
+</div>
+<button class="p-1 rounded-full hover:bg-surface-variant text-on-surface-variant" id="close-drawer">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+<div class="p-stack-md flex-1 overflow-y-auto">
+<div class="bg-surface rounded-lg p-4 border border-outline-variant/50 shadow-sm mb-4">
+<h4 class="font-body-md text-body-md font-bold text-primary mb-2" id="drawer-title">Deep Work: Q4 Strategy</h4>
+<div class="flex items-center gap-2 mb-4">
+<span class="font-label-sm text-label-sm bg-tertiary-fixed text-tertiary-container px-2 py-0.5 rounded">Primary Goal</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">10:00 AM - 12:00 PM</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mb-4" id="drawer-desc">
+                    Placed here because of Friday deadline and high energy level observed on previous Tuesday mornings.
+                </p>
+<div class="border-t border-outline-variant/20 pt-4 mt-4">
+<h5 class="font-label-md text-label-md text-primary font-bold mb-2">Connected Resources</h5>
+<div class="flex items-center gap-3 p-2 rounded-md hover:bg-surface-container transition-colors cursor-pointer border border-transparent hover:border-outline-variant/30">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="description">description</span>
+<div class="flex-1 min-w-0">
+<div class="font-body-md text-body-md text-primary truncate">Q4 Planning Doc</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant font-mono">Notion</div>
+</div>
+</div>
+</div>
+</div>
+<div class="flex gap-2 mt-4">
+<button class="flex-1 py-2 bg-primary text-on-primary rounded-lg font-label-md text-label-md font-bold hover:bg-primary/90 transition-colors">Accept</button>
+<button class="flex-1 py-2 border border-outline-variant text-primary rounded-lg font-label-md text-label-md font-bold hover:bg-surface-container transition-colors">Reschedule</button>
+</div>
+</div>
+</aside>
+<script>
+        // Scroll calendar to a reasonable starting time (e.g., 8 AM = 8 * 60px)
+        document.addEventListener("DOMContentLoaded", () => {
+            const calendarBody = document.getElementById('calendar-body');
+            if(calendarBody) {
+                calendarBody.scrollTop = 8 * 60 - 20; 
+            }
+        });
+
+        // Simple drawer toggle logic
+        const aiDrawer = document.getElementById('ai-drawer');
+        const closeDrawerBtn = document.getElementById('close-drawer');
+        const explainBtns = document.querySelectorAll('.ai-explain-btn');
+        
+        // Context data for demo
+        const eventContexts = {
+            'evt-1': { title: 'Deep Work: Q4 Strategy', desc: 'Placed here to ensure steady progress before Friday review. You typically have high focus during this window.' },
+            'evt-3': { title: 'Read: Competitor Analysis', desc: 'Scheduled right after lunch. Reading is a lower-cognitive load task suitable for this energy trough.' },
+            'evt-4': { title: 'Draft Product Specs', desc: 'Blocked out to utilize late-afternoon secondary focus surge. Aligns with your "Launch V2" goal.' }
+        };
+
+        explainBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // prevent clicking the block underneath
+                const parentBlock = e.target.closest('.block-event');
+                if(parentBlock) {
+                    const evtId = parentBlock.getAttribute('data-id');
+                    const data = eventContexts[evtId];
+                    if(data) {
+                        document.getElementById('drawer-title').textContent = data.title;
+                        document.getElementById('drawer-desc').textContent = data.desc;
+                    }
+                }
+                
+                aiDrawer.classList.remove('translate-x-full');
+            });
+        });
+
+        if(closeDrawerBtn) {
+            closeDrawerBtn.addEventListener('click', () => {
+                aiDrawer.classList.add('translate-x-full');
+            });
+        }
+    </script>
+</body></html>

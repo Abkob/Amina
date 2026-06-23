@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Amina OS - Goal Timeline</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;900&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-container": "#1c1b1b",
+                        "status-safe": "#10B981",
+                        "tertiary-fixed": "#f0dbff",
+                        "surface-container": "#edeeef",
+                        "on-secondary-fixed": "#07006c",
+                        "on-secondary": "#ffffff",
+                        "status-blocked": "#6B7280",
+                        "on-tertiary-fixed-variant": "#6900b3",
+                        "surface-dim": "#d9dadb",
+                        "on-tertiary-container": "#ac59fb",
+                        "error": "#ba1a1a",
+                        "tertiary-fixed-dim": "#ddb7ff",
+                        "status-warning": "#F59E0B",
+                        "sidebar-bg": "#111827",
+                        "status-urgent": "#EF4444",
+                        "inverse-primary": "#c8c6c5",
+                        "secondary": "#4648d4",
+                        "surface-container-highest": "#e1e3e4",
+                        "on-tertiary-fixed": "#2c0051",
+                        "error-container": "#ffdad6",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "on-background": "#191c1d",
+                        "on-error": "#ffffff",
+                        "on-primary-container": "#858383",
+                        "tertiary": "#000000",
+                        "outline-variant": "#c4c7c7",
+                        "canvas-bg": "#FFFFFF",
+                        "on-error-container": "#93000a",
+                        "surface": "#f8f9fa",
+                        "primary-fixed": "#e5e2e1",
+                        "outline": "#747878",
+                        "on-primary": "#ffffff",
+                        "background": "#f8f9fa",
+                        "ai-highlight-soft": "#EEF2FF",
+                        "secondary-container": "#6063ee",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface-variant": "#444748",
+                        "tertiary-container": "#2c0051",
+                        "surface-variant": "#e1e3e4",
+                        "on-secondary-fixed-variant": "#2f2ebe",
+                        "on-surface": "#191c1d",
+                        "surface-tint": "#5f5e5e",
+                        "on-primary-fixed": "#1c1b1b",
+                        "on-secondary-container": "#fffbff",
+                        "on-primary-fixed-variant": "#474746",
+                        "on-tertiary": "#ffffff",
+                        "secondary-fixed": "#e1e0ff",
+                        "inverse-surface": "#2e3132",
+                        "surface-container-high": "#e7e8e9",
+                        "primary": "#000000",
+                        "surface-bright": "#f8f9fa",
+                        "primary-fixed-dim": "#c8c6c5",
+                        "inverse-on-surface": "#f0f1f2",
+                        "surface-container-low": "#f3f4f5"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "stack-md": "16px",
+                        "sidebar-width": "260px",
+                        "stack-sm": "8px",
+                        "canvas-margin": "64px",
+                        "gutter": "24px",
+                        "stack-lg": "32px",
+                        "ai-rail-width": "320px"
+                    },
+                    "fontFamily": {
+                        "display-lg": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "body-lg": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-md": ["JetBrains Mono"],
+                        "label-sm": ["JetBrains Mono"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "body-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "30px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-md": ["13px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }],
+                        "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-md": ["15px", { "lineHeight": "24px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: #FFFFFF; }
+        .glass-panel { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); }
+        .ambient-shadow { box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.05); }
+        .card-lift { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+        .card-lift:hover { transform: translateY(-2px); box-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.08); }
+        
+        .progress-ring { transform: rotate(-90deg); transform-origin: 50% 50%; }
+        .progress-ring-circle { transition: stroke-dashoffset 0.5s ease-in-out; }
+    </style>
+</head>
+<body class="text-on-surface antialiased flex flex-col md:flex-row min-h-screen">
+<!-- TopNavBar (Web) -->
+<nav class="hidden md:flex justify-between items-center px-gutter w-full max-w-screen-2xl mx-auto bg-surface/80 backdrop-blur-md fixed top-0 right-0 left-sidebar-width h-16 z-40 border-b border-outline-variant">
+<div class="font-headline-md text-headline-md font-black text-primary">Amina</div>
+<div class="flex items-center gap-6">
+<div class="flex gap-4">
+<a class="text-on-surface-variant font-label-md text-label-md hover:text-primary transition-opacity" href="#">Focus</a>
+<a class="text-on-surface-variant font-label-md text-label-md hover:text-primary transition-opacity" href="#">Reflect</a>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-primary font-label-md text-label-md flex items-center gap-1 hover:opacity-80 transition-opacity">
+<span class="material-symbols-outlined" data-icon="sync" style="font-size: 16px;">sync</span> Sync AI
+                </button>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="bolt">bolt</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<img alt="Amina AI status" class="w-8 h-8 rounded-full border border-outline-variant" data-alt="A small, circular abstract avatar image in a minimalist style, featuring soft gradients of blue and purple on a white background, suitable for a professional AI assistant profile picture." src="https://lh3.googleusercontent.com/aida-public/AB6AXuB7lxz6KSNaImkvpKuHLKykb6Uv3hCMJF55G1p2IJn1RAuqHisFV-O2GhcefVzRWd9r_0VfdbuoS3L-W7_acaZJcZGg1VicxjSil5KxS8xQSKA-rAskHfwEjTa7wzBV_GRA_TyYDfIYjRUtC9xE5PTRgklxdnPCqQD3ZSZGcPm2ltnjZ7JNofekFujGX5FeF87lfDjubShUK3Q4q-hqm0JkR49ZPFsTPPWauh8LQclaOav3pX7DA1XTWXpwQ6A9ZrboWUZI7lOrSw"/>
+</div>
+</div>
+</nav>
+<!-- SideNavBar (Web) -->
+<aside class="hidden md:flex flex-col h-screen w-sidebar-width fixed left-0 top-0 bg-sidebar-bg p-stack-md z-50">
+<div class="flex items-center gap-3 mb-8">
+<img alt="User profile" class="w-10 h-10 rounded-full" data-alt="A clean, minimalist profile picture icon for a digital assistant, featuring simple geometric shapes in white against a dark background, embodying a modern tech aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCDCiBEnClqUbk7pskqnoh9LRusRP9o1gBrEhubPMf5jpJMlxAPCzs5IKO0SmZTgkioAaDX6Q1BN2bM1tqT2yFKrfhnF-YIEKh7AR8SxUIaImK9dOWIksykfWhi9CUesoZ9UugXmIvc0i2mKKjT3qmNltNE3VTOlovg9prs7v6WPVaaA-eYk5o1mgTY3ja0FgsveUXbXSIKUYDhTxf0FOncFWKcKwIzO81SGWf4XYk82UyRL19FRg-WAaDffTvmN85UTo4ixDsJxw"/>
+<div>
+<div class="font-headline-md text-headline-md font-bold text-on-primary">Amina OS</div>
+<div class="font-label-sm text-label-sm text-on-primary-container">Personal Copilot</div>
+</div>
+</div>
+<button class="w-full bg-primary-container text-on-primary font-label-md text-label-md py-2 rounded-lg flex items-center justify-center gap-2 mb-8 hover:bg-primary-container/80 transition-colors">
+<span class="material-symbols-outlined" data-icon="add" style="font-size: 18px;">add</span> New Thought
+        </button>
+<nav class="flex-1 flex flex-col gap-2 font-body-md text-body-md">
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="edit_note">edit_note</span> Brain Dump
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary bg-primary-container rounded-lg transition-colors duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="target">target</span> Goals
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="calendar_view_week">calendar_view_week</span> Schedule
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="menu_book">menu_book</span> Journal
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="folder_open">folder_open</span> Resources
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:bg-primary-container/50 hover:text-on-primary transition-colors duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span> Settings
+            </a>
+</nav>
+<div class="mt-auto flex flex-col gap-2 font-label-sm text-label-sm border-t border-outline-variant/20 pt-4">
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:text-on-primary transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="help_outline" style="font-size: 16px;">help_outline</span> Help
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-primary-container opacity-70 hover:text-on-primary transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="archive" style="font-size: 16px;">archive</span> Archive
+            </a>
+</div>
+</aside>
+<!-- BottomNavBar (Mobile) -->
+<nav class="fixed bottom-0 w-full z-50 md:hidden bg-surface dark:bg-inverse-surface rounded-t-xl shadow-lg border-t border-outline-variant flex justify-around items-center px-4 py-2 pb-safe">
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 transition-transform duration-200 active:scale-90 active:bg-surface-container-high rounded-xl" href="#">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+<span class="font-label-sm text-label-sm mt-1">Capture</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-xl p-2 transition-transform duration-200 active:scale-90 active:bg-surface-container-high" href="#">
+<span class="material-symbols-outlined" data-icon="stars">stars</span>
+<span class="font-label-sm text-label-sm mt-1">Goals</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 transition-transform duration-200 active:scale-90 active:bg-surface-container-high rounded-xl" href="#">
+<span class="material-symbols-outlined" data-icon="auto_awesome">auto_awesome</span>
+<span class="font-label-sm text-label-sm mt-1">AI</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant p-2 transition-transform duration-200 active:scale-90 active:bg-surface-container-high rounded-xl" href="#">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+<span class="font-label-sm text-label-sm mt-1">Menu</span>
+</a>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 md:ml-sidebar-width pt-20 md:pt-24 px-4 md:px-canvas-margin pb-24 md:pb-12 max-w-screen-xl mx-auto w-full">
+<!-- Header -->
+<header class="mb-stack-lg flex flex-col md:flex-row md:items-end justify-between gap-6">
+<div>
+<div class="flex items-center gap-2 text-on-surface-variant font-label-md text-label-md mb-2">
+<span class="material-symbols-outlined" data-icon="folder" style="font-size: 16px;">folder</span> Product Development
+                </div>
+<h1 class="font-headline-lg-mobile md:font-headline-lg text-headline-lg-mobile md:text-headline-lg text-primary">Goal: Launch v2.0 Design System</h1>
+</div>
+<div class="flex items-center gap-4 bg-surface rounded-xl p-4 border border-outline-variant/30 ambient-shadow">
+<div class="relative w-16 h-16">
+<svg class="w-full h-full progress-ring" viewbox="0 0 100 100">
+<circle class="text-surface-variant stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<circle class="text-secondary stroke-current progress-ring-circle" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="100.48" stroke-linecap="round" stroke-width="8"></circle>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center font-label-md text-label-md font-bold">60%</div>
+</div>
+<div>
+<div class="font-headline-md text-headline-md text-primary">On Track</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-1 mt-1">
+<span class="material-symbols-outlined" data-icon="event" style="font-size: 14px;">event</span> Due Oct 15
+                    </div>
+</div>
+</div>
+</header>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-stack-lg">
+<!-- Left Column: Timeline -->
+<div class="lg:col-span-2 flex flex-col gap-stack-md">
+<h2 class="font-headline-md text-headline-md text-primary mb-2 flex items-center gap-2">
+<span class="material-symbols-outlined" data-icon="timeline">timeline</span> Critical Path
+                </h2>
+<div class="relative pl-6 border-l-2 border-surface-variant space-y-8 pb-4">
+<!-- Completed Step -->
+<div class="relative">
+<div class="absolute -left-[31px] bg-canvas-bg p-1 rounded-full">
+<div class="w-3 h-3 rounded-full bg-status-safe ring-4 ring-status-safe/20"></div>
+</div>
+<div class="bg-surface rounded-xl p-4 border border-outline-variant/20 opacity-70">
+<div class="flex justify-between items-start mb-2">
+<h3 class="font-label-md text-label-md font-bold line-through">Token Audit &amp; Normalization</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Completed</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant line-through">Consolidate redundant color and typography variables across web and mobile.</p>
+</div>
+</div>
+<!-- Current Step -->
+<div class="relative">
+<div class="absolute -left-[31px] bg-canvas-bg p-1 rounded-full">
+<div class="w-3 h-3 rounded-full bg-secondary ring-4 ring-secondary/20"></div>
+</div>
+<div class="bg-surface rounded-xl p-5 border border-secondary/30 ambient-shadow card-lift">
+<div class="flex justify-between items-start mb-2">
+<h3 class="font-label-md text-label-md font-bold text-primary">Core Component Refactor</h3>
+<span class="font-label-sm text-label-sm text-secondary bg-secondary/10 px-2 py-1 rounded-md">In Progress</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface mb-3">Rebuild primary navigation, buttons, and form inputs using new structural tokens.</p>
+<div class="flex gap-2">
+<span class="text-[10px] font-label-sm uppercase tracking-wider bg-surface-variant px-2 py-1 rounded text-on-surface-variant">Buttons</span>
+<span class="text-[10px] font-label-sm uppercase tracking-wider bg-surface-variant px-2 py-1 rounded text-on-surface-variant">Inputs</span>
+</div>
+</div>
+</div>
+<!-- Future Step -->
+<div class="relative">
+<div class="absolute -left-[31px] bg-canvas-bg p-1 rounded-full">
+<div class="w-3 h-3 rounded-full bg-surface-variant"></div>
+</div>
+<div class="bg-surface rounded-xl p-4 border border-outline-variant/20 border-dashed">
+<div class="flex justify-between items-start mb-2">
+<h3 class="font-label-md text-label-md font-bold text-on-surface-variant">Documentation &amp; Guidelines</h3>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant">Draft usage guidelines and conflict resolution protocols for engineering.</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: AI & Resources -->
+<div class="lg:col-span-1 flex flex-col gap-stack-lg">
+<!-- AI Splitting Tool -->
+<section class="bg-ai-highlight-soft rounded-xl p-5 border border-secondary/10 ambient-shadow relative overflow-hidden">
+<div class="absolute top-0 right-0 p-3 opacity-20">
+<span class="material-symbols-outlined text-4xl" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-primary mb-3 flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary" data-icon="splitscreen">splitscreen</span> AI Deconstruction
+                    </h2>
+<p class="font-body-md text-body-md text-on-surface mb-4">
+                        The "Core Component Refactor" is a large block. Amina suggests splitting it to maintain momentum.
+                    </p>
+<div class="space-y-2 mb-6">
+<div class="bg-surface rounded-lg p-3 border border-outline-variant/30 flex items-start gap-3">
+<span class="material-symbols-outlined text-on-surface-variant mt-0.5" data-icon="check_box_outline_blank" style="font-size: 18px;">check_box_outline_blank</span>
+<div>
+<div class="font-label-md text-label-md font-bold">Refactor Buttons &amp; FABs</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Est. 2 hrs</div>
+</div>
+</div>
+<div class="bg-surface rounded-lg p-3 border border-outline-variant/30 flex items-start gap-3">
+<span class="material-symbols-outlined text-on-surface-variant mt-0.5" data-icon="check_box_outline_blank" style="font-size: 18px;">check_box_outline_blank</span>
+<div>
+<div class="font-label-md text-label-md font-bold">Standardize Form Inputs</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Est. 1.5 hrs</div>
+</div>
+</div>
+<div class="bg-surface rounded-lg p-3 border border-outline-variant/30 flex items-start gap-3">
+<span class="material-symbols-outlined text-on-surface-variant mt-0.5" data-icon="check_box_outline_blank" style="font-size: 18px;">check_box_outline_blank</span>
+<div>
+<div class="font-label-md text-label-md font-bold">Update Navigation Shells</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Est. 3 hrs</div>
+</div>
+</div>
+</div>
+<div class="bg-surface rounded-lg p-4 border border-outline-variant/50">
+<div class="font-label-sm text-label-sm text-secondary mb-2 uppercase tracking-wide">Schedule Integration</div>
+<p class="font-body-md text-body-md text-on-surface-variant mb-4">Fits perfectly into your "Deep Work" block this Friday at 10:00 AM.</p>
+<button class="w-full bg-primary text-on-primary font-label-md text-label-md py-2.5 rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined" data-icon="event_available" style="font-size: 18px;">event_available</span> Apply to Schedule
+                        </button>
+</div>
+</section>
+<!-- Resource Drop Zone -->
+<section>
+<h2 class="font-headline-md text-headline-md text-primary mb-3 flex items-center gap-2">
+<span class="material-symbols-outlined" data-icon="folder_zip">folder_zip</span> Resources
+                    </h2>
+<div class="border-2 border-dashed border-outline-variant/50 rounded-xl p-8 text-center bg-surface hover:bg-surface-container-low transition-colors cursor-pointer flex flex-col items-center justify-center gap-3">
+<div class="w-12 h-12 bg-surface-variant rounded-full flex items-center justify-center text-on-surface-variant mb-2">
+<span class="material-symbols-outlined" data-icon="upload_file">upload_file</span>
+</div>
+<div class="font-label-md text-label-md text-primary">Drag &amp; Drop files here</div>
+<div class="font-body-md text-body-md text-on-surface-variant text-sm max-w-[200px]">Append Figma links, notes, or JSON specs to this goal.</div>
+</div>
+<div class="mt-4 space-y-2">
+<div class="flex items-center gap-3 p-3 bg-surface rounded-lg border border-outline-variant/30 card-lift cursor-pointer">
+<span class="material-symbols-outlined text-[#F24E1E]" data-icon="draw">draw</span>
+<div class="flex-1">
+<div class="font-label-md text-label-md">Figma: Component Library</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant font-mono">link added 2d ago</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+</body></html>
