@@ -15,6 +15,7 @@ import { useNow } from '../utils/useNow';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
+import { TaskGraphView } from '../components/TaskGraphView';
 import { ActualTimeModal } from '../components/ActualTimeModal';
 import { ActualTimeChip } from '../components/ActualTimeChip';
 import { useGoal, useGoalTasks, useGoalResources, useTaskResources, useInvalidate } from '../api/hooks';
@@ -876,6 +877,105 @@ function MilestoneCard({
   );
 }
 
+// ─── Goal resources (collapsible) ────────────────────────────────────────────
+function GoalResourcesSection({
+  resources,
+  goalFileInputRef,
+  onUploadFiles,
+  onDrop,
+  onAddLink,
+  onDeleteResource,
+}: {
+  resources: DBResource[];
+  goalFileInputRef: React.RefObject<HTMLInputElement | null>;
+  onUploadFiles: (files: FileList | null) => Promise<void>;
+  onDrop: (e: React.DragEvent) => Promise<void>;
+  onAddLink: () => void;
+  onDeleteResource: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(resources.length > 0);
+
+  return (
+    <section>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-2 group"
+      >
+        <FolderOpen size={13} className="text-gray-400 shrink-0" />
+        <span className="font-headline text-sm font-bold text-gray-900 flex-1 text-left">Goal Resources</span>
+        {resources.length > 0 && (
+          <span className="font-mono text-[9px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full shrink-0">
+            {resources.length}
+          </span>
+        )}
+        <span className="text-gray-300 group-hover:text-gray-500 transition-colors ml-1 shrink-0">
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="pt-3 space-y-1.5">
+              {/* Compact drop / upload strip */}
+              <input
+                ref={goalFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={async (e) => { await onUploadFiles(e.currentTarget.files); e.currentTarget.value = ''; }}
+              />
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={onDrop}
+                onClick={() => goalFileInputRef.current?.click()}
+                className="flex items-center gap-2 border border-dashed border-gray-200 hover:border-[#4648d4]/40 rounded-lg px-3 py-2 bg-[#f8f9fa] hover:bg-white transition-all cursor-pointer group/drop"
+              >
+                <Upload size={11} className="text-gray-300 group-hover/drop:text-[#4648d4] shrink-0 transition-colors" />
+                <span className="text-[10px] font-mono text-gray-400 flex-1">Drop files or click to upload</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onAddLink(); }}
+                  className="text-[9px] font-mono text-gray-400 hover:text-[#4648d4] transition-colors shrink-0"
+                >
+                  + link
+                </button>
+              </div>
+
+              {/* Resource rows — compact */}
+              {resources.map(r => (
+                <div
+                  key={r.id}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-100 hover:border-gray-200 bg-white group/res transition-colors"
+                >
+                  {r.type === 'figma'
+                    ? <span className="text-red-500 font-bold font-mono text-[9px] border border-red-200 bg-red-50 px-1 py-0.5 rounded shrink-0">F</span>
+                    : <FileText size={11} className="text-gray-300 shrink-0" />}
+                  <span className="text-[11px] text-gray-700 truncate flex-1 min-w-0">{r.title}</span>
+                  {r.info && (
+                    <span className="text-[9px] font-mono text-gray-300 shrink-0 opacity-0 group-hover/res:opacity-100 transition-opacity">{r.info}</span>
+                  )}
+                  <button
+                    onClick={() => onDeleteResource(r.id)}
+                    className="text-gray-200 hover:text-red-400 transition-colors shrink-0 opacity-0 group-hover/res:opacity-100"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
 // ─── Sortable task row wrapper (DnD handle) ───────────────────────────────────
 function SortableTaskRow(props: Parameters<typeof TaskTreeRow>[0]) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.task.id });
@@ -1521,6 +1621,16 @@ export function GoalDetail() {
         </section>
         )}
 
+        {/* ── Task Graph ── */}
+        {allTasks.length > 0 && (
+          <TaskGraphView
+            goalId={goal.id}
+            goalTitle={goal.title}
+            tasks={allTasks}
+            onNodeClick={setFocusedTaskId}
+          />
+        )}
+
         {/* ── AI Micro-tasks ── */}
         {aiTasks.length > 0 && (
           <section>
@@ -1553,76 +1663,14 @@ export function GoalDetail() {
         )}
 
         {/* ── Resources ── */}
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-1.5">
-              <FolderOpen size={14} className="text-gray-500" />
-              Goal Resources
-            </h2>
-            <div className="flex items-center gap-2">
-              <input
-                ref={goalFileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={async (e) => {
-                  await handleGoalFiles(e.currentTarget.files);
-                  e.currentTarget.value = '';
-                }}
-              />
-              <button
-                onClick={() => goalFileInputRef.current?.click()}
-                className="flex items-center gap-1 text-[9px] font-mono uppercase bg-[#f8f9fa] hover:bg-gray-100 text-gray-500 py-1 px-2.5 rounded border border-gray-200 transition-colors"
-              >
-                <Upload size={11} />
-                Upload Files
-              </button>
-              <button
-                onClick={() => openAddResourceModal(goal.id)}
-                className="text-[9px] font-mono uppercase bg-[#f8f9fa] hover:bg-gray-100 text-gray-500 py-1 px-2.5 rounded border border-gray-200 transition-colors"
-              >
-                Attach Link
-              </button>
-            </div>
-          </div>
-
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
-            onClick={() => goalFileInputRef.current?.click()}
-            className="border-2 border-dashed border-gray-200 hover:border-[#4648d4]/40 rounded-xl p-6 text-center bg-[#f8f9fa] hover:bg-white transition-all cursor-pointer flex flex-col items-center justify-center gap-2 mb-3"
-          >
-            <Upload className="text-gray-400" size={22} />
-            <p className="text-xs font-semibold text-gray-700 flex items-center justify-center gap-2">
-              <span>Drop files here or choose from file explorer</span>
-            </p>
-            <p className="text-[10px] text-gray-400 max-w-[170px] leading-relaxed mx-auto">
-              File names and sizes are saved as goal resources.
-            </p>
-          </div>
-
-          {groupedResources.goalResources.length > 0 && (
-            <div className="space-y-2 animate-fade-in">
-              {groupedResources.goalResources.map(res => (
-                <div key={res.id} className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-150 hover:border-gray-200 shadow-sm">
-                  {res.type === 'figma'
-                    ? <span className="text-red-500 shrink-0 font-bold font-mono text-xs border border-red-200 bg-red-50 p-1 rounded">F</span>
-                    : <FileText size={16} className="text-gray-400 shrink-0" />}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold text-gray-800 truncate leading-tight">{res.title}</p>
-                    <p className="text-[9px] font-mono text-gray-400 truncate mt-1 uppercase tracking-widest">{res.info}</p>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteResource(res.id)}
-                    className="text-gray-300 hover:text-red-400 transition-colors shrink-0"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        <GoalResourcesSection
+          resources={groupedResources.goalResources}
+          goalFileInputRef={goalFileInputRef}
+          onUploadFiles={handleGoalFiles}
+          onDrop={handleDrop}
+          onAddLink={() => openAddResourceModal(goal.id)}
+          onDeleteResource={handleDeleteResource}
+        />
       </div>
 
       <AnimatePresence>

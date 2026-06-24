@@ -537,6 +537,40 @@ export function TaskFocusView() {
     setJournalDraft('');
   }, [task?.id]);
 
+  // ── Hierarchy navigation context (computed before hooks that depend on them) ─
+  const parent = task?.parent_task_id
+    ? (allTasks.find(t => t.id === task!.parent_task_id) ?? null)
+    : null;
+  const siblings = task
+    ? allTasks
+        .filter(t => t.parent_task_id === task.parent_task_id)
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    : [];
+  const sibIdx  = task ? siblings.findIndex(s => s.id === task.id) : -1;
+  const prevSib = sibIdx > 0 ? siblings[sibIdx - 1] : null;
+  const nextSib = sibIdx >= 0 && sibIdx < siblings.length - 1 ? siblings[sibIdx + 1] : null;
+
+  // Keyboard hierarchy navigation — Alt+Arrows move through the tree, Esc exits
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (parent) setFocusedTaskId(parent.id);
+          else setFocusedTaskId(null);
+        }
+        if (e.key === 'ArrowLeft' && prevSib) { e.preventDefault(); setFocusedTaskId(prevSib.id); }
+        if (e.key === 'ArrowRight' && nextSib) { e.preventDefault(); setFocusedTaskId(nextSib.id); }
+      }
+      if (e.key === 'Escape' && !inInput) setFocusedTaskId(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [parent?.id, prevSib?.id, nextSib?.id]);
+
   if (!goal || !task || !selectedGoalId) return null;
 
   const childrenByParent = allTasks.reduce<Record<string, DBTask[]>>((acc, item) => {
@@ -687,27 +721,101 @@ export function TaskFocusView() {
       transition={{ duration: 0.25 }}
       className="mx-auto max-w-[980px] px-4 py-6 md:px-10"
     >
-      <button
-        onClick={() => setFocusedTaskId(null)}
-        className="group mb-5 flex cursor-pointer items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-gray-400 hover:text-black"
-      >
-        <ChevronLeft size={15} className="transition-transform group-hover:-translate-x-0.5" />
-        Back to Goal
-      </button>
+      {/* ── Hierarchy nav rail ─────────────────────────────────────────── */}
+      <div className="mb-5 flex items-start justify-between gap-4">
+        {/* Left: breadcrumb + parent shortcut */}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-gray-400">
+            <button
+              onClick={() => setFocusedTaskId(null)}
+              className="max-w-[140px] truncate hover:text-[#4648d4] transition-colors"
+              title={goal.title}
+            >
+              {goal.title}
+            </button>
+            {path.map(item => (
+              <span key={item.id} className="flex items-center gap-1 min-w-0">
+                <ChevronRight size={10} className="text-gray-300 shrink-0" />
+                <button
+                  onClick={() => setFocusedTaskId(item.id)}
+                  className={`max-w-[160px] truncate transition-colors ${
+                    item.id === task.id
+                      ? 'text-gray-700 font-bold pointer-events-none'
+                      : 'hover:text-[#4648d4]'
+                  }`}
+                  title={item.title}
+                >
+                  {item.title}
+                </button>
+              </span>
+            ))}
+          </div>
 
-      <header className="mb-6 border-b border-gray-100 pb-5">
-        <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-gray-400">
-          <button onClick={() => setFocusedTaskId(null)} className="hover:text-[#4648d4]">{goal.title}</button>
-          {path.map((item) => (
-            <span key={item.id} className="flex items-center gap-1.5">
-              <ChevronRight size={11} />
-              <button onClick={() => setFocusedTaskId(item.id)} className="max-w-[180px] truncate hover:text-[#4648d4]">
-                {item.title}
-              </button>
-            </span>
-          ))}
+          {/* Parent jump or back-to-goal */}
+          {parent ? (
+            <button
+              onClick={() => setFocusedTaskId(parent.id)}
+              className="mt-2 flex items-center gap-1 font-mono text-[9px] text-gray-400 hover:text-[#4648d4] transition-colors group/up"
+              title={`Go to parent (Alt+↑)`}
+            >
+              <ChevronLeft size={11} className="transition-transform group-hover/up:-translate-x-0.5" />
+              <span className="max-w-[200px] truncate">{parent.title}</span>
+              <kbd className="ml-1.5 rounded bg-gray-100 px-1 py-px font-mono text-[7px] text-gray-400">Alt+↑</kbd>
+            </button>
+          ) : (
+            <button
+              onClick={() => setFocusedTaskId(null)}
+              className="mt-2 flex items-center gap-1 font-mono text-[9px] text-gray-400 hover:text-[#4648d4] transition-colors group/up"
+            >
+              <ChevronLeft size={11} className="transition-transform group-hover/up:-translate-x-0.5" />
+              Back to Goal
+              <kbd className="ml-1.5 rounded bg-gray-100 px-1 py-px font-mono text-[7px] text-gray-400">Esc</kbd>
+            </button>
+          )}
         </div>
 
+        {/* Right: sibling navigator */}
+        {siblings.length > 1 && (
+          <div className="shrink-0 flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => prevSib && setFocusedTaskId(prevSib.id)}
+                disabled={!prevSib}
+                title={prevSib ? `← ${prevSib.title}` : undefined}
+                className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1.5 text-gray-400 transition-colors hover:border-[#4648d4]/30 hover:text-[#4648d4] disabled:cursor-not-allowed disabled:opacity-25"
+              >
+                <ChevronLeft size={12} />
+                {prevSib && (
+                  <span className="max-w-[80px] truncate font-mono text-[9px] hidden sm:block">{prevSib.title}</span>
+                )}
+              </button>
+
+              <span className="px-2 font-mono text-[9px] text-gray-400 tabular-nums">
+                {sibIdx + 1}/{siblings.length}
+              </span>
+
+              <button
+                onClick={() => nextSib && setFocusedTaskId(nextSib.id)}
+                disabled={!nextSib}
+                title={nextSib ? `${nextSib.title} →` : undefined}
+                className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1.5 text-gray-400 transition-colors hover:border-[#4648d4]/30 hover:text-[#4648d4] disabled:cursor-not-allowed disabled:opacity-25"
+              >
+                {nextSib && (
+                  <span className="max-w-[80px] truncate font-mono text-[9px] hidden sm:block">{nextSib.title}</span>
+                )}
+                <ChevronRight size={12} />
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <kbd className="rounded bg-gray-100 px-1 py-px font-mono text-[7px] text-gray-400">Alt+←</kbd>
+              <span className="font-mono text-[7px] text-gray-300">siblings</span>
+              <kbd className="rounded bg-gray-100 px-1 py-px font-mono text-[7px] text-gray-400">Alt+→</kbd>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <header className="mb-6 border-b border-gray-100 pb-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0 flex-1">
             <div className="mb-2 flex items-center gap-2">

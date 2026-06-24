@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus } from 'lucide-react';
+import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus, AlertCircle, Clock } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { ProgressRing } from '../components/ProgressRing';
@@ -7,12 +7,33 @@ import { useGoals } from '../api/hooks';
 import { archiveGoal, restoreGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
 import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
-import { calculateGoalTaskMetrics, computeGoalStatus, type GoalTaskMetrics } from '../utils/goalTaskMetrics';
+import { calculateGoalTaskMetrics, computeGoalStatus, getClosestDueTask, type GoalTaskMetrics, type ClosestDue } from '../utils/goalTaskMetrics';
 import { computeGoalTimeStats, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
 import type { DBGoal, DBTask } from '../db/schema';
 
 const STATUS_BG   = { Safe: 'bg-[#10B981]', Watch: 'bg-[#F59E0B]', Risky: 'bg-[#EF4444]' };
 const STATUS_TEXT = { Safe: 'text-[#10B981]', Watch: 'text-[#F59E0B]', Risky: 'text-[#EF4444]' };
+
+// ─── Due warning strip ────────────────────────────────────────────────────────
+function DueWarning({ due }: { due: ClosestDue }) {
+  const cfg = {
+    overdue:  { bg: 'bg-red-50 border-red-200',     text: 'text-red-600',    Icon: AlertCircle, label: 'Overdue'   },
+    today:    { bg: 'bg-orange-50 border-orange-200', text: 'text-orange-600', Icon: AlertCircle, label: 'Due today'  },
+    tomorrow: { bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-600',  Icon: Clock,       label: 'Tomorrow'  },
+    soon:     { bg: 'bg-yellow-50 border-yellow-100', text: 'text-yellow-700', Icon: Clock,       label: `In ${due.daysUntil}d` },
+  } as const;
+
+  const { bg, text, Icon, label } = cfg[due.urgency!];
+  const title = due.task.title.length > 32 ? due.task.title.slice(0, 31) + '…' : due.task.title;
+
+  return (
+    <div className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 mb-3 border ${bg}`}>
+      <Icon size={10} className={`${text} shrink-0`} />
+      <span className={`font-mono text-[9px] font-bold uppercase tracking-wide ${text} shrink-0`}>{label}:</span>
+      <span className={`font-mono text-[9px] ${text} truncate`}>{title}</span>
+    </div>
+  );
+}
 
 // ─── Goal Card ────────────────────────────────────────────────────────────────
 function GoalCard({
@@ -21,12 +42,14 @@ function GoalCard({
   nextAction,
   finishEstimate,
   metrics,
+  closestDue,
 }: {
   goal: DBGoal;
   tasks: DBTask[];
   nextAction?: DBTask;
   finishEstimate: GoalFinishEstimate;
   metrics: GoalTaskMetrics;
+  closestDue: ClosestDue | null;
 }) {
   const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
   const isArchived = Boolean(goal.archived_at);
@@ -93,7 +116,7 @@ function GoalCard({
       <h3 className="font-headline text-base font-bold text-gray-900 group-hover:text-[#4648d4] transition-colors mb-1 leading-snug">
         {goal.title}
       </h3>
-      <p className="font-mono text-[10px] text-gray-400 mb-6 flex items-center gap-1">
+      <p className="font-mono text-[10px] text-gray-400 mb-3 flex items-center gap-1">
         <Calendar size={11} className="text-gray-400" />
         <span className="uppercase tracking-wider">{finishEstimate.caption}</span>
         <span title={finishEstimate.title}>{finishEstimate.label}</span>
@@ -101,6 +124,8 @@ function GoalCard({
           <span className="text-[#EF4444] font-bold ml-1 uppercase text-[9px]">(Overdue)</span>
         )}
       </p>
+
+      {closestDue && <DueWarning due={closestDue} />}
 
       <div className="flex items-center justify-between mt-auto mb-6">
         <ProgressRing progress={metrics.progress} activityLevel={metrics.activityLevel} status={status} />
@@ -255,6 +280,7 @@ export function GoalsDashboard() {
               nextAction={nextActionMap.get(g.id)}
               finishEstimate={getGoalFinishEstimate(g, tasksByGoal[g.id] ?? [])}
               metrics={calculateGoalTaskMetrics(tasksByGoal[g.id] ?? [])}
+              closestDue={getClosestDueTask(tasksByGoal[g.id] ?? [])}
             />
           ))}
         </div>

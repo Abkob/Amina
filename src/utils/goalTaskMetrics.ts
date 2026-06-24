@@ -28,6 +28,46 @@ export function getCountableGoalTasks(tasks: DBTask[]) {
   return tasks.filter(task => !parentIds.has(task.id));
 }
 
+// ─── Closest upcoming due date across all incomplete tasks ────────────────────
+
+export type DueUrgency = 'overdue' | 'today' | 'tomorrow' | 'soon' | null;
+
+export interface ClosestDue {
+  task: DBTask;
+  urgency: DueUrgency;
+  daysUntil: number; // negative = overdue
+}
+
+function parseDueDate(due: string): Date {
+  return new Date(due.slice(0, 10) + 'T23:59:59');
+}
+
+export function getClosestDueTask(tasks: DBTask[], now = new Date()): ClosestDue | null {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+
+  const candidates = tasks
+    .filter(t => !isDone(t) && t.due_date)
+    .map(t => {
+      const due = parseDueDate(t.due_date!);
+      const daysUntil = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+      return { task: t, daysUntil };
+    })
+    .filter(({ daysUntil }) => daysUntil <= 7) // only surface within a week
+    .sort((a, b) => a.daysUntil - b.daysUntil);
+
+  if (candidates.length === 0) return null;
+
+  const { task, daysUntil } = candidates[0];
+  const urgency: DueUrgency =
+    daysUntil < 0  ? 'overdue'   :
+    daysUntil === 0 ? 'today'    :
+    daysUntil === 1 ? 'tomorrow' :
+    'soon';
+
+  return { task, urgency, daysUntil };
+}
+
 export function normalizeTaskWeight(value: number | null | undefined): number | null {
   if (value === null || value === undefined || Number.isNaN(value)) return null;
   return Math.min(100, Math.max(0, Math.round(value)));
