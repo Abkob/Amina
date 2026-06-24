@@ -5,16 +5,15 @@ import {
   Plus, Trash2, X, Paperclip, ChevronDown, ChevronRight, Check,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { db } from '../db/db';
+import { useGoal, useGoalTasks, useGoalResources, useTaskResources } from '../api/hooks';
 import { archiveGoal, restoreGoal, updateGoal } from '../db/queries/goals';
 import { toggleTask, createTask, deleteTask, updateTask } from '../db/queries/tasks';
-import { createResource, deleteResource, detectResourceType, getAllResourcesGrouped } from '../db/queries/resources';
+import { createResource, deleteResource, detectResourceType } from '../db/queries/resources';
 import { getGoalFinishEstimate } from '../utils/goalFinishEstimate';
 import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
-import { calculateGoalTaskMetrics } from '../utils/goalTaskMetrics';
+import { calculateGoalTaskMetrics, computeGoalStatus } from '../utils/goalTaskMetrics';
 import { generateSuggestions } from '../utils/subtaskSuggestions';
 import type { DBTask, DBResource, CriticalPathStatus } from '../db/schema';
 
@@ -789,26 +788,21 @@ export function GoalDetail() {
 
   useEffect(() => { if (editingGoalTitle) goalTitleRef.current?.focus(); }, [editingGoalTitle]);
 
-  const goal = useLiveQuery(
-    () => selectedGoalId ? db.goals.get(selectedGoalId) : undefined,
-    [selectedGoalId],
-  );
+  const { data: goal } = useGoal(selectedGoalId);
+  const { data: allTasks = [] } = useGoalTasks(selectedGoalId);
+  const { data: goalResourceList = [] } = useGoalResources(selectedGoalId);
 
-  const allTasks = useLiveQuery(
-    () => selectedGoalId
-      ? db.tasks.where('goal_id').equals(selectedGoalId).sortBy('position')
-      : Promise.resolve([]),
-    [selectedGoalId],
-  ) ?? [];
+  // Build per-task resources grouped by task id
+  const taskIds = allTasks.map(t => t.id);
+  const [taskResourceMap, setTaskResourceMap] = useState<Record<string, DBResource[]>>({});
+  useEffect(() => {
+    if (taskIds.length === 0) { setTaskResourceMap({}); return; }
+    Promise.all(taskIds.map(id => fetch(`/api/resources?task_id=${id}`).then(r => r.json()).then((res: DBResource[]) => [id, res] as const)))
+      .then(pairs => setTaskResourceMap(Object.fromEntries(pairs)))
+      .catch(() => {});
+  }, [JSON.stringify(taskIds)]);
 
-  const groupedResources = useLiveQuery(
-    async () => {
-      if (!selectedGoalId) return { goalResources: [], taskResources: {} };
-      const tasks = await db.tasks.where('goal_id').equals(selectedGoalId).toArray();
-      return getAllResourcesGrouped(selectedGoalId, tasks.map(t => t.id));
-    },
-    [selectedGoalId],
-  ) ?? { goalResources: [] as DBResource[], taskResources: {} as Record<string, DBResource[]> };
+  const groupedResources = { goalResources: goalResourceList, taskResources: taskResourceMap };
 
   if (!goal) return null;
 
@@ -820,7 +814,8 @@ export function GoalDetail() {
     subtasksByParent[t.parent_task_id!] = [...(subtasksByParent[t.parent_task_id!] ?? []), t];
   });
 
-  const statusDot = goal.status === 'Safe' ? 'bg-[#10B981]' : goal.status === 'Watch' ? 'bg-[#F59E0B]' : 'bg-[#EF4444]';
+  const dynStatus = computeGoalStatus(goal, allTasks);
+  const statusDot = dynStatus === 'Safe' ? 'bg-[#10B981]' : dynStatus === 'Watch' ? 'bg-[#F59E0B]' : 'bg-[#EF4444]';
   const finishEstimate = getGoalFinishEstimate(goal, allTasks);
   const taskMetrics = calculateGoalTaskMetrics(allTasks);
 
@@ -1005,11 +1000,11 @@ export function GoalDetail() {
         </div>
 
         <div className="flex items-center gap-4 bg-white rounded-xl p-4 border border-gray-100 shadow-ambient shrink-0">
-          <DetailRing progress={taskMetrics.progress} status={goal.status} />
+          <DetailRing progress={taskMetrics.progress} status={dynStatus} />
           <div>
             <div className="font-headline text-base font-bold text-gray-900 flex items-center gap-1.5">
               <span className={`w-2 h-2 rounded-full ${statusDot}`} />
-              {goal.status}
+              {dynStatus}
             </div>
             <div className="font-mono text-[10px] text-gray-400 flex items-center gap-1 mt-1">
               <Calendar size={11} />

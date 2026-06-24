@@ -15,7 +15,7 @@ export function Header() {
       <header className="fixed top-0 right-0 left-0 md:left-[260px] h-16 z-40 bg-white/90 backdrop-blur-md hidden md:flex justify-between items-center px-6 border-b border-gray-100">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
-            <span className="font-headline text-lg font-black text-black tracking-tight">Amina</span>
+            <span className="font-headline text-lg font-black text-black tracking-tight">Marina</span>
             <div className="bg-[#EEF2FF] border border-[#c0c1ff]/40 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase text-[#4648d4] font-bold">
               OS 2.0
             </div>
@@ -71,7 +71,7 @@ export function Header() {
 
           <div className="flex items-center gap-1.5">
             <button
-              onClick={() => triggerToast('Amina OS Diagnostic logs nominal (latency: 14ms).', 'info')}
+              onClick={() => triggerToast('Marina OS Diagnostic logs nominal (latency: 14ms).', 'info')}
               className="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100"
             >
               <Zap size={15} />

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { resetAndSeed } from '../db/seed';
+async function resetAndSeed() { await fetch('/api/reset', { method: 'POST' }); }
 
 export function SettingsView() {
   const {
@@ -49,7 +49,7 @@ export function SettingsView() {
   return (
     <div className="max-w-[700px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
       <div className="mb-8 border-b border-gray-100 pb-4">
-        <h2 className="font-headline text-2xl font-black text-black mb-1">Amina OS Preferences</h2>
+        <h2 className="font-headline text-2xl font-black text-black mb-1">Marina OS Preferences</h2>
         <p className="text-sm text-gray-500">
           Configure personal co-pilot workspace triggers, prompt models, and storage.
         </p>
@@ -66,15 +66,15 @@ export function SettingsView() {
             <div className="relative w-14 h-14 rounded-full border overflow-hidden shrink-0">
               <img
                 src="https://lh3.googleusercontent.com/aida-public/AB6AXuC77RLeDDakGJQ4MP9wYcxIvZx0LhA3x49A5xlJOg4S4uEo34dcUMSBQVhKcZBFlyy4DyGXswu_nmLlGrM96KKrsDwJqdiwgn3Fq-1eo360fT94FzZEXJWyGw3kA5xy1tcXh-Gg4OaNLhI4M59l6zGRFM5KFSYJoyowOybjI-zdIKlvmZsMT3OpWwBsr7ftzsvCJZ2rsyvmpgtTinuxohWed8GXUyi1k1-OEHrRZdXUVXtQTu_RRoElUV-UE_b0WSUfslNnagddlw"
-                alt="Amina AI"
+                alt="Marina AI"
                 className="w-full h-full object-cover"
               />
             </div>
             <div>
-              <p className="text-sm font-bold text-gray-800">Amina DeepMind AI Engine</p>
+              <p className="text-sm font-bold text-gray-800">Marina DeepMind AI Engine</p>
               <p className="text-xs text-gray-400 mt-1">Status: Nominal (v3.0 + Dexie DB) | Latency: 13ms</p>
               <button
-                onClick={() => triggerToast('Amina self-diagnosis complete. Focus indexes optimized.', 'success')}
+                onClick={() => triggerToast('Marina self-diagnosis complete. Focus indexes optimized.', 'success')}
                 className="text-[10px] font-mono uppercase bg-black hover:opacity-90 text-white font-bold py-1 px-2.5 rounded mt-3.5"
               >
                 Diagnose Engine <NeedsImplementationBadge className="ml-2 align-middle" />

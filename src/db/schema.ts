@@ -75,7 +75,8 @@ export interface DBTaskNoteFile {
   name: string;
   mime_type: string;
   size: number;
-  blob: Blob;
+  blob: Blob;        // kept for type compatibility; null in API mode, use file_url instead
+  file_url?: string; // URL to stream the file from the server
   created_at: string;
 }
 

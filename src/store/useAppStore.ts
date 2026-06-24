@@ -182,7 +182,7 @@ export const useAppStore = create<AppStore>()(
       closeConfirm: ()              => set({ confirmOpen: false, confirmMessage: '', confirmOnOk: null }),
     }),
     {
-      name: 'amina-os-ui-v3',
+      name: 'marina-os-ui-v1',
       // Only persist navigation + schedule drawer state
       partialize: (state) => ({
         currentTab:      state.currentTab,

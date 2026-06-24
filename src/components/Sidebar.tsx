@@ -1,6 +1,6 @@
 import { BookOpen, Target, Calendar, FolderOpen, Settings as SettingsIcon, HelpCircle, Archive, Plus } from 'lucide-react';
 import { useAppStore, type Tab } from '../store/useAppStore';
-import { resetAndSeed } from '../db/seed';
+async function resetAndSeed() { await fetch('/api/reset', { method: 'POST' }); }
 import { NeedsImplementationBadge } from './NeedsImplementationBadge';
 
 const NAV: { id: Tab; label: string; Icon: React.ElementType }[] = [
@@ -34,9 +34,9 @@ export function Sidebar() {
   return (
     <nav className="bg-sidebar-bg h-screen w-[260px] fixed left-0 top-0 flex flex-col p-4 hidden md:flex z-50">
       <div className="mb-6 px-1 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#6063ee] to-purple-800 flex items-center justify-center text-white font-headline font-bold text-lg">A</div>
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#6063ee] to-purple-800 flex items-center justify-center text-white font-headline font-bold text-lg">M</div>
         <div>
-          <h1 className="font-headline text-lg font-bold text-white tracking-tight leading-tight">Amina OS</h1>
+          <h1 className="font-headline text-lg font-bold text-white tracking-tight leading-tight">Marina OS</h1>
           <p className="font-mono text-[10px] text-gray-400 uppercase tracking-widest">Personal Copilot</p>
         </div>
       </div>
@@ -68,7 +68,7 @@ export function Sidebar() {
 
       <div className="flex flex-col gap-1 mt-auto pt-4 border-t border-gray-800">
         <button
-          onClick={() => triggerToast('Amina Copilot diagnostic reporting initialized.', 'info')}
+          onClick={() => triggerToast('Marina Copilot diagnostic reporting initialized.', 'info')}
           className="flex items-center gap-3 px-3 py-2 text-xs font-mono text-gray-400 hover:text-white transition-colors"
         >
           <HelpCircle size={15} />

@@ -1,29 +1,29 @@
+import { useState, useEffect } from 'react';
 import { Folder, FileText } from 'lucide-react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/db';
 import type { DBGoal, DBResource } from '../db/schema';
 
-// Fetch resources attached to a goal via edges
-async function getGoalsWithResources(): Promise<{ goal: DBGoal; resources: DBResource[] }[]> {
-  const goals = await db.goals.toArray();
-  const results: { goal: DBGoal; resources: DBResource[] }[] = [];
-
-  for (const goal of goals) {
-    const edges = await db.edges
-      .where('target_id').equals(goal.id)
-      .filter(e => e.relationship === 'attached_to' && e.source_type === 'resource')
-      .toArray();
-    if (edges.length === 0) continue;
-    const ids = edges.map(e => e.source_id);
-    const resources = await db.resources.where('id').anyOf(ids).toArray();
-    if (resources.length > 0) results.push({ goal, resources });
-  }
-
-  return results;
-}
-
 export function ResourcesView() {
-  const goalsWithResources = useLiveQuery(() => getGoalsWithResources()) ?? [];
+  const [goalsWithResources, setGoalsWithResources] = useState<{ goal: DBGoal; resources: DBResource[] }[]>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      const [goals, resources] = await Promise.all([
+        fetch('/api/goals').then(r => r.json()) as Promise<DBGoal[]>,
+        fetch('/api/resources').then(r => r.json()) as Promise<DBResource[]>,
+      ]);
+      // Group resources by goal via fetching per-goal resources
+      const results = await Promise.all(
+        goals.map(async (goal) => {
+          const res: DBResource[] = await fetch(`/api/resources?goal_id=${goal.id}`).then(r => r.json());
+          return res.length ? { goal, resources: res } : null;
+        })
+      );
+      setGoalsWithResources(results.filter(Boolean) as { goal: DBGoal; resources: DBResource[] }[]);
+    };
+    load();
+    const id = setInterval(load, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="max-w-[1000px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
@@ -35,35 +35,30 @@ export function ResourcesView() {
       </div>
 
       {goalsWithResources.length === 0 ? (
-        <div className="text-center py-16 bg-[#f8f9fa] rounded-xl border border-dashed border-gray-200">
-          <Folder size={36} className="text-gray-300 mx-auto mb-3 animate-pulse" />
-          <p className="text-gray-800 font-semibold mb-1">No resources attached yet</p>
-          <p className="text-xs text-gray-400 max-w-xs mx-auto">
-            Attach links or files inside any goal's detail view to see them here.
-          </p>
+        <div className="text-center py-16 text-sm text-gray-400">
+          No resources yet. Attach links or documents inside a goal's tasks.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="space-y-6">
           {goalsWithResources.map(({ goal, resources }) => (
-            <div key={goal.id} className="bg-white border border-gray-200 shadow-sm rounded-xl p-5 flex flex-col hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-1.5 text-[#4648d4] font-mono text-[9px] uppercase tracking-wide font-bold mb-3 bg-[#EEF2FF] px-2 py-0.5 rounded w-max">
-                <Folder size={11} />
-                <span>{goal.title}</span>
+            <div key={goal.id} className="bg-white rounded-xl border border-gray-150 shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Folder size={14} className="text-[#4648d4]" />
+                <span className="font-bold text-sm text-gray-900">{goal.title}</span>
+                <span className="font-mono text-[9px] text-gray-400 uppercase tracking-wider">{goal.category}</span>
               </div>
-              <div className="space-y-3">
-                {resources.map((res) => (
-                  <div key={res.id} className="p-3 bg-[#f8f9fa] rounded-xl border border-gray-150 flex items-center justify-between hover:border-black/25 transition-colors">
-                    <div className="flex items-center gap-3 min-w-0">
-                      {res.type === 'figma' ? (
-                        <span className="text-red-500 font-mono text-xs font-bold border border-red-200 bg-red-50 p-1 rounded shrink-0">F</span>
-                      ) : (
-                        <FileText size={16} className="text-gray-500 shrink-0" />
-                      )}
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-gray-800 truncate leading-snug">{res.title}</p>
-                        <p className="text-[9px] font-mono text-gray-400 mt-0.5">{res.info}</p>
-                      </div>
-                    </div>
+              <div className="space-y-2">
+                {resources.map(r => (
+                  <div key={r.id} className="flex items-center gap-2 text-sm text-gray-600">
+                    <FileText size={12} className="text-gray-300 shrink-0" />
+                    {r.url ? (
+                      <a href={r.url} target="_blank" rel="noopener noreferrer" className="hover:text-[#4648d4] hover:underline truncate">
+                        {r.title}
+                      </a>
+                    ) : (
+                      <span className="truncate">{r.title}</span>
+                    )}
+                    <span className="text-[10px] font-mono text-gray-300 shrink-0 ml-auto">{r.type}</span>
                   </div>
                 ))}
               </div>

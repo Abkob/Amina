@@ -4,11 +4,10 @@ import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Plus, Trash2, Sparkles, CheckCircle2, FileText, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { ClassificationPopup } from '../modals/ClassificationPopup';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { db } from '../db/db';
+import { useNotes } from '../api/hooks';
 import { updateNoteContent, deleteNote, applyNoteSuggestedAction, ignoreNoteSuggestedAction } from '../db/queries/notes';
 import { createTask } from '../db/queries/tasks';
 import { parseExtractedTasks, parseRelevantDocs } from '../db/schema';
@@ -17,8 +16,8 @@ import { parseExtractedTasks, parseRelevantDocs } from '../db/schema';
 function NoteEditor() {
   const { activeNoteId, setActiveNoteId, triggerOOPopup, openNewGoalModal, triggerToast, showConfirm } = useAppStore();
 
-  const notes      = useLiveQuery(() => db.notes.orderBy('created_at').reverse().toArray()) ?? [];
-  const activeNote = useLiveQuery(() => activeNoteId ? db.notes.get(activeNoteId) : undefined, [activeNoteId]);
+  const { data: notes = [] } = useNotes();
+  const activeNote = notes.find(n => n.id === activeNoteId);
 
   const [selectedSnippet, setSelectedSnippet] = useState<string | null>(null);
   const suppressOORef = useRef(false);
@@ -27,7 +26,7 @@ function NoteEditor() {
     extensions: [
       StarterKit,
       Placeholder.configure({
-        placeholder: 'Tap here to document trace lines. Amina OS parses tasks, context milestones, and resource connections dynamically…',
+        placeholder: 'Tap here to document trace lines. Marina OS parses tasks, context milestones, and resource connections dynamically…',
         emptyEditorClass: 'before:content-[attr(data-placeholder)] before:text-gray-300 before:float-left before:h-0 before:pointer-events-none',
       }),
     ],
@@ -81,8 +80,8 @@ function NoteEditor() {
   const handleApply = async () => {
     if (!activeNote?.suggested_action_text) return;
 
-    const activeGoals = await db.goals.filter(g => !g.archived_at).sortBy('created_at');
-    const targetGoal = activeGoals[0];
+    const allGoals = await fetch('/api/goals').then(r => r.json()) as { id: string; title: string; archived_at: string | null }[];
+    const targetGoal = allGoals.filter(g => !g.archived_at)[0];
     if (!targetGoal) {
       triggerToast('No active goals to link this task to.', 'error');
       return;
@@ -90,9 +89,8 @@ function NoteEditor() {
 
     await applyNoteSuggestedAction(activeNote.id, targetGoal.id);
 
-    const existing = await db.tasks
-      .filter(t => t.goal_id === targetGoal.id && t.title === activeNote.suggested_action_text)
-      .first();
+    const allTasks = await fetch(`/api/tasks?goal_id=${targetGoal.id}`).then(r => r.json()) as { title: string }[];
+    const existing = allTasks.find(t => t.title === activeNote.suggested_action_text);
 
     if (!existing) {
       await createTask({
@@ -189,7 +187,8 @@ function NoteEditor() {
 // ─── Context Rail ─────────────────────────────────────────────────────────────
 function ContextRail() {
   const { activeNoteId } = useAppStore();
-  const activeNote = useLiveQuery(() => activeNoteId ? db.notes.get(activeNoteId) : undefined, [activeNoteId]);
+  const { data: allNotes = [] } = useNotes();
+  const activeNote = allNotes.find(n => n.id === activeNoteId);
 
   const extractedTasks = parseExtractedTasks(activeNote?.extracted_tasks_json ?? '[]');
   const relevantDocs   = parseRelevantDocs(activeNote?.relevant_docs_json ?? '[]');
@@ -244,7 +243,7 @@ function ContextRail() {
 
       <div className="bg-[#EEF2FF] rounded-xl p-4 border border-[#4648d4]/10 text-xs">
         <p className="font-bold text-[#4648d4] mb-1 flex items-center gap-2">
-          <span>Amina Mind-Link Helper</span>
+          <span>Marina Mind-Link Helper</span>
           <NeedsImplementationBadge />
         </p>
         <p className="text-gray-600 leading-normal">
@@ -258,7 +257,7 @@ function ContextRail() {
 // ─── Main BrainDump View ─────────────────────────────────────────────────────
 export function BrainDumpView() {
   const { activeNoteId, setActiveNoteId, openNewNoteModal, isOOPopupOpen } = useAppStore();
-  const notes = useLiveQuery(() => db.notes.orderBy('created_at').reverse().toArray()) ?? [];
+  const { data: notes = [] } = useNotes();
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 md:px-10 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in">

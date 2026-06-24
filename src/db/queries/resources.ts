@@ -1,22 +1,17 @@
-import { db } from '../db';
 import type { DBResource, ResourceType } from '../schema';
-import { addEdge, removeAllEdgesForNode } from './edges';
 
-function id()  { return crypto.randomUUID(); }
-function now() { return new Date().toISOString(); }
+const API = '/api';
 
 export async function getResourcesForGoal(goalId: string): Promise<DBResource[]> {
-  const edges = await db.edges
-    .where('target_id').equals(goalId)
-    .filter(e => e.relationship === 'attached_to' && e.source_type === 'resource')
-    .toArray();
-  const ids = edges.map(e => e.source_id);
-  if (ids.length === 0) return [];
-  return db.resources.where('id').anyOf(ids).toArray();
+  return fetch(`${API}/resources?goal_id=${goalId}`).then(r => r.json());
 }
 
 export async function getAllResources(): Promise<DBResource[]> {
-  return db.resources.orderBy('created_at').reverse().toArray();
+  return fetch(`${API}/resources`).then(r => r.json());
+}
+
+export async function getResourcesForTask(taskId: string): Promise<DBResource[]> {
+  return fetch(`${API}/resources?task_id=${taskId}`).then(r => r.json());
 }
 
 export async function createResource(
@@ -24,82 +19,32 @@ export async function createResource(
   goalId: string,
   taskId?: string,
 ): Promise<string> {
-  const resource: DBResource = { ...data, id: id(), created_at: now() };
-  await db.resources.add(resource);
-
-  if (taskId) {
-    await addEdge({
-      source_id: resource.id, source_type: 'resource',
-      target_id: taskId,      target_type: 'task',
-      relationship: 'attached_to',
-      metadata: null,
-    });
-    await addEdge({
-      source_id: resource.id, source_type: 'resource',
-      target_id: goalId,      target_type: 'goal',
-      relationship: 'attached_to',
-      metadata: JSON.stringify({ via_task: taskId }),
-    });
-  } else {
-    await addEdge({
-      source_id: resource.id, source_type: 'resource',
-      target_id: goalId,      target_type: 'goal',
-      relationship: 'attached_to',
-      metadata: null,
-    });
-  }
-
-  return resource.id;
-}
-
-export async function getResourcesForTask(taskId: string): Promise<DBResource[]> {
-  const edges = await db.edges
-    .where('target_id').equals(taskId)
-    .filter(e => e.relationship === 'attached_to' && e.source_type === 'resource')
-    .toArray();
-  const ids = edges.map(e => e.source_id);
-  if (ids.length === 0) return [];
-  return db.resources.where('id').anyOf(ids).toArray();
+  const r = await fetch(`${API}/resources`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...data, attach_to_id: taskId ?? goalId, attach_to_type: taskId ? 'task' : 'goal' }),
+  });
+  const { id } = await r.json();
+  return id;
 }
 
 export async function getAllResourcesGrouped(
   goalId: string,
   taskIds: string[],
 ): Promise<{ goalResources: DBResource[]; taskResources: Record<string, DBResource[]> }> {
-  const allTargetIds = [goalId, ...taskIds];
-  const edges = await db.edges
-    .filter(e =>
-      e.relationship === 'attached_to' &&
-      e.source_type === 'resource' &&
-      allTargetIds.includes(e.target_id)
-    )
-    .toArray();
-
-  const resourceIds = [...new Set(edges.map(e => e.source_id))];
-  if (resourceIds.length === 0) return { goalResources: [], taskResources: {} };
-
-  const resources = await db.resources.where('id').anyOf(resourceIds).toArray();
-  const byId = new Map(resources.map(r => [r.id, r]));
-
-  const goalResources: DBResource[] = [];
+  const [goalResources, ...taskResourceArrays] = await Promise.all([
+    getResourcesForGoal(goalId),
+    ...taskIds.map(id => getResourcesForTask(id).then(res => [id, res] as const)),
+  ]);
   const taskResources: Record<string, DBResource[]> = {};
-
-  for (const edge of edges) {
-    const res = byId.get(edge.source_id);
-    if (!res) continue;
-    if (edge.target_type === 'goal' && !(edge.metadata ?? '').includes('via_task')) {
-      goalResources.push(res);
-    } else if (edge.target_type === 'task') {
-      taskResources[edge.target_id] = [...(taskResources[edge.target_id] ?? []), res];
-    }
+  for (const [taskId, res] of taskResourceArrays as [string, DBResource[]][]) {
+    if (res.length) taskResources[taskId] = res;
   }
-
-  return { goalResources, taskResources };
+  return { goalResources: goalResources as DBResource[], taskResources };
 }
 
 export async function deleteResource(resourceId: string): Promise<void> {
-  await removeAllEdgesForNode(resourceId);
-  await db.resources.delete(resourceId);
+  await fetch(`${API}/resources/${resourceId}`, { method: 'DELETE' });
 }
 
 export function detectResourceType(input: string): ResourceType {

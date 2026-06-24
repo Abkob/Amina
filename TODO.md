@@ -1,4 +1,4 @@
-# Amina OS — To-Do Checklist
+# Marina OS — To-Do Checklist
 
 > Add items here. I'll pick them up, implement them, and cascade each into sub-tasks + unit tests automatically.
 
@@ -33,16 +33,54 @@
   - [x] Unit tests: `src/utils/__tests__/taskTime.test.ts` (50 tests — all green)
   - [x] Unit tests: `src/utils/__tests__/goalTaskMetrics.test.ts` (19 tests — all green)
 
----
-
 - [x] **Deadline + dynamic time estimates throughout the task tree**
-  - [x] `DeadlinePill` component — clickable chip showing date; editable via `<input type="date">`, red + "!" when overdue, dashed when empty
-  - [x] `InlineTimePill` component — editable time estimate chip in the task tree; shows Σ prefix + rolled-up sum when task has timed children; ⚠ conflict badge when own estimate ≠ children sum
+  - [x] `DeadlinePill` component — rounded-full chip; red + proximity badge ("today", "tmrw", "3d", "2d ago") when near/overdue; amber ≤3 days; dashed empty state; editable via `<input type="date">`
+  - [x] `InlineTimePill` component — shows `remaining / total` when in progress (amber); green "Done ✓" at 100%; Σ prefix for rollup; ⚠ conflict badge hidden when done
+  - [x] `getTaskLeafProgress(task, allTasks)` utility — recursively computes 0–1 ratio from leaf-task completion; instant 1 if task itself is done
   - [x] `GoalDetail` header — editable `DeadlinePill` for `goal.deadline` (saves via `updateGoal`)
   - [x] `TaskTreeRow` — deadline + time chips visible at all times when set; appear on hover when empty
   - [x] `MilestoneCard` header — deadline + rolled-up time always visible in header row
   - [x] `goalFinishEstimate.ts` fix — formats ISO deadline string (e.g. "2025-12-31") → "Dec 31" instead of raw string
-  - [x] Unit tests: deadline formatting covered by `goalFinishEstimate` logic; time rollup already covered by existing `taskTime.test.ts`
+  - [x] Unit tests: 7 new tests for `getTaskLeafProgress` in `taskTime.test.ts`
+
+- [x] **SQLite migration — replace Dexie/IndexedDB with persistent file-based storage**
+  - [x] `server/db.ts` — `better-sqlite3` connection to `amina.db` in project root; WAL mode + foreign keys; all `CREATE TABLE IF NOT EXISTS` statements; `rowToGoal()` + `rowToTask()` boolean converters
+  - [x] `server/seed.ts` — `seedIfEmpty()` on startup; `resetAndSeed()` on `POST /api/reset`; seeds from `src/data.js`
+  - [x] `server/index.ts` — Express app on port 3001; CORS for localhost:3000; all routers mounted
+  - [x] `server/routes/goals.ts` — full CRUD + cascade delete + `syncGoalMetrics`
+  - [x] `server/routes/tasks.ts` — full CRUD + toggle + task notes CRUD + `deleteTaskCascade()`
+  - [x] `server/routes/files.ts` — multer upload to `server/uploads/`; file streaming; delete
+  - [x] `server/routes/notes.ts` — brain dump notes CRUD
+  - [x] `server/routes/events.ts` — events CRUD
+  - [x] `server/routes/resources.ts` — resources with `?goal_id` / `?task_id` filter + edge-based linking
+  - [x] `server/routes/edges.ts` — edges CRUD with `?source_id` / `?target_id` filters
+  - [x] `src/api/hooks.ts` — React Query hooks replacing all `useLiveQuery` calls; `refetchInterval: 800ms`; hooks: `useGoals`, `useGoal`, `useGoalTasks`, `useTask`, `useTaskNotes`, `useNoteFiles`, `useNotes`, `useEvents`, `useGoalResources`, `useTaskResources`
+  - [x] `src/db/queries/goals.ts` — all functions replaced with `fetch('/api/goals/...')` calls
+  - [x] `src/db/queries/tasks.ts` — all functions replaced with API fetch calls
+  - [x] `src/db/queries/notes.ts` — all functions replaced with API fetch calls
+  - [x] `src/db/queries/events.ts` — all functions replaced with API fetch calls
+  - [x] `src/db/queries/resources.ts` — all functions replaced with API fetch calls
+  - [x] `src/db/queries/edges.ts` — all functions replaced with API fetch calls
+  - [x] `src/db/queries/noteFiles.ts` — uploads via `FormData`; files streamed from `/api/task-note-files/data/:id`
+  - [x] All views migrated off `useLiveQuery`: `GoalsDashboard`, `GoalDetail`, `ScheduleView`, `BrainDumpView`, `TaskFocusView`, `ResourcesView`, `SettingsView`
+  - [x] `ClassificationPopup` migrated to `useGoals()` hook
+  - [x] `Sidebar` + `SettingsView` reset calls updated to `POST /api/reset`
+  - [x] `main.tsx` — removed Dexie `seedIfEmpty()` call; server seeds on startup
+  - [x] `vite.config.ts` — proxy `/api` → `http://localhost:3001`
+  - [x] `package.json` — `dev` script uses `concurrently` to run Vite + Express together; new deps: `better-sqlite3`, `multer`, `@tanstack/react-query`, `cors`, `concurrently`
+  - [x] TypeScript check: 0 errors post-migration
+
+- [x] **Dynamic goal health status — auto-computed from deadlines and task hours**
+  - [x] `computeGoalStatus(goal, tasks, now?)` added to `goalTaskMetrics.ts`
+    - [x] Parses ISO deadline; ignores non-parseable strings (e.g. "Q3 2024") gracefully
+    - [x] **Risky**: overdue, or <3 days left, or <7 days + <50% done, or hours remaining exceed 1.5× available capacity (4 hrs/day)
+    - [x] **Watch**: >20% behind pace, or <14 days + <30% done, or hours pressure >75%
+    - [x] **Safe**: on or ahead of schedule pace
+    - [x] No deadline fallback: Safe if >60% done, Watch otherwise
+  - [x] `GoalsDashboard` — `GoalCard` computes status dynamically via `computeGoalStatus(goal, tasks)`; status badge, top bar color, activity bar color, and summary counters (On Track / Needs Attention / At Risk) all use computed value
+  - [x] `GoalDetail` — `dynStatus` replaces `goal.status` for the ring color, status dot, and status label
+  - [x] `NewGoalModal` — removed "Health Status" dropdown; always seeds `'Safe'` (display-time computed)
+  - [x] `NewGoalWizard` — removed "Initial Health" button group from Step 0 UI and review summary badge; seeds `'Safe'`
 
 ---
 
@@ -62,7 +100,7 @@
 
 - [ ] **Daily Score tracking** — `daily_scores` table exists but nothing writes to it; add end-of-day score entry UI
 
-- [ ] **Goal deadline / overdue logic** — `overdue` field exists but nothing computes or updates it dynamically
+- [ ] **Goal `overdue` flag** — `overdue` field exists in schema; nothing computes or persists it; derive from deadline at query time on the server or remove the column
 
 - [ ] **Settings — Copilot Metadata & Diagnose Engine** — currently all fake; define what real output looks like
 

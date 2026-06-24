@@ -1,9 +1,6 @@
-import { db } from '../db';
 import type { DBEvent } from '../schema';
-import { addEdge, removeAllEdgesForNode } from './edges';
 
-function id()  { return crypto.randomUUID(); }
-function now() { return new Date().toISOString(); }
+const API = '/api';
 
 function fmtHour(h: number): string {
   const hh = Math.floor(h);
@@ -14,68 +11,59 @@ function fmtHour(h: number): string {
 }
 
 export async function getEvents(): Promise<DBEvent[]> {
-  return db.events.orderBy('created_at').toArray();
-}
-
-export async function getEventById(eventId: string): Promise<DBEvent | undefined> {
-  return db.events.get(eventId);
+  return fetch(`${API}/events`).then(r => r.json());
 }
 
 export async function createEvent(
   data: Omit<DBEvent, 'id' | 'created_at' | 'updated_at'>,
-  goalId?: string,
-  taskId?: string
+  _goalId?: string,
+  _taskId?: string
 ): Promise<string> {
-  const event: DBEvent = { ...data, id: id(), created_at: now(), updated_at: now() };
-  await db.events.add(event);
-
-  if (goalId) {
-    await addEdge({
-      source_id: event.id, source_type: 'event',
-      target_id: goalId,   target_type: 'goal',
-      relationship: 'schedules',
-      metadata: null,
-    });
-  }
-  if (taskId) {
-    await addEdge({
-      source_id: event.id, source_type: 'event',
-      target_id: taskId,   target_type: 'task',
-      relationship: 'schedules',
-      metadata: null,
-    });
-  }
-
-  return event.id;
+  const r = await fetch(`${API}/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const { id } = await r.json();
+  return id;
 }
 
 export async function rescheduleEvent(eventId: string, newStartHour: number): Promise<void> {
-  const event = await db.events.get(eventId);
+  const events: DBEvent[] = await fetch(`${API}/events`).then(r => r.json());
+  const event = events.find(e => e.id === eventId);
   if (!event) return;
   const endHour = newStartHour + event.duration_hours;
-  await db.events.update(eventId, {
-    start_hour: newStartHour,
-    time_str: `${fmtHour(newStartHour)} - ${fmtHour(endHour)}`,
-    updated_at: now(),
+  await fetch(`${API}/events/${eventId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start_hour: newStartHour,
+      time_str: `${fmtHour(newStartHour)} - ${fmtHour(endHour)}`,
+    }),
   });
 }
 
 export async function deleteEvent(eventId: string): Promise<void> {
-  await removeAllEdgesForNode(eventId);
-  await db.events.delete(eventId);
+  await fetch(`${API}/events/${eventId}`, { method: 'DELETE' });
 }
 
 export async function fixMyWeek(): Promise<void> {
-  // Shift the two conflicting default events
   await rescheduleEvent('evt-3', 11.5);
-  await db.events.update('evt-3', {
-    time_str: '11:30 AM - 1:00 PM',
-    description: 'AI OPTIMIZED: Shifted 30 mins to guarantee cognitive recovery from morning sprint.',
+  await fetch(`${API}/events/evt-3`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      time_str: '11:30 AM - 1:00 PM',
+      description: 'AI OPTIMIZED: Shifted 30 mins to guarantee cognitive recovery from morning sprint.',
+    }),
   });
-
   await rescheduleEvent('evt-6', 14.0);
-  await db.events.update('evt-6', {
-    time_str: '2:00 PM - 3:00 PM',
-    description: 'AI OPTIMIZED: Arranged after administrative task closure to safeguard focus limits.',
+  await fetch(`${API}/events/evt-6`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      time_str: '2:00 PM - 3:00 PM',
+      description: 'AI OPTIMIZED: Arranged after administrative task closure to safeguard focus limits.',
+    }),
   });
 }

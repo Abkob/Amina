@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Check, CheckSquare, ChevronLeft, ChevronRight, Clock, Download,
   FileText, Paperclip, Plus, Square, Target, Trash2, Upload,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { db } from '../db/db';
+import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles } from '../api/hooks';
 import { createResource, deleteResource, detectResourceType, getResourcesForTask } from '../db/queries/resources';
 import {
   addTaskNote,
@@ -464,7 +463,7 @@ function NoteArticle({
   onView: (file: DBTaskNoteFile) => void;
 }) {
   const { triggerToast, showConfirm } = useAppStore();
-  const files = useLiveQuery(() => getNoteFilesForNote(note.id), [note.id]) ?? [];
+  const { data: files = [] } = useNoteFiles(note.id);
   const attachRef = useRef<HTMLInputElement>(null);
 
   const handleAttach = async (list: FileList | null) => {
@@ -547,32 +546,19 @@ export function TaskFocusView() {
   const [viewingFile, setViewingFile] = useState<DBTaskNoteFile | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const goal = useLiveQuery(
-    () => selectedGoalId ? db.goals.get(selectedGoalId) : undefined,
-    [selectedGoalId],
-  );
+  const { data: goal }           = useGoal(selectedGoalId);
+  const { data: task }           = useTask(focusedTaskId);
+  const { data: allTasks = [] }  = useGoalTasks(selectedGoalId);
+  const { data: taskNotes = [] } = useTaskNotes(focusedTaskId);
 
-  const task = useLiveQuery(
-    () => focusedTaskId ? db.tasks.get(focusedTaskId) : undefined,
-    [focusedTaskId],
-  );
-
-  const allTasks = useLiveQuery(
-    () => selectedGoalId
-      ? db.tasks.where('goal_id').equals(selectedGoalId).sortBy('position')
-      : Promise.resolve([]),
-    [selectedGoalId],
-  ) ?? [];
-
-  const resources = useLiveQuery(
-    () => focusedTaskId ? getResourcesForTask(focusedTaskId) : Promise.resolve([]),
-    [focusedTaskId],
-  ) ?? [];
-
-  const taskNotes = useLiveQuery(
-    () => focusedTaskId ? getTaskNotesForTask(focusedTaskId) : Promise.resolve([]),
-    [focusedTaskId],
-  ) ?? [];
+  const [resources, setResources] = useState<DBResource[]>([]);
+  useEffect(() => {
+    if (!focusedTaskId) { setResources([]); return; }
+    const load = () => getResourcesForTask(focusedTaskId).then(setResources).catch(() => {});
+    load();
+    const id = setInterval(load, 800);
+    return () => clearInterval(id);
+  }, [focusedTaskId]);
 
   useEffect(() => {
     if (task) setTaskTitle(task.title);

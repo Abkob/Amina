@@ -1,13 +1,13 @@
+import { useState, useEffect } from 'react';
 import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { ProgressRing } from '../components/ProgressRing';
-import { db } from '../db/db';
+import { useGoals } from '../api/hooks';
 import { archiveGoal, restoreGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
 import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
-import { calculateGoalTaskMetrics, type GoalTaskMetrics } from '../utils/goalTaskMetrics';
+import { calculateGoalTaskMetrics, computeGoalStatus, type GoalTaskMetrics } from '../utils/goalTaskMetrics';
 import type { DBGoal, DBTask } from '../db/schema';
 
 const STATUS_BG   = { Safe: 'bg-[#10B981]', Watch: 'bg-[#F59E0B]', Risky: 'bg-[#EF4444]' };
@@ -16,17 +16,20 @@ const STATUS_TEXT = { Safe: 'text-[#10B981]', Watch: 'text-[#F59E0B]', Risky: 't
 // ─── Goal Card ────────────────────────────────────────────────────────────────
 function GoalCard({
   goal,
+  tasks,
   nextAction,
   finishEstimate,
   metrics,
 }: {
   goal: DBGoal;
+  tasks: DBTask[];
   nextAction?: DBTask;
   finishEstimate: GoalFinishEstimate;
   metrics: GoalTaskMetrics;
 }) {
   const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
   const isArchived = Boolean(goal.archived_at);
+  const status = computeGoalStatus(goal, tasks);
 
   const handleArchiveToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -61,12 +64,12 @@ function GoalCard({
       onClick={() => setSelectedGoalId(goal.id)}
       className={`bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 shadow-card hover:shadow-card-hover relative overflow-hidden group cursor-pointer flex flex-col h-full ${isArchived ? 'opacity-75' : ''}`}
     >
-      <div className={`absolute top-0 left-0 w-full h-1 ${STATUS_BG[goal.status]}`} />
+      <div className={`absolute top-0 left-0 w-full h-1 ${STATUS_BG[status]}`} />
 
       <div className="flex justify-between items-start mb-4">
         <div className="bg-[#f8f9fa] border border-gray-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-gray-600 flex items-center gap-1.5 uppercase tracking-wide">
-          <span className={`w-1.5 h-1.5 rounded-full ${STATUS_BG[goal.status]}`} />
-          {goal.status}
+          <span className={`w-1.5 h-1.5 rounded-full ${STATUS_BG[status]}`} />
+          {status}
         </div>
         <button
           onClick={handleArchiveToggle}
@@ -90,7 +93,7 @@ function GoalCard({
       </p>
 
       <div className="flex items-center justify-between mt-auto mb-6">
-        <ProgressRing progress={metrics.progress} activityLevel={metrics.activityLevel} status={goal.status} />
+        <ProgressRing progress={metrics.progress} activityLevel={metrics.activityLevel} status={status} />
         <div className="text-right pl-4">
           <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Activity Level</p>
           <div className="flex gap-1 justify-end items-end h-4">
@@ -99,7 +102,7 @@ function GoalCard({
                 key={lvl}
                 className={`w-1 rounded-full transition-all ${
                   lvl <= metrics.activityLevel
-                    ? goal.status === 'Safe' ? 'bg-[#4648d4] h-4' : goal.status === 'Watch' ? 'bg-[#F59E0B] h-3.5' : 'bg-[#EF4444] h-3'
+                    ? status === 'Safe' ? 'bg-[#4648d4] h-4' : status === 'Watch' ? 'bg-[#F59E0B] h-3.5' : 'bg-[#EF4444] h-3'
                     : 'bg-gray-200 h-1.5'
                 }`}
               />
@@ -136,11 +139,17 @@ function GoalCard({
 export function GoalsDashboard() {
   const { goalsFilter, setGoalsFilter, searchQuery, openNewGoalModal } = useAppStore();
 
-  const goals       = useLiveQuery(() => db.goals.toArray()) ?? [];
-  const nextActions = useLiveQuery(() =>
-    db.tasks.where('kind').equals('next_action').toArray()
-  ) ?? [];
-  const allTasks = useLiveQuery(() => db.tasks.toArray()) ?? [];
+  const { data: goals = [] } = useGoals();
+
+  const [allTasks, setAllTasks] = useState<DBTask[]>([]);
+  useEffect(() => {
+    const load = () => fetch('/api/tasks').then(r => r.json()).then(setAllTasks).catch(() => {});
+    load();
+    const id = setInterval(load, 800);
+    return () => clearInterval(id);
+  }, []);
+
+  const nextActions = allTasks.filter(t => t.kind === 'next_action');
 
   const nextActionMap = new Map(nextActions.map(t => [t.goal_id!, t]));
   const tasksByGoal = allTasks.reduce<Record<string, DBTask[]>>((acc, task) => {
@@ -165,9 +174,9 @@ export function GoalsDashboard() {
   });
 
   const total    = visibleGoals.length;
-  const onTrack  = visibleGoals.filter((g) => g.status === 'Safe').length;
-  const needsAttn= visibleGoals.filter((g) => g.status === 'Watch').length;
-  const atRisk   = visibleGoals.filter((g) => g.status === 'Risky').length;
+  const onTrack  = visibleGoals.filter((g) => computeGoalStatus(g, tasksByGoal[g.id] ?? []) === 'Safe').length;
+  const needsAttn= visibleGoals.filter((g) => computeGoalStatus(g, tasksByGoal[g.id] ?? []) === 'Watch').length;
+  const atRisk   = visibleGoals.filter((g) => computeGoalStatus(g, tasksByGoal[g.id] ?? []) === 'Risky').length;
 
   return (
     <div className="max-w-[1000px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
@@ -232,6 +241,7 @@ export function GoalsDashboard() {
             <GoalCard
               key={g.id}
               goal={g}
+              tasks={tasksByGoal[g.id] ?? []}
               nextAction={nextActionMap.get(g.id)}
               finishEstimate={getGoalFinishEstimate(g, tasksByGoal[g.id] ?? [])}
               metrics={calculateGoalTaskMetrics(tasksByGoal[g.id] ?? [])}

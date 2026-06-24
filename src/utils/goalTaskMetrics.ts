@@ -1,4 +1,4 @@
-import type { DBTask } from '../db/schema';
+import type { DBGoal, DBTask } from '../db/schema';
 
 const ACTIVITY_WINDOW_DAYS = 7;
 
@@ -78,4 +78,58 @@ export function calculateGoalTaskMetrics(tasks: DBTask[], now = new Date()): Goa
     completedWeight,
     usesExplicitWeights,
   };
+}
+
+// ─── Dynamic health status ───────────────────────────────────────────────────
+// Derives Safe/Watch/Risky from deadline proximity and hours remaining.
+// Never use goal.status from the DB for display — call this instead.
+export function computeGoalStatus(
+  goal: DBGoal,
+  tasks: DBTask[],
+  now = new Date()
+): 'Safe' | 'Watch' | 'Risky' {
+  const metrics = calculateGoalTaskMetrics(tasks, now);
+  const progress = metrics.progress; // 0–100
+
+  if (progress === 100) return 'Safe';
+
+  // Remaining estimated minutes across incomplete tasks
+  const remainingMinutes = tasks
+    .filter(t => !t.completed && t.status !== 'done')
+    .reduce((sum, t) => sum + (t.estimated_minutes ?? 0), 0);
+
+  // Parse deadline — handle ISO date strings; ignore quarter strings like "Q3 2024"
+  const deadlineDate = goal.deadline
+    ? (() => { const d = new Date(goal.deadline.slice(0, 10) + 'T23:59:59'); return isNaN(d.getTime()) ? null : d; })()
+    : null;
+
+  if (!deadlineDate) {
+    // No parseable deadline — base purely on progress
+    if (progress >= 60) return 'Safe';
+    if (progress >= 20) return 'Watch';
+    return 'Watch';
+  }
+
+  const daysLeft = (deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+
+  if (daysLeft < 0) return 'Risky'; // overdue
+
+  // How much time has elapsed as a fraction of total goal lifespan
+  const created = new Date(goal.created_at);
+  const totalDays = Math.max(1, (deadlineDate.getTime() - created.getTime()) / (1000 * 60 * 60 * 24));
+  const elapsedFraction = Math.min(1, Math.max(0, (totalDays - daysLeft) / totalDays));
+  const expectedProgress = elapsedFraction * 100;
+  const progressGap = expectedProgress - progress; // positive = behind schedule
+
+  // Hours pressure: remaining work vs remaining calendar time (4 productive hrs/day)
+  const hoursLeft = daysLeft * 4;
+  const hoursPressure = remainingMinutes > 0 && hoursLeft > 0 ? remainingMinutes / 60 / hoursLeft : 0;
+
+  if (progressGap > 40 || daysLeft < 3 || (daysLeft < 7 && progress < 50) || hoursPressure > 1.5) {
+    return 'Risky';
+  }
+  if (progressGap > 20 || (daysLeft < 14 && progress < 30) || hoursPressure > 0.75) {
+    return 'Watch';
+  }
+  return 'Safe';
 }

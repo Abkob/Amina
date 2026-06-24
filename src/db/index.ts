@@ -1,5 +1,5 @@
 export { db } from './db';
-export type { AminaDB } from './db';
+export type { MarinaDB } from './db';
 export * from './schema';
 export * from './queries/goals';
 export * from './queries/tasks';

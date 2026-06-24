@@ -14,7 +14,7 @@ const LEGACY_GOAL_CATEGORY_MAP: Record<string, string> = {
   'Other': 'Personal',
 };
 
-export class AminaDB extends Dexie {
+export class MarinaDB extends Dexie {
   goals!:            EntityTable<DBGoal,         'id'>;
   tasks!:            EntityTable<DBTask,         'id'>;
   task_notes!:       EntityTable<DBTaskNote,     'id'>;
@@ -125,4 +125,4 @@ export class AminaDB extends Dexie {
   }
 }
 
-export const db = new AminaDB();
+export const db = new MarinaDB();

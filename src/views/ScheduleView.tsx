@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Sparkles, X, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { db } from '../db/db';
+import { useEvents } from '../api/hooks';
 import { rescheduleEvent, fixMyWeek as dbFixMyWeek } from '../db/queries/events';
 import { parseConnectedResource } from '../db/schema';
 
@@ -56,7 +55,7 @@ const EVENT_STYLE: Record<string, { border: string; bg: string; bar: string }> =
 function AIDrawer() {
   const { selectedEventId, isDrawerOpen, setIsDrawerOpen, setSelectedEventId, triggerToast } = useAppStore();
 
-  const events = useLiveQuery(() => db.events.toArray()) ?? [];
+  const { data: events = [] } = useEvents();
   const event  = events.find(e => e.id === selectedEventId);
 
   const handleReschedule = async () => {
@@ -74,7 +73,7 @@ function AIDrawer() {
           <NeedsImplementationBadge />
         </p>
         <p className="text-gray-600 leading-normal mb-3">
-          Tap any block in the schedule grid to activate Amina OS reasoning profiles.
+          Tap any block in the schedule grid to activate Marina OS reasoning profiles.
         </p>
         <button
           onClick={() => {
@@ -83,7 +82,7 @@ function AIDrawer() {
           }}
           className="bg-black hover:opacity-90 text-white text-[10px] uppercase font-mono py-1.5 px-3 rounded-lg"
         >
-          Amina Analytics
+          Marina Analytics
         </button>
       </div>
     );
@@ -162,7 +161,7 @@ function AIDrawer() {
 // ─── Schedule View ────────────────────────────────────────────────────────────
 export function ScheduleView() {
   const { selectedEventId, setSelectedEventId, setIsDrawerOpen, isOptimizing, setIsOptimizing, triggerToast } = useAppStore();
-  const events = useLiveQuery(() => db.events.toArray()) ?? [];
+  const { data: events = [] } = useEvents();
 
   const { days, todayIdx, weekLabel } = getWeekInfo();
 

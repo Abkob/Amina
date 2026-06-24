@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# SQLite DB + WAL artifacts
+*.db
+*.db-shm
+*.db-wal
+
+# Uploaded files
+server/uploads/

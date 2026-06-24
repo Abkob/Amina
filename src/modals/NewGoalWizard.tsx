@@ -78,7 +78,6 @@ export function NewGoalWizard() {
   const [title, setTitle]       = useState('');
   const [category, setCategory] = useState(categoryOptions[0]);
   const [deadline, setDeadline] = useState('');
-  const [status, setStatus]     = useState<'Safe' | 'Watch' | 'Risky'>('Safe');
 
   // ── Step 1 ──
   const [milestones, setMilestones] = useState<MilestoneDraft[]>([
@@ -164,8 +163,8 @@ export function NewGoalWizard() {
           ? `${category} goal targeting ${targetDeadline}.`
           : `${category} goal with finish estimated from tasks and subtasks.`,
         category,
-        status,
-        progress: 10,
+        status: 'Safe', // computed dynamically at display time
+        progress: 0,
         deadline: targetDeadline,
         overdue: false,
         activity_level: 3,
@@ -282,26 +281,6 @@ export function NewGoalWizard() {
                       <option value="">Estimate from tasks</option>
                       {DEADLINES.map(d => <option key={d}>{d}</option>)}
                     </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-1.5">Initial Health</label>
-                  <div className="flex gap-2">
-                    {(['Safe', 'Watch', 'Risky'] as const).map(s => (
-                      <button
-                        key={s}
-                        onClick={() => setStatus(s)}
-                        className={`flex-1 py-2 rounded-xl text-xs font-mono font-bold border transition-all ${
-                          status === s
-                            ? s === 'Safe'  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                            : s === 'Watch' ? 'bg-amber-50 border-amber-300 text-amber-700'
-                            : 'bg-red-50 border-red-300 text-red-600'
-                            : 'bg-gray-50 border-gray-200 text-gray-400 hover:border-gray-300'
-                        }`}
-                      >
-                        {s}
-                      </button>
-                    ))}
                   </div>
                 </div>
               </motion.div>
@@ -441,12 +420,8 @@ export function NewGoalWizard() {
                       <h3 className="font-headline text-base font-black text-gray-900 leading-tight">{title}</h3>
                       <p className="text-[10px] font-mono text-gray-400 mt-0.5">{category} · {deadline || 'Dynamic from tasks'}</p>
                     </div>
-                    <span className={`font-mono text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shrink-0 ${
-                      status === 'Safe'  ? 'bg-emerald-100 text-emerald-700' :
-                      status === 'Watch' ? 'bg-amber-100 text-amber-700' :
-                      'bg-red-100 text-red-600'
-                    }`}>
-                      {status}
+                    <span className="font-mono text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shrink-0 bg-gray-100 text-gray-500">
+                      Auto-health
                     </span>
                   </div>
                   <div className="flex gap-4 text-xs">

@@ -12,7 +12,6 @@ export function NewGoalModal() {
   const [title,    setTitle]    = useState(goalTitlePrefill);
   const [category, setCategory] = useState(categoryOptions[0]);
   const [quarter,  setQuarter]  = useState('');
-  const [status,   setStatus]   = useState<'Safe' | 'Watch' | 'Risky'>('Safe');
   const [desc,     setDesc]     = useState('');
 
   useEffect(() => {
@@ -34,14 +33,13 @@ export function NewGoalModal() {
         ? `Goal targeting ${targetDeadline}.`
         : 'Goal with finish estimated from tasks and subtasks.'),
       category,
-      status,
-      progress:       10,
+      status:         'Safe', // computed dynamically at display time
+      progress:       0,
       deadline:       targetDeadline,
       overdue:        false,
-      activity_level: Math.floor(Math.random() * 3) + 2,
+      activity_level: 1,
     });
 
-    // Seed initial tasks
     await createTask({
       goal_id: goalId, parent_task_id: null,
       title: 'Initial strategy kickoff and scope definition.',
@@ -106,18 +104,9 @@ export function NewGoalModal() {
             </div>
             <div>
               <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Target Deadline (optional)</label>
-              <input type="text" placeholder="Optional, e.g. Q3 2026" value={quarter} onChange={(e) => setQuarter(e.target.value)}
+              <input type="text" placeholder="e.g. 2026-09-30" value={quarter} onChange={(e) => setQuarter(e.target.value)}
                 className="w-full text-xs font-sans rounded-lg border border-gray-200 p-2 focus:ring-1 focus:ring-black outline-none" />
             </div>
-          </div>
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Health Status</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value as 'Safe' | 'Watch' | 'Risky')}
-              className="w-full text-xs font-sans rounded-lg border border-gray-200 p-2 focus:ring-1 focus:ring-black outline-none bg-white">
-              <option value="Safe">Safe (On track)</option>
-              <option value="Watch">Watch (Needs attention)</option>
-              <option value="Risky">Risky (At risk)</option>
-            </select>
           </div>
           <div>
             <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-400 mb-1 font-bold">Brief Scope Description</label>

@@ -1,9 +1,8 @@
 import { Sparkles, X, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { db } from '../db/db';
+import { useGoals } from '../api/hooks';
 import { linkNoteToGoal } from '../db/queries/notes';
 
 function scoreGoal(goalTitle: string, goalCategory: string, contextText: string): number {
@@ -15,7 +14,7 @@ function scoreGoal(goalTitle: string, goalCategory: string, contextText: string)
 
 export function ClassificationPopup() {
   const { ooContextText, activeNoteId, closeOOPopup, openNewGoalModal, triggerToast } = useAppStore();
-  const goals = useLiveQuery(() => db.goals.toArray()) ?? [];
+  const { data: goals = [] } = useGoals();
 
   const ranked = goals
     .map((g) => ({ ...g, confidence: scoreGoal(g.title, g.category, ooContextText) }))

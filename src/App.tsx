@@ -1,7 +1,6 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect } from 'react';
-import { db } from './db/db';
-import { syncGoalMetricsFromTasks } from './db/queries/tasks';
 import { useAppStore } from './store/useAppStore';
 
 // Layout
@@ -26,7 +25,16 @@ import { NewEventModal }    from './modals/NewEventModal';
 import { AddResourceModal } from './modals/AddResourceModal';
 import { ConfirmModal }     from './components/ConfirmModal';
 
-export default function App() {
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 0,
+      retry: 1,
+    },
+  },
+});
+
+function AppInner() {
   const {
     currentTab, selectedGoalId, focusedTaskId,
     setSelectedGoalId, setFocusedTaskId,
@@ -34,55 +42,25 @@ export default function App() {
     confirmOpen,
   } = useAppStore();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    db.goals.toArray()
-      .then(async (goals) => {
-        if (cancelled) return;
-        await Promise.all(goals.map(goal => syncGoalMetricsFromTasks(goal.id)));
-      })
-      .catch(() => {
-        // Non-blocking: views still compute live metrics from tasks.
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
+  // Validate that persisted selectedGoalId still exists
   useEffect(() => {
     if (!selectedGoalId) return;
     let cancelled = false;
-
-    db.goals.get(selectedGoalId)
-      .then((goal) => {
-        if (!cancelled && !goal) setSelectedGoalId(null);
-      })
-      .catch(() => {
-        if (!cancelled) setSelectedGoalId(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    fetch(`/api/goals/${selectedGoalId}`)
+      .then(r => { if (!cancelled && r.status === 404) setSelectedGoalId(null); })
+      .catch(() => { if (!cancelled) setSelectedGoalId(null); });
+    return () => { cancelled = true; };
   }, [selectedGoalId, setSelectedGoalId]);
 
+  // Validate that persisted focusedTaskId still exists and belongs to the selected goal
   useEffect(() => {
     if (!selectedGoalId || !focusedTaskId) return;
     let cancelled = false;
-
-    db.tasks.get(focusedTaskId)
-      .then((task) => {
-        if (!cancelled && (!task || task.goal_id !== selectedGoalId)) setFocusedTaskId(null);
-      })
-      .catch(() => {
-        if (!cancelled) setFocusedTaskId(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    fetch(`/api/tasks/${focusedTaskId}`)
+      .then(r => r.json())
+      .then((task) => { if (!cancelled && (!task || task.goal_id !== selectedGoalId)) setFocusedTaskId(null); })
+      .catch(() => { if (!cancelled) setFocusedTaskId(null); });
+    return () => { cancelled = true; };
   }, [selectedGoalId, focusedTaskId, setFocusedTaskId]);
 
   const renderContent = () => {
@@ -99,16 +77,9 @@ export default function App() {
 
   return (
     <div className="bg-canvas-bg text-on-surface font-sans antialiased min-h-screen flex selection:bg-[#EEF2FF] selection:text-black">
-      {/* Global overlays */}
       <Toast />
-
-      {/* Sidebar (desktop) */}
       <Sidebar />
-
-      {/* Header + notification panel (desktop) */}
       <Header />
-
-      {/* Main content */}
       <main className="flex-1 w-full md:pl-[260px] pt-4 md:pt-[76px] pb-24 md:pb-8 min-h-screen overflow-x-hidden">
         <AnimatePresence mode="wait">
           <motion.div
@@ -123,11 +94,7 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
-
-      {/* Mobile bottom nav */}
       <MobileNav />
-
-      {/* ─── Modals ─────────────────────────────────────────────────── */}
       <AnimatePresence>
         {newGoalModalOpen     && <NewGoalWizard />}
         {newNoteModalOpen     && <NewNoteModal />}
@@ -136,5 +103,13 @@ export default function App() {
         {confirmOpen          && <ConfirmModal />}
       </AnimatePresence>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppInner />
+    </QueryClientProvider>
   );
 }
