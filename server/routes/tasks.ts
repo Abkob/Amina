@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, rowToTask } from '../db.js';
+import { db, rowToTask, sanitizeForSQLite } from '../db.js';
 import { syncGoalMetrics } from './goals.js';
 
 const router = Router();
@@ -38,8 +38,7 @@ router.get('/:id', (req, res) => {
 router.post('/', (req, res) => {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const t = { id, created_at: now, updated_at: now, completed: 0, ...req.body };
-  if (typeof t.completed === 'boolean') t.completed = t.completed ? 1 : 0;
+  const t = sanitizeForSQLite({ goal_id: null, parent_task_id: null, estimated_minutes: null, weight_percent: null, due_date: null, critical_path_status: null, completed: 0, ...req.body, id, created_at: now, updated_at: now });
   db.prepare(`INSERT INTO tasks (id,goal_id,parent_task_id,title,description,status,priority,kind,critical_path_status,tags_json,due_date,estimated_duration,estimated_minutes,weight_percent,completed,position,created_at,updated_at)
     VALUES (@id,@goal_id,@parent_task_id,@title,@description,@status,@priority,@kind,@critical_path_status,@tags_json,@due_date,@estimated_duration,@estimated_minutes,@weight_percent,@completed,@position,@created_at,@updated_at)`)
     .run(t);
@@ -48,7 +47,7 @@ router.post('/', (req, res) => {
     db.prepare(`INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
       VALUES (?,?,?,?,?,?,?,?)`)
       .run(crypto.randomUUID(), t.goal_id, 'goal', id, 'task', 'contains', JSON.stringify({ kind: t.kind }), now);
-    syncGoalMetrics(t.goal_id);
+    syncGoalMetrics(t.goal_id as string);
   }
   if (t.parent_task_id) {
     db.prepare(`INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
@@ -65,8 +64,7 @@ router.patch('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
-  const updates: Record<string, unknown> = { ...req.body, updated_at: now };
-  if (typeof updates.completed === 'boolean') updates.completed = updates.completed ? 1 : 0;
+  const updates = sanitizeForSQLite({ ...req.body, updated_at: now });
   const sets = Object.keys(updates).map(k => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE tasks SET ${sets} WHERE id = @id`).run({ ...updates, id: req.params.id });
 

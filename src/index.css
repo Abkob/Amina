@@ -87,3 +87,82 @@
 .animate-spin-slow {
   animation: spin-slow 3s linear infinite;
 }
+
+/* ── Markdown renderer (dark bg, used inside FileViewerModal) ── */
+.prose-marina {
+  color: #d1d5db;
+  line-height: 1.75;
+}
+.prose-marina h1, .prose-marina h2, .prose-marina h3,
+.prose-marina h4, .prose-marina h5, .prose-marina h6 {
+  color: #f9fafb;
+  font-family: var(--font-headline);
+  font-weight: 700;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+.prose-marina h1 { font-size: 1.75rem; }
+.prose-marina h2 { font-size: 1.35rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.3em; }
+.prose-marina h3 { font-size: 1.1rem; }
+.prose-marina p  { margin-bottom: 1em; }
+.prose-marina a  { color: #c0c1ff; text-decoration: underline; }
+.prose-marina a:hover { color: #ffffff; }
+.prose-marina code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(255,255,255,0.08);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: #a5b4fc;
+}
+.prose-marina pre {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 1em 1.25em;
+  overflow-x: auto;
+  margin-bottom: 1em;
+}
+.prose-marina pre code {
+  background: none;
+  padding: 0;
+  color: #d1d5db;
+}
+.prose-marina blockquote {
+  border-left: 3px solid #4648d4;
+  padding-left: 1em;
+  color: #9ca3af;
+  font-style: italic;
+  margin: 1em 0;
+}
+.prose-marina ul, .prose-marina ol {
+  padding-left: 1.5em;
+  margin-bottom: 1em;
+}
+.prose-marina li { margin-bottom: 0.25em; }
+.prose-marina hr {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  margin: 1.5em 0;
+}
+.prose-marina table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+  font-size: 0.9em;
+}
+.prose-marina th, .prose-marina td {
+  border: 1px solid rgba(255,255,255,0.1);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.prose-marina th {
+  background: rgba(255,255,255,0.05);
+  color: #f9fafb;
+  font-weight: 600;
+}
+.prose-marina img {
+  max-width: 100%;
+  border-radius: 8px;
+}

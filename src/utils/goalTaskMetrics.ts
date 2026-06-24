@@ -34,24 +34,54 @@ export function normalizeTaskWeight(value: number | null | undefined): number | 
 }
 
 export function calculateGoalTaskMetrics(tasks: DBTask[], now = new Date()): GoalTaskMetrics {
+  // X/Y done: ALL non-milestone tasks, only explicitly-checked ones count as done.
+  // A task is NEVER counted as done through its children — the user must check it themselves.
+  const nonMilestoneTasks = tasks.filter(t => t.kind !== 'critical_path');
+  const totalTasks        = nonMilestoneTasks.length;
+  const completedTasks    = nonMilestoneTasks.filter(isDone).length;
+  const remainingTasks    = Math.max(0, totalTasks - completedTasks);
+
+  // Weight priority for ring %: explicit weight_percent → all-tasks time → equal count
+  // (Explicit weights still check leaf tasks so the same tasks as before drive weighting)
   const countableTasks = getCountableGoalTasks(tasks);
-  const totalTasks = countableTasks.length;
-  const completedTasks = countableTasks.filter(isDone).length;
-  const remainingTasks = Math.max(0, totalTasks - completedTasks);
   const explicitWeights = countableTasks.map(task => normalizeTaskWeight(task.weight_percent));
   const usesExplicitWeights = explicitWeights.some(weight => weight !== null);
-  const explicitTotal = explicitWeights.reduce((sum, weight) => sum + (weight ?? 0), 0);
-  const unsetWeightCount = explicitWeights.filter(weight => weight === null).length;
-  const fallbackWeight = usesExplicitWeights
-    ? (unsetWeightCount > 0 ? Math.max(0, 100 - explicitTotal) / unsetWeightCount : 0)
-    : 100 / Math.max(1, totalTasks);
-  const taskWeights = countableTasks.map((task, index) => explicitWeights[index] ?? fallbackWeight);
-  const totalWeight = taskWeights.reduce((sum, weight) => sum + weight, 0);
-  const completedWeight = countableTasks.reduce(
-    (sum, task, index) => sum + (isDone(task) ? taskWeights[index] : 0),
-    0,
-  );
-  const progress = totalWeight === 0 ? 0 : Math.round((completedWeight / totalWeight) * 100);
+
+  let progress: number;
+  let totalWeight: number;
+  let completedWeight: number;
+
+  if (usesExplicitWeights) {
+    const explicitTotal = explicitWeights.reduce((sum, w) => sum + (w ?? 0), 0);
+    const unsetCount    = explicitWeights.filter(w => w === null).length;
+    const fallback      = unsetCount > 0 ? Math.max(0, 100 - explicitTotal) / unsetCount : 0;
+    const taskWeights   = countableTasks.map((_, i) => explicitWeights[i] ?? fallback);
+    totalWeight     = taskWeights.reduce((sum, w) => sum + w, 0);
+    completedWeight = countableTasks.reduce(
+      (sum, task, index) => sum + (isDone(task) ? taskWeights[index] : 0), 0,
+    );
+    progress = totalWeight === 0 ? 0 : Math.round((completedWeight / totalWeight) * 100);
+  } else {
+    // Time-accurate ring: each task's estimated_minutes is its own work at that level
+    // (additive overhead model — no double-counting across the hierarchy).
+    // Using ALL non-milestone timed tasks gives the true total without double-counting.
+    const allTimed    = tasks.filter(t => t.kind !== 'critical_path' && (t.estimated_minutes ?? 0) > 0);
+    const totalMinutes = allTimed.reduce((s, t) => s + t.estimated_minutes!, 0);
+    const doneMinutes  = allTimed.filter(isDone).reduce((s, t) => s + t.estimated_minutes!, 0);
+
+    if (totalMinutes > 0) {
+      const raw = (doneMinutes / totalMinutes) * 100;
+      // Show at least 1% when work has been done so the ring isn't stuck at zero
+      progress = doneMinutes > 0 && raw < 1 ? 1 : Math.round(raw);
+      totalWeight     = 100;
+      completedWeight = progress;
+    } else {
+      const equal = 100 / Math.max(1, totalTasks);
+      totalWeight     = 100;
+      completedWeight = completedTasks * equal;
+      progress = Math.round((completedTasks / Math.max(1, totalTasks)) * 100);
+    }
+  }
 
   const recentCutoff = now.getTime() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const recentlyTouched = tasks.filter(task => parseTime(task.updated_at) >= recentCutoff).length;

@@ -101,7 +101,7 @@ export const useAppStore = create<AppStore>()(
       currentTab:      'Goals',
       selectedGoalId:  null,
       focusedTaskId:   null,
-      activeNoteId:    'note-1',
+      activeNoteId:    '',
       goalsFilter:     'Active',
       searchQuery:     '',
       goalCategories:  DEFAULT_GOAL_CATEGORIES,

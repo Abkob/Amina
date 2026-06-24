@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Check, CheckSquare, ChevronLeft, ChevronRight, Clock, Download,
-  FileText, Paperclip, Plus, Square, Target, Trash2, Upload,
+  Eye, FileText, Paperclip, Plus, Square, Target, Trash2, Upload, X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles } from '../api/hooks';
+import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useInvalidate } from '../api/hooks';
 import { createResource, deleteResource, detectResourceType, getResourcesForTask } from '../db/queries/resources';
 import {
   addTaskNote,
@@ -19,6 +19,9 @@ import { useAppStore } from '../store/useAppStore';
 import { normalizeTaskWeight } from '../utils/goalTaskMetrics';
 import { formatTaskTime, getTaskEstimatedMinutes, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
 import { addNoteFile, deleteNoteFile, getNoteFilesForNote } from '../db/queries/noteFiles';
+import { ActualTimeModal } from '../components/ActualTimeModal';
+import { ActualTimeChip } from '../components/ActualTimeChip';
+import { FileViewerModal } from '../components/FileViewerModal';
 import type { DBResource, DBTask, DBTaskNote, DBTaskNoteFile } from '../db/schema';
 
 function formatBytes(bytes: number) {
@@ -177,8 +180,7 @@ function TimePill({
   allTasks: DBTask[];
   onSave: (minutes: number | null) => void;
 }) {
-  const { minutes, isRollup, conflict, childrenSum } = getRolledUpTime(task, allTasks);
-  const ownMinutes = getTaskEstimatedMinutes(task);
+  const { minutes, isRollup, ownMinutes, childrenSum } = getRolledUpTime(task, allTasks);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(ownMinutes === null ? '' : formatTaskTime(ownMinutes));
@@ -218,10 +220,11 @@ function TimePill({
     );
   }
 
+  const hasOverhead = isRollup && ownMinutes !== null && childrenSum !== null;
   const tooltip = isRollup
-    ? conflict
-      ? `Children sum: ${formatTaskTime(childrenSum)} · own override: ${formatTaskTime(ownMinutes)} — click to fix override`
-      : `Auto-summed from child tasks: ${formatTaskTime(minutes)}`
+    ? hasOverhead
+      ? `${formatTaskTime(minutes)} total · ${formatTaskTime(ownMinutes)} own + ${formatTaskTime(childrenSum)} subtasks`
+      : `Auto-summed from subtasks: ${formatTaskTime(minutes)}`
     : (minutes === null ? 'No time set — click to add' : `Time needed: ${formatTaskTime(minutes)}`);
 
   return (
@@ -232,17 +235,9 @@ function TimePill({
         className={`inline-flex items-center gap-1 rounded-md border bg-white px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider transition-colors hover:border-[#4648d4]/30 hover:text-[#4648d4] ${isRollup ? 'border-[#4648d4]/20 text-[#4648d4]/70' : 'border-gray-200 text-gray-400'}`}
       >
         <Clock size={9} />
-        {isRollup && <span className="text-[7px] opacity-60">Σ</span>}
+        {isRollup && <span className="text-[7px] opacity-60">{hasOverhead ? '+' : 'Σ'}</span>}
         {formatTaskTime(minutes)}
       </button>
-      {conflict && (
-        <span
-          title={`Conflict: own estimate (${formatTaskTime(ownMinutes)}) ≠ children sum (${formatTaskTime(childrenSum)}). Edit to resolve.`}
-          className="cursor-help text-[11px] text-amber-400"
-        >
-          ⚠
-        </span>
-      )}
     </span>
   );
 }
@@ -250,25 +245,16 @@ function TimePill({
 function SectionPlanningWidgets({
   task,
   allTasks,
-  onSaveWeight,
   onSaveTime,
   className = '',
 }: {
   task: DBTask;
   allTasks: DBTask[];
-  onSaveWeight: (weight: number | null) => void;
   onSaveTime: (minutes: number | null) => void;
   className?: string;
 }) {
   return (
-    <div className={`grid grid-cols-2 gap-2 ${className}`}>
-      <div className="min-w-0 rounded-lg border border-gray-150 bg-[#f8f9fa] px-2.5 py-2">
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-gray-400">Progress</span>
-          <Target size={10} className="shrink-0 text-gray-300" />
-        </div>
-        <WeightPill value={task.weight_percent} onSave={onSaveWeight} />
-      </div>
+    <div className={className}>
       <div className="min-w-0 rounded-lg border border-gray-150 bg-[#f8f9fa] px-2.5 py-2">
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-gray-400">Time Needed</span>
@@ -319,99 +305,45 @@ function ChildTaskRow({
 }
 
 // ─── PDF / Image viewer modal ─────────────────────────────────────────────────
-function FileViewerModal({ file, onClose }: { file: DBTaskNoteFile; onClose: () => void }) {
+// ─── Live image thumbnail for pending (not-yet-uploaded) files ────────────────
+function PendingImageThumb({ file, onRemove }: { file: File; onRemove: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
-  const isPdf    = file.mime_type === 'application/pdf';
-  const isImage  = file.mime_type.startsWith('image/');
 
   useEffect(() => {
-    const objectUrl = URL.createObjectURL(file.blob);
+    const objectUrl = URL.createObjectURL(file);
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [file.blob]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [file]);
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.15 }}
-      className="fixed inset-0 z-[60] flex flex-col bg-black/95"
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.85 }}
+      transition={{ duration: 0.18 }}
+      className="group/pthumb relative shrink-0"
     >
-      {/* toolbar */}
-      <div className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 bg-[#0d0d0d] px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider ${isPdf ? 'bg-red-500/20 text-red-400' : isImage ? 'bg-[#4648d4]/20 text-[#c0c1ff]' : 'bg-white/10 text-gray-400'}`}>
-            {isPdf ? 'PDF' : isImage ? 'IMG' : 'FILE'}
-          </span>
-          <span className="truncate text-sm font-semibold text-white">{file.name}</span>
-          <span className="shrink-0 font-mono text-[10px] text-gray-500">{formatBytes(file.size)}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {url && (
-            <a
-              href={url}
-              download={file.name}
-              className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 font-mono text-[10px] text-gray-300 transition-colors hover:border-white/20 hover:text-white"
-            >
-              <Download size={11} />
-              Download
-            </a>
-          )}
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-white"
-            title="Close (Esc)"
-          >
-            <Trash2 size={15} />
-          </button>
-        </div>
+      {url ? (
+        <img
+          src={url}
+          alt={file.name}
+          className="h-20 w-auto max-w-[160px] rounded-xl border border-gray-100 object-cover shadow-sm"
+        />
+      ) : (
+        <div className="h-20 w-24 animate-pulse rounded-xl bg-gray-100" />
+      )}
+      {/* filename tooltip on hover */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-xl bg-gradient-to-t from-black/50 to-transparent px-1.5 pb-1 pt-4 opacity-0 transition-opacity group-hover/pthumb:opacity-100">
+        <p className="truncate text-center font-mono text-[8px] text-white">{file.name}</p>
       </div>
-
-      {/* viewer area */}
-      <div className="relative min-h-0 flex-1">
-        {!url && (
-          <div className="absolute inset-0 flex items-center justify-center font-mono text-sm text-gray-500">
-            Loading…
-          </div>
-        )}
-        {url && isPdf && (
-          <iframe
-            src={url}
-            className="absolute inset-0 h-full w-full border-0"
-            title={file.name}
-          />
-        )}
-        {url && isImage && (
-          <div className="absolute inset-0 flex items-center justify-center overflow-auto p-8">
-            <img
-              src={url}
-              alt={file.name}
-              className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
-            />
-          </div>
-        )}
-        {url && !isPdf && !isImage && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-gray-400">
-            <FileText size={48} className="opacity-20" />
-            <p className="font-mono text-sm">Preview not available for this file type.</p>
-            <a
-              href={url}
-              download={file.name}
-              className="flex items-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 font-mono text-sm text-white transition-colors hover:bg-white/15"
-            >
-              <Download size={14} />
-              Download {file.name}
-            </a>
-          </div>
-        )}
-      </div>
+      {/* remove button */}
+      <button
+        onClick={onRemove}
+        className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-gray-200 bg-white shadow-sm opacity-0 transition-opacity hover:bg-red-50 group-hover/pthumb:opacity-100"
+        title="Remove"
+      >
+        <X size={8} className="text-red-400" />
+      </button>
     </motion.div>
   );
 }
@@ -514,18 +446,49 @@ function NoteArticle({
 
       <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{note.content}</p>
 
-      {files.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {files.map(f => (
-            <NoteFileChip
-              key={f.id}
-              file={f}
-              onView={() => onView(f)}
-              onDelete={() => handleRemoveFile(f)}
-            />
-          ))}
-        </div>
-      )}
+      {files.length > 0 && (() => {
+        const images = files.filter(f => f.mime_type.startsWith('image/'));
+        const others = files.filter(f => !f.mime_type.startsWith('image/'));
+        return (
+          <>
+            {images.length > 0 && (
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {images.map(f => (
+                  <div key={f.id} className="group/img relative cursor-pointer" onClick={() => onView(f)}>
+                    <img
+                      src={f.file_url ?? ''}
+                      alt={f.name}
+                      className="h-24 w-auto max-w-[180px] rounded-lg border border-gray-100 object-cover shadow-sm transition-all group-hover/img:brightness-90 group-hover/img:shadow-md"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center gap-1.5 rounded-lg bg-black/0 opacity-0 transition-all group-hover/img:bg-black/20 group-hover/img:opacity-100">
+                      <Eye size={14} className="text-white drop-shadow" />
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); handleRemoveFile(f); }}
+                      className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-white shadow opacity-0 transition-opacity hover:bg-red-50 group-hover/img:opacity-100"
+                      title="Remove"
+                    >
+                      <X size={8} className="text-red-400" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {others.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {others.map(f => (
+                  <NoteFileChip
+                    key={f.id}
+                    file={f}
+                    onView={() => onView(f)}
+                    onDelete={() => handleRemoveFile(f)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        );
+      })()}
     </article>
   );
 }
@@ -539,12 +502,18 @@ export function TaskFocusView() {
     showConfirm,
   } = useAppStore();
 
+  const invalidate = useInvalidate();
+
   const [childTitle, setChildTitle] = useState('');
   const [resourceInput, setResourceInput] = useState('');
   const [journalDraft, setJournalDraft] = useState('');
   const [taskTitle, setTaskTitle] = useState('');
   const [viewingFile, setViewingFile] = useState<DBTaskNoteFile | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingComplete, setPendingComplete] = useState<DBTask | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const journalFileRef = useRef<HTMLInputElement>(null);
 
   const { data: goal }           = useGoal(selectedGoalId);
   const { data: task }           = useTask(focusedTaskId);
@@ -601,12 +570,48 @@ export function TaskFocusView() {
     }
   };
 
+  const addPendingFiles = (files: File[]) => {
+    if (files.length) setPendingFiles(prev => [...prev, ...files]);
+  };
+
+  const handleJournalPaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.length) {
+      e.preventDefault();
+      addPendingFiles(files);
+    }
+    // If no files in clipboard, let the default paste behaviour handle text
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear when leaving the container itself, not a child
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    addPendingFiles(Array.from(e.dataTransfer.files));
+  };
+
   const handleAddJournalEntry = async () => {
     const content = journalDraft.trim();
-    if (!content) return;
+    if (!content && pendingFiles.length === 0) return;
 
-    await addTaskNote(task.id, content);
+    const noteId = await addTaskNote(task.id, content || '—');
+    for (const f of pendingFiles) await addNoteFile(noteId, f);
+
     setJournalDraft('');
+    setPendingFiles([]);
     triggerToast('Journal entry appended.', 'success');
   };
 
@@ -707,7 +712,14 @@ export function TaskFocusView() {
           <div className="min-w-0 flex-1">
             <div className="mb-2 flex items-center gap-2">
               <button
-                onClick={() => toggleTask(task.id)}
+                onClick={async () => {
+                  if (task.completed) {
+                    await toggleTask(task.id);
+                    invalidate.tasks(selectedGoalId ?? undefined);
+                  } else {
+                    setPendingComplete(task);
+                  }
+                }}
                 className="text-gray-300 hover:text-[#4648d4] transition-colors"
               >
                 {task.completed ? <CheckSquare size={18} className="text-[#10B981]" /> : <Square size={18} />}
@@ -757,10 +769,19 @@ export function TaskFocusView() {
         <SectionPlanningWidgets
           task={task}
           allTasks={allTasks}
-          onSaveWeight={saveTaskWeight}
           onSaveTime={saveTaskTime}
-          className="mt-4 max-w-md"
+          className="mt-4 max-w-xs"
         />
+        {task.completed && task.actual_minutes != null && (
+          <div className="mt-3 flex items-center gap-2">
+            <span className="font-mono text-[9px] uppercase tracking-widest text-gray-400">Actual:</span>
+            <ActualTimeChip
+              minutes={task.actual_minutes}
+              estimatedMinutes={task.estimated_minutes}
+              onSave={async (m) => { await updateTask(task.id, { actual_minutes: m }); }}
+            />
+          </div>
+        )}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
@@ -775,29 +796,112 @@ export function TaskFocusView() {
             </span>
           </div>
 
-          <div className="mb-5 rounded-lg border border-gray-150 bg-[#f8f9fa] p-3">
+          <div
+            className={`relative mb-5 rounded-lg border bg-[#f8f9fa] p-3 transition-colors ${isDragOver ? 'border-[#4648d4] bg-[#EEF2FF]/40' : 'border-gray-150'}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            {/* Drop overlay */}
+            {isDragOver && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-[#4648d4] bg-[#EEF2FF]/80">
+                <Paperclip size={22} className="text-[#4648d4]" />
+                <span className="font-mono text-xs font-bold text-[#4648d4] uppercase tracking-widest">Drop files to attach</span>
+              </div>
+            )}
+
             <div className="mb-2 flex items-center justify-between gap-3">
               <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-gray-400">
                 {formatJournalDate(new Date().toISOString())}
               </span>
-              <button
-                onClick={handleAddJournalEntry}
-                disabled={!journalDraft.trim()}
-                className="inline-flex items-center gap-1.5 rounded-md bg-[#4648d4] px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Plus size={11} />
-                Append
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => journalFileRef.current?.click()}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 font-mono text-[9px] text-gray-500 transition-colors hover:border-[#4648d4]/40 hover:text-[#4648d4]"
+                  title="Attach files (or paste / drag-and-drop)"
+                >
+                  <Paperclip size={10} />
+                  Files
+                </button>
+                <input
+                  ref={journalFileRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={e => {
+                    addPendingFiles(Array.from(e.currentTarget.files ?? []));
+                    e.currentTarget.value = '';
+                  }}
+                />
+                <button
+                  onClick={handleAddJournalEntry}
+                  disabled={!journalDraft.trim() && pendingFiles.length === 0}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#4648d4] px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Plus size={11} />
+                  Append
+                </button>
+              </div>
             </div>
             <textarea
               value={journalDraft}
               onChange={e => setJournalDraft(e.target.value)}
+              onPaste={handleJournalPaste}
               onKeyDown={e => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddJournalEntry();
               }}
-              placeholder="Write today's section note..."
+              placeholder="Write today's section note… (Ctrl+Enter to submit, paste or drag files to attach)"
               className="min-h-[120px] w-full resize-y bg-transparent text-sm leading-relaxed text-gray-800 outline-none placeholder:text-gray-300"
             />
+            {pendingFiles.length > 0 && (
+              <div className="mt-2.5 border-t border-gray-100 pt-2.5">
+                <AnimatePresence initial={false}>
+                  {(() => {
+                    const images = pendingFiles.filter(f => f.type.startsWith('image/'));
+                    const others = pendingFiles.filter(f => !f.type.startsWith('image/'));
+                    return (
+                      <>
+                        {images.length > 0 && (
+                          <div className="mb-2 flex flex-wrap gap-2">
+                            {images.map((f, i) => (
+                              <PendingImageThumb
+                                key={`${f.name}-${f.size}-${i}`}
+                                file={f}
+                                onRemove={() => setPendingFiles(prev => prev.filter((_, j) => j !== pendingFiles.indexOf(f)))}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {others.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {others.map((f, i) => (
+                              <motion.span
+                                key={`${f.name}-${f.size}-${i}`}
+                                initial={{ opacity: 0, scale: 0.92 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.88 }}
+                                transition={{ duration: 0.15 }}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-[#4648d4]/20 bg-[#EEF2FF] px-2 py-1 text-[11px]"
+                              >
+                                <FileText size={10} className="shrink-0 text-[#4648d4]" />
+                                <span className="max-w-[120px] truncate font-medium text-[#4648d4]">{f.name}</span>
+                                <span className="shrink-0 font-mono text-[9px] text-[#4648d4]/50">{formatBytes(f.size)}</span>
+                                <button
+                                  onClick={() => setPendingFiles(prev => prev.filter(p => p !== f))}
+                                  className="shrink-0 text-[#4648d4]/40 transition-colors hover:text-red-400"
+                                >
+                                  <X size={9} />
+                                </button>
+                              </motion.span>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </AnimatePresence>
+              </div>
+            )}
           </div>
 
           {noteGroups.length > 0 ? (
@@ -856,7 +960,7 @@ export function TaskFocusView() {
                   task={child}
                   childCount={(childrenByParent[child.id] ?? []).length}
                   onOpen={() => setFocusedTaskId(child.id)}
-                  onToggle={() => toggleTask(child.id)}
+                  onToggle={async () => { await toggleTask(child.id); invalidate.tasks(selectedGoalId ?? undefined); }}
                   onDelete={() => handleDeleteChild(child)}
                 />
               )) : (
@@ -905,6 +1009,28 @@ export function TaskFocusView() {
             key="file-viewer"
             file={viewingFile}
             onClose={() => setViewingFile(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {pendingComplete && (
+          <ActualTimeModal
+            key="actual-time"
+            taskTitle={pendingComplete.title}
+            estimatedMinutes={pendingComplete.estimated_minutes}
+            onLog={async (minutes) => {
+              await updateTask(pendingComplete.id, { actual_minutes: minutes });
+              await toggleTask(pendingComplete.id);
+              invalidate.tasks(selectedGoalId ?? undefined);
+              setPendingComplete(null);
+              triggerToast('Time logged.', 'success');
+            }}
+            onSkip={async () => {
+              await toggleTask(pendingComplete.id);
+              invalidate.tasks(selectedGoalId ?? undefined);
+              setPendingComplete(null);
+            }}
           />
         )}
       </AnimatePresence>

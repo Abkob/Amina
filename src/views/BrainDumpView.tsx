@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -61,11 +61,16 @@ function NoteEditor() {
         setSelectedSnippet(null);
       }
     },
-  }, [activeNote?.id]);
+  });
 
-  if (editor && activeNote && editor.getText() !== activeNote.content && !editor.isFocused) {
+  // Sync editor content when switching between notes
+  const loadedNoteId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!editor || !activeNote) return;
+    if (loadedNoteId.current === activeNote.id) return;
+    loadedNoteId.current = activeNote.id;
     editor.commands.setContent(activeNote.content ?? '');
-  }
+  }, [editor, activeNote?.id]);
 
   const handleDelete = () => {
     if (!activeNote) return;
@@ -258,6 +263,13 @@ function ContextRail() {
 export function BrainDumpView() {
   const { activeNoteId, setActiveNoteId, openNewNoteModal, isOOPopupOpen } = useAppStore();
   const { data: notes = [] } = useNotes();
+
+  // Auto-select first note when none is selected or stored ID doesn't exist in DB
+  useEffect(() => {
+    if (notes.length > 0 && !notes.find(n => n.id === activeNoteId)) {
+      setActiveNoteId(notes[0].id);
+    }
+  }, [notes, activeNoteId, setActiveNoteId]);
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 md:px-10 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in">

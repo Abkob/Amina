@@ -221,7 +221,7 @@ describe('getRolledUpTime', () => {
   it('leaf with own time → returns own time, isRollup=false', () => {
     const task = makeTask({ id: 'A', estimated_minutes: 60 });
     const result = getRolledUpTime(task, [task]);
-    expect(result).toEqual({ minutes: 60, isRollup: false, conflict: false, childrenSum: null });
+    expect(result).toEqual({ minutes: 60, isRollup: false, ownMinutes: 60, childrenSum: null });
   });
 
   it('leaf without time → minutes is null', () => {
@@ -229,9 +229,10 @@ describe('getRolledUpTime', () => {
     const result = getRolledUpTime(task, [task]);
     expect(result.minutes).toBeNull();
     expect(result.isRollup).toBe(false);
+    expect(result.ownMinutes).toBeNull();
   });
 
-  it('parent with two timed children → sums children, isRollup=true', () => {
+  it('parent with no own time + two timed children → sums children, isRollup=true', () => {
     const parent = makeTask({ id: 'P' });
     const c1     = makeTask({ id: 'C1', parent_task_id: 'P', estimated_minutes: 30 });
     const c2     = makeTask({ id: 'C2', parent_task_id: 'P', estimated_minutes: 45 });
@@ -240,31 +241,34 @@ describe('getRolledUpTime', () => {
     const result = getRolledUpTime(parent, all);
     expect(result.minutes).toBe(75);
     expect(result.isRollup).toBe(true);
+    expect(result.ownMinutes).toBeNull();
     expect(result.childrenSum).toBe(75);
-    expect(result.conflict).toBe(false);
   });
 
-  it('parent has own time that differs from children → conflict=true', () => {
+  it('parent own time + child time → total is own + child (additive overhead)', () => {
     const parent = makeTask({ id: 'P', estimated_minutes: 60 });
     const child  = makeTask({ id: 'C', parent_task_id: 'P', estimated_minutes: 90 });
     const all    = [parent, child];
 
     const result = getRolledUpTime(parent, all);
-    expect(result.minutes).toBe(90);      // children sum wins
-    expect(result.conflict).toBe(true);
+    expect(result.minutes).toBe(150);      // 60 own overhead + 90 subtask
+    expect(result.isRollup).toBe(true);
+    expect(result.ownMinutes).toBe(60);
     expect(result.childrenSum).toBe(90);
   });
 
-  it('parent has own time matching children → no conflict', () => {
-    const parent = makeTask({ id: 'P', estimated_minutes: 90 });
-    const child  = makeTask({ id: 'C', parent_task_id: 'P', estimated_minutes: 90 });
-    const all    = [parent, child];
+  it('parent own time + multiple children → own + sum of all children', () => {
+    const parent = makeTask({ id: 'P', estimated_minutes: 30 });
+    const c1     = makeTask({ id: 'C1', parent_task_id: 'P', estimated_minutes: 60 });
+    const c2     = makeTask({ id: 'C2', parent_task_id: 'P', estimated_minutes: 45 });
+    const all    = [parent, c1, c2];
 
     const result = getRolledUpTime(parent, all);
-    expect(result.conflict).toBe(false);
+    expect(result.minutes).toBe(135);      // 30 + 60 + 45
+    expect(result.childrenSum).toBe(105);
   });
 
-  it('three levels deep → sub-subtask rolls up through subtask to parent', () => {
+  it('three levels deep — no own times → rolls up leaf times all the way', () => {
     const grandparent = makeTask({ id: 'GP' });
     const parent      = makeTask({ id: 'P',  parent_task_id: 'GP' });
     const child       = makeTask({ id: 'C',  parent_task_id: 'P', estimated_minutes: 30 });
@@ -279,6 +283,21 @@ describe('getRolledUpTime', () => {
     expect(gpResult.isRollup).toBe(true);
   });
 
+  it('three levels with own times at each level → accumulates overhead all the way up', () => {
+    const grandparent = makeTask({ id: 'GP', estimated_minutes: 30 });
+    const parent      = makeTask({ id: 'P',  parent_task_id: 'GP', estimated_minutes: 20 });
+    const child       = makeTask({ id: 'C',  parent_task_id: 'P', estimated_minutes: 60 });
+    const all         = [grandparent, parent, child];
+
+    const parentResult = getRolledUpTime(parent, all);
+    expect(parentResult.minutes).toBe(80);      // 20 own + 60 child
+
+    const gpResult = getRolledUpTime(grandparent, all);
+    expect(gpResult.minutes).toBe(110);         // 30 own + 80 (parent total)
+    expect(gpResult.ownMinutes).toBe(30);
+    expect(gpResult.childrenSum).toBe(80);
+  });
+
   it('children without times → falls back to parent own time, isRollup=false', () => {
     const parent = makeTask({ id: 'P', estimated_minutes: 60 });
     const child  = makeTask({ id: 'C', parent_task_id: 'P' }); // no time
@@ -287,6 +306,7 @@ describe('getRolledUpTime', () => {
     const result = getRolledUpTime(parent, all);
     expect(result.minutes).toBe(60);
     expect(result.isRollup).toBe(false);
+    expect(result.childrenSum).toBeNull();
   });
 
   it('mixed children — some timed, some not — sums only timed ones', () => {
@@ -298,5 +318,6 @@ describe('getRolledUpTime', () => {
     const result = getRolledUpTime(parent, all);
     expect(result.minutes).toBe(60);
     expect(result.isRollup).toBe(true);
+    expect(result.ownMinutes).toBeNull();
   });
 });

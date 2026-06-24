@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, rowToGoal, rowToTask } from '../db.js';
+import { db, rowToGoal, rowToTask, sanitizeForSQLite } from '../db.js';
 import { calculateGoalTaskMetrics } from '../../src/utils/goalTaskMetrics.js';
 
 const router = Router();
@@ -30,7 +30,7 @@ router.get('/:id', (req, res) => {
 router.post('/', (req, res) => {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const g = { id, created_at: now, updated_at: now, archived_at: null, overdue: 0, ...req.body };
+  const g = sanitizeForSQLite({ archived_at: null, overdue: 0, activity_level: 1, ...req.body, id, created_at: now, updated_at: now });
   db.prepare(`INSERT INTO goals (id,title,description,category,status,progress,deadline,overdue,activity_level,archived_at,created_at,updated_at)
     VALUES (@id,@title,@description,@category,@status,@progress,@deadline,@overdue,@activity_level,@archived_at,@created_at,@updated_at)`)
     .run(g);
@@ -40,7 +40,7 @@ router.post('/', (req, res) => {
 // PATCH /api/goals/:id
 router.patch('/:id', (req, res) => {
   const now = new Date().toISOString();
-  const updates = { ...req.body, updated_at: now };
+  const updates = sanitizeForSQLite({ ...req.body, updated_at: now });
   const sets = Object.keys(updates).map(k => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE goals SET ${sets} WHERE id = @id`).run({ ...updates, id: req.params.id });
   res.json({ ok: true });

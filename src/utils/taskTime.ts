@@ -59,16 +59,13 @@ export function getTaskEstimatedMinutes(task: DBTask): number | null {
 }
 
 export interface RolledUpTime {
-  /** Best total minutes to display: children's sum if any children have times, else own estimate. */
+  /** Total minutes: own overhead + children sum (or just one, or null). */
   minutes: number | null;
-  /** True when the value came from summing descendants rather than the task's own field. */
+  /** True when any children contributed to the total. */
   isRollup: boolean;
-  /**
-   * True when the task has its own explicit time AND descendants also have times that differ —
-   * a signal the user set a top-down estimate that no longer matches the bottom-up sum.
-   */
-  conflict: boolean;
-  /** Raw sum of all descendent leaf-task minutes (null when no descendants have times). */
+  /** Own explicit time on this task — treated as overhead when children also have times. */
+  ownMinutes: number | null;
+  /** Raw sum of direct children's totals (null when no children have times). */
   childrenSum: number | null;
 }
 
@@ -97,16 +94,85 @@ export function getTaskLeafProgress(task: DBTask, allTasks: DBTask[]): number {
   return done / leaves.length;
 }
 
+export interface TaskTimeProgress {
+  /** 0–1 completion ratio, time-weighted when leaf estimates exist, count-based otherwise. */
+  ratio: number;
+  /** Sum of estimated_minutes for incomplete leaves (null when no incomplete leaf has a time). */
+  remainingMinutes: number | null;
+  /** Sum of actual_minutes logged on completed leaves (0 when nothing logged). */
+  spentMinutes: number;
+  /** True when at least one leaf has time data (so ratio is time-weighted, not count-based). */
+  isTimeWeighted: boolean;
+}
+
 /**
- * Recursively sums estimated_minutes from all descendants.
- * Children's times always take precedence over a parent's own estimate when they are present.
+ * Returns accurate time-based progress for a task.
+ *
+ * Unlike getTaskLeafProgress (which counts tasks), this weights each leaf
+ * by its estimated time so that completing a 3h task moves the bar more
+ * than completing a 30m task. remainingMinutes is the direct sum of
+ * incomplete leaves' estimates — not derived from the ratio.
+ */
+export function getTaskTimeProgress(task: DBTask, allTasks: DBTask[]): TaskTimeProgress {
+  const isDone = task.completed || task.status === 'done';
+  if (isDone) {
+    const est = getTaskEstimatedMinutes(task);
+    return {
+      ratio: 1,
+      remainingMinutes: 0,
+      spentMinutes: task.actual_minutes ?? 0,
+      isTimeWeighted: est !== null || (task.actual_minutes ?? 0) > 0,
+    };
+  }
+
+  const leaves = getLeafDescendants(task.id, allTasks);
+
+  // Leaf node with no children
+  if (leaves.length === 0) {
+    return {
+      ratio: 0,
+      remainingMinutes: getTaskEstimatedMinutes(task),
+      spentMinutes: task.actual_minutes ?? 0,
+      isTimeWeighted: getTaskEstimatedMinutes(task) !== null,
+    };
+  }
+
+  const doneleaves    = leaves.filter(l => l.completed || l.status === 'done');
+  const pendingLeaves = leaves.filter(l => !l.completed && l.status !== 'done');
+
+  const doneEst    = doneleaves.reduce((s, l)    => s + (getTaskEstimatedMinutes(l) ?? 0), 0);
+  const pendingEst = pendingLeaves.reduce((s, l) => s + (getTaskEstimatedMinutes(l) ?? 0), 0);
+  const totalEst   = doneEst + pendingEst;
+
+  const spentMinutes = doneleaves.reduce((s, l) => s + (l.actual_minutes ?? 0), 0);
+
+  const isTimeWeighted = totalEst > 0;
+
+  const ratio = isTimeWeighted
+    ? doneEst / totalEst
+    : leaves.length > 0 ? doneleaves.length / leaves.length : 0;
+
+  const remainingMinutes = pendingLeaves.some(l => getTaskEstimatedMinutes(l) !== null)
+    ? pendingEst
+    : null;
+
+  return { ratio, remainingMinutes, spentMinutes, isTimeWeighted };
+}
+
+/**
+ * Additive overhead model:
+ *   - Leaf (no children): use own explicit time.
+ *   - Parent with timed children but no own time: total = Σ children.
+ *   - Parent with timed children AND own time: total = own + Σ children.
+ *     Own time represents real work at this level (planning, coordination, etc.)
+ *     that doesn't belong to any subtask.
  */
 export function getRolledUpTime(task: DBTask, allTasks: DBTask[]): RolledUpTime {
   const directChildren = allTasks.filter(t => t.parent_task_id === task.id);
   const ownMinutes = getTaskEstimatedMinutes(task);
 
   if (directChildren.length === 0) {
-    return { minutes: ownMinutes, isRollup: false, conflict: false, childrenSum: null };
+    return { minutes: ownMinutes, isRollup: false, ownMinutes, childrenSum: null };
   }
 
   let sum = 0;
@@ -121,11 +187,11 @@ export function getRolledUpTime(task: DBTask, allTasks: DBTask[]): RolledUpTime 
   }
 
   if (!anyChildHasTime) {
-    return { minutes: ownMinutes, isRollup: false, conflict: false, childrenSum: null };
+    return { minutes: ownMinutes, isRollup: false, ownMinutes, childrenSum: null };
   }
 
   const childrenSum = sum;
-  const conflict = ownMinutes !== null && ownMinutes > 0 && ownMinutes !== childrenSum;
+  const total = ownMinutes !== null ? ownMinutes + childrenSum : childrenSum;
 
-  return { minutes: childrenSum, isRollup: true, conflict, childrenSum };
+  return { minutes: total, isRollup: true, ownMinutes, childrenSum };
 }

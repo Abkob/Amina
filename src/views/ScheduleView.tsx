@@ -11,24 +11,33 @@ const START_HOUR = 8;
 const HOURS = 16;
 const PX_PER_HOUR = 60;
 
-function getWeekInfo() {
+function getWeekRange(offset: number) {
   const today = new Date();
-  const dow = today.getDay(); // 0=Sun, 1=Mon, …, 6=Sat
-  const mondayOffset = (dow + 6) % 7; // days since Monday (Mon=0 … Sun=6)
+  today.setHours(0, 0, 0, 0);
+  const dow = today.getDay();
+  const daysFromMon = (dow + 6) % 7; // Mon=0 … Sun=6
   const monday = new Date(today);
-  monday.setDate(today.getDate() - mondayOffset);
+  monday.setDate(today.getDate() - daysFromMon + offset * 7);
 
-  const days = Array.from({ length: 7 }, (_, i) => {
+  const dateCells = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}`;
+    return d;
   });
 
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  const weekLabel = `${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${sunday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  const dayLabels = dateCells.map(d =>
+    `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}`
+  );
 
-  return { days, todayIdx: mondayOffset, weekLabel };
+  const sunday = dateCells[6];
+  const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const weekLabel = `${fmt(monday)} – ${fmt(sunday)}`;
+
+  // todayIdx: column index of today within this week (-1 if today not in this week)
+  const todayStr = today.toDateString();
+  const todayIdx = dateCells.findIndex(d => d.toDateString() === todayStr);
+
+  return { dayLabels, todayIdx, weekLabel };
 }
 
 function fmtHourLabel(hour: number) {
@@ -163,7 +172,8 @@ export function ScheduleView() {
   const { selectedEventId, setSelectedEventId, setIsDrawerOpen, isOptimizing, setIsOptimizing, triggerToast } = useAppStore();
   const { data: events = [] } = useEvents();
 
-  const { days, todayIdx, weekLabel } = getWeekInfo();
+  const [weekOffset, setWeekOffset] = useState(0);
+  const { dayLabels, todayIdx, weekLabel } = getWeekRange(weekOffset);
 
   const [currentHour, setCurrentHour] = useState(() => {
     const now = new Date();
@@ -179,7 +189,8 @@ export function ScheduleView() {
     return () => clearInterval(id);
   }, []);
 
-  const showTimeIndicator = currentHour >= START_HOUR && currentHour < START_HOUR + HOURS;
+  // Time indicator only meaningful on the current week
+  const showTimeIndicator = weekOffset === 0 && currentHour >= START_HOUR && currentHour < START_HOUR + HOURS;
 
   const handleFixMyWeek = async () => {
     setIsOptimizing(true);
@@ -212,10 +223,15 @@ export function ScheduleView() {
             <NeedsImplementationBadge className="hidden xl:inline-flex" />
           </button>
           <div className="flex gap-1 border border-gray-200 rounded-lg p-0.5 bg-[#f8f9fa]">
-            <button onClick={() => triggerToast('Previous week retrieved.', 'info')} className="p-1.5 hover:bg-gray-100 rounded text-gray-600">
+            <button onClick={() => setWeekOffset(o => o - 1)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Previous week">
               <ChevronLeft size={14} />
             </button>
-            <button onClick={() => triggerToast('Next week initialized.', 'info')} className="p-1.5 hover:bg-gray-100 rounded text-gray-600">
+            {weekOffset !== 0 && (
+              <button onClick={() => setWeekOffset(0)} className="px-2 py-1 hover:bg-gray-100 rounded font-mono text-[9px] font-bold text-gray-500 uppercase tracking-wider" title="Go to current week">
+                Today
+              </button>
+            )}
+            <button onClick={() => setWeekOffset(o => o + 1)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Next week">
               <ChevronRight size={14} />
             </button>
           </div>
@@ -227,7 +243,7 @@ export function ScheduleView() {
           {/* Day headers */}
           <div className="grid grid-cols-8 border-b border-gray-150 bg-gray-50 shrink-0">
             <div className="p-3 border-r border-gray-150/40 font-mono text-[9px] text-gray-400 uppercase tracking-wider flex items-center justify-center">GMT+3</div>
-            {days.map((day, dIdx) => {
+            {dayLabels.map((day, dIdx) => {
               const isToday = dIdx === todayIdx;
               const [name, date] = day.split(' ');
               return (

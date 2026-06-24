@@ -139,10 +139,24 @@ db.exec(`
   );
 `);
 
+// Runtime migrations — ADD COLUMN throws if column already exists; we ignore that
+try { db.exec('ALTER TABLE tasks ADD COLUMN actual_minutes INTEGER'); } catch {}
+
 export function rowToGoal(row: Record<string, unknown>) {
   return { ...row, overdue: Boolean(row.overdue) };
 }
 
 export function rowToTask(row: Record<string, unknown>) {
   return { ...row, completed: Boolean(row.completed) };
+}
+
+// Coerce JS values to SQLite-compatible types: booleans → 0/1, undefined → null
+export function sanitizeForSQLite(obj: Record<string, unknown>): Record<string, string | number | bigint | Buffer | null> {
+  const out: Record<string, string | number | bigint | Buffer | null> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) out[k] = null;
+    else if (typeof v === 'boolean') out[k] = v ? 1 : 0;
+    else out[k] = v as string | number | bigint | Buffer | null;
+  }
+  return out;
 }

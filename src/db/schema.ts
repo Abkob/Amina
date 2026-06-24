@@ -50,9 +50,10 @@ export interface DBTask {
   kind: TaskKind;
   critical_path_status: CriticalPathStatus | null; // only for kind='critical_path'
   tags_json: string;                   // JSON: string[]
-  due_date: string | null;             // ISO date
+  due_date: string | null;             // ISO date ("YYYY-MM-DD") or datetime ("YYYY-MM-DDTHH:MM")
   estimated_duration: string | null;   // e.g. "Est. 2 hrs"
   estimated_minutes?: number | null;   // normalized time needed for scheduling
+  actual_minutes?: number | null;      // logged after task is completed
   weight_percent?: number | null;      // optional explicit progress weight, 0-100
   completed: boolean;
   position: number;                    // ordering within sibling tasks

@@ -8,6 +8,7 @@ import { archiveGoal, restoreGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
 import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
 import { calculateGoalTaskMetrics, computeGoalStatus, type GoalTaskMetrics } from '../utils/goalTaskMetrics';
+import { computeGoalTimeStats, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
 import type { DBGoal, DBTask } from '../db/schema';
 
 const STATUS_BG   = { Safe: 'bg-[#10B981]', Watch: 'bg-[#F59E0B]', Risky: 'bg-[#EF4444]' };
@@ -30,6 +31,8 @@ function GoalCard({
   const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
   const isArchived = Boolean(goal.archived_at);
   const status = computeGoalStatus(goal, tasks);
+  const timeStats = computeGoalTimeStats(tasks);
+  const finishProjection = projectedFinishDate(timeStats);
 
   const handleArchiveToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -67,9 +70,16 @@ function GoalCard({
       <div className={`absolute top-0 left-0 w-full h-1 ${STATUS_BG[status]}`} />
 
       <div className="flex justify-between items-start mb-4">
-        <div className="bg-[#f8f9fa] border border-gray-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-gray-600 flex items-center gap-1.5 uppercase tracking-wide">
-          <span className={`w-1.5 h-1.5 rounded-full ${STATUS_BG[status]}`} />
-          {status}
+        <div className="flex flex-col gap-1">
+          <div className="bg-[#f8f9fa] border border-gray-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-gray-600 flex items-center gap-1.5 uppercase tracking-wide">
+            <span className={`w-1.5 h-1.5 rounded-full ${STATUS_BG[status]}`} />
+            {status}
+          </div>
+          {finishProjection && timeStats.velocityConfidence !== 'none' && (
+            <p className="font-mono text-[9px] text-gray-400">
+              pace → <span className="font-bold text-gray-600">{formatProjectedDate(finishProjection)}</span>
+            </p>
+          )}
         </div>
         <button
           onClick={handleArchiveToggle}

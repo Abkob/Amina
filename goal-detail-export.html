@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ECG&EEG — Goal Detail — Marina OS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans:     ['Inter', 'sans-serif'],
+            headline: ['Hanken Grotesk', 'sans-serif'],
+            mono:     ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .font-headline { font-family: 'Hanken Grotesk', sans-serif; }
+    .font-mono     { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #e1e3e4; border-radius: 10px; }
+
+    /* time / deadline pill */
+    .pill {
+      display: inline-flex; align-items: center;
+      background: #f3f4f5; border: 1px solid #e5e7eb;
+      padding: 1px 6px; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; color: #6b7280; white-space: nowrap;
+    }
+    /* hover actions (always visible in static export) */
+    .hover-actions { display: flex; align-items: center; gap: 3px; }
+    .act-btn {
+      padding: 2px; border-radius: 4px; background: none; border: none;
+      cursor: pointer; color: #d1d5db; line-height: 0;
+    }
+    .act-btn:hover { color: #4648d4; }
+    .act-btn.del:hover { color: #f87171; }
+
+    /* tree connector */
+    .tree-branch { border-left: 1px solid #f3f4f6; margin-left: 16px; padding-left: 12px; }
+  </style>
+</head>
+<body class="bg-white text-gray-900 antialiased">
+
+<!-- ─── SIDEBAR ───────────────────────────────────────────────────────────── -->
+<nav class="bg-[#111827] h-screen w-[260px] fixed left-0 top-0 flex flex-col p-4 z-50">
+  <div class="mb-6 px-1 flex items-center gap-3">
+    <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-[#6063ee] to-purple-800 flex items-center justify-center text-white font-headline font-bold text-lg">M</div>
+    <div>
+      <h1 class="font-headline text-lg font-bold text-white tracking-tight leading-tight">Marina OS</h1>
+      <p class="font-mono text-[10px] text-gray-400 uppercase tracking-widest">Personal Copilot</p>
+    </div>
+  </div>
+
+  <button class="w-full bg-white text-[#111827] font-semibold text-xs py-2.5 rounded-lg mb-6 flex items-center justify-center gap-2 shadow-sm cursor-pointer">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Goal
+  </button>
+
+  <div class="flex-1 flex flex-col gap-1.5">
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg text-gray-400 hover:bg-gray-800/50 hover:text-white">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      Brain Dump
+    </button>
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg text-white bg-gray-800 font-bold border-l-4 border-[#6063ee]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c0c1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+      Goals
+    </button>
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg text-gray-400">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Schedule
+    </button>
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg text-gray-400">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      Resources
+    </button>
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg text-gray-400">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+  </div>
+
+  <div class="flex flex-col gap-1 mt-auto pt-4 border-t border-gray-800">
+    <div class="flex items-center gap-2.5 px-3 py-2.5 mt-2 bg-gray-900/50 rounded-lg">
+      <div class="w-7 h-7 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0">
+        <span class="font-mono text-xs text-white font-bold">U</span>
+      </div>
+      <div>
+        <p class="text-[11px] font-bold text-white leading-tight">ab2.kobaissi</p>
+        <p class="text-[9px] font-mono text-gray-500">Premium User</p>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ─── HEADER ────────────────────────────────────────────────────────────── -->
+<header class="fixed top-0 right-0 left-[260px] h-16 z-40 bg-white/90 backdrop-blur-md flex justify-between items-center px-6 border-b border-gray-100">
+  <div class="flex items-center gap-6">
+    <div class="flex items-center gap-2">
+      <span class="font-headline text-lg font-black text-black tracking-tight">Marina</span>
+      <div class="bg-[#EEF2FF] border border-[#c0c1ff]/40 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase text-[#4648d4] font-bold">OS 2.0</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <button class="font-mono text-xs uppercase tracking-wider pb-1 text-gray-400">Focus</button>
+      <button class="font-mono text-xs uppercase tracking-wider pb-1 text-black font-bold border-b-2 border-black">Reflect</button>
+    </nav>
+  </div>
+  <div class="flex items-center gap-4">
+    <div class="relative">
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" placeholder="Filter mental map…" class="bg-[#f3f4f5] rounded-full py-1.5 pl-9 pr-4 font-mono text-[11px] text-black placeholder:text-gray-400 focus:outline-none w-40 border-0" />
+    </div>
+    <button class="font-mono text-[10px] uppercase tracking-wider text-black border border-gray-200 px-3.5 py-1.5 rounded-full flex items-center gap-1.5">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      Sync AI
+    </button>
+    <button class="text-gray-400 w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+    </button>
+    <button class="text-gray-400 w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- ─── MAIN ──────────────────────────────────────────────────────────────── -->
+<main class="ml-[260px] mt-16 min-h-screen bg-white">
+  <div class="max-w-[860px] mx-auto px-10 py-6">
+
+    <!-- Back button -->
+    <button class="mb-5 font-mono text-xs uppercase tracking-wider text-gray-400 hover:text-black flex items-center gap-1.5 cursor-pointer bg-transparent border-0">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      Back into Goals Matrix
+    </button>
+
+    <!-- ── Header ─────────────────────────────────────────────────────────── -->
+    <header class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-gray-100 pb-6">
+      <div class="flex-1 min-w-0">
+        <!-- Category -->
+        <div class="flex items-center gap-2 text-gray-400 font-mono text-[10px] uppercase tracking-wider mb-2 font-bold">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Work
+        </div>
+        <!-- Title (click to edit) -->
+        <h1 class="font-headline text-2xl font-black text-gray-900 leading-tight cursor-text hover:text-[#4648d4] transition-colors" title="Click to edit goal title">ECG&amp;EEG</h1>
+
+        <!-- Subtitle + task counter with live tooltip -->
+        <p class="text-xs text-gray-400 mt-2 flex items-center gap-1 flex-wrap">
+          1 milestone
+          <span class="mx-0.5">·</span>
+          8 subtasks
+          <span class="mx-0.5">·</span>
+          <!-- "2/8 tasks done" with tooltip shown -->
+          <span class="relative" style="display:inline-block">
+            <span class="underline decoration-dotted underline-offset-2 cursor-default">2/8 tasks done</span>
+
+            <!-- Tooltip (shown by default in this static export) -->
+            <div style="position:absolute;bottom:calc(100% + 8px);left:0;z-index:50;background:#030712;border:1px solid #1f2937;border-radius:12px;padding:12px;min-width:230px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.6)">
+              <p style="font-size:8px;font-family:'JetBrains Mono',monospace;color:#4b5563;text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:8px">Task Tree</p>
+
+              <!-- Tree rows -->
+              <!-- Section Papers (milestone) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0">
+                <span style="font-size:9px;color:#6366f1">⬡</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6366f1;font-weight:600">Section Papers</span>
+              </div>
+
+              <!-- Section 2 (partial ◑) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:12px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#f59e0b">◑</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">15h</span>
+                <span style="font-size:9px;color:#fde68a">Section 2</span>
+              </div>
+
+              <!-- Electrocardiogram (done ✓) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:24px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#34d399">✓</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">2h</span>
+                <span style="font-size:9px;color:#6ee7b7">Electrocardio…</span>
+              </div>
+
+              <!-- Computational (done ✓) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:36px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#34d399">✓</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">20m</span>
+                <span style="font-size:9px;color:#6ee7b7">Computational…</span>
+              </div>
+
+              <!-- ECG-Based Detection (○) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:24px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#4b5563">○</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right"></span>
+                <span style="font-size:9px;color:#6b7280">ECG-Based Det…</span>
+              </div>
+
+              <!-- Section 3 (○) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:12px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#4b5563">○</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">12h</span>
+                <span style="font-size:9px;color:#9ca3af">Section 3</span>
+              </div>
+
+              <!-- Section 5 (○) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:12px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#4b5563">○</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">12h</span>
+                <span style="font-size:9px;color:#9ca3af">Section 5</span>
+              </div>
+
+              <!-- Section 8 (○) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:12px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#4b5563">○</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">10h</span>
+                <span style="font-size:9px;color:#9ca3af">Section 8</span>
+              </div>
+
+              <!-- Sections(MISC) (○) -->
+              <div style="display:flex;align-items:center;gap:6px;padding:2px 0;padding-left:12px">
+                <span style="font-size:9px;color:#6b7280">└</span>
+                <span style="font-size:9px;font-weight:700;color:#4b5563">○</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6b7280;width:28px;text-align:right">40h</span>
+                <span style="font-size:9px;color:#9ca3af">Sections(MISC)</span>
+              </div>
+
+              <!-- Footer -->
+              <div style="border-top:1px solid #1f2937;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:8px;color:#4b5563">2 explicitly done</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:8px;color:#6b7280">3% by time</span>
+              </div>
+            </div>
+          </span>
+        </p>
+      </div>
+
+      <!-- Ring + status card -->
+      <div class="flex items-center gap-4 bg-white rounded-xl p-4 border border-gray-100 shrink-0" style="box-shadow:0 4px 24px -4px rgba(0,0,0,0.05)">
+        <!-- DetailRing — progress=3%, Risky -->
+        <!-- circO = 2π×40 = 251.327; dashOffset = 251.327×0.97 = 243.787 -->
+        <div class="relative shrink-0" style="width:90px;height:90px">
+          <svg class="w-full h-full" style="transform:rotate(-90deg);transform-origin:center" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="40" fill="transparent" stroke="#e1e3e4" stroke-width="6"/>
+            <circle cx="50" cy="50" r="40" fill="transparent" stroke="#EF4444" stroke-width="6"
+              stroke-dasharray="251.327" stroke-dashoffset="243.787" stroke-linecap="round"/>
+          </svg>
+          <div class="absolute inset-0 flex items-center justify-center font-mono text-sm text-gray-900 font-bold">3%</div>
+        </div>
+
+        <!-- Status + deadline -->
+        <div>
+          <div class="font-headline text-base font-bold text-gray-900 flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-[#EF4444] inline-block"></span>
+            Risky
+          </div>
+          <div class="font-mono text-[10px] text-gray-400 flex items-center gap-1 mt-1">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <span class="uppercase tracking-wider">Target</span>
+            <span>Jun 26</span>
+          </div>
+          <div class="mt-2">
+            <span class="pill">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:3px"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Jun 26
+            </span>
+          </div>
+          <button class="mt-2 font-mono text-[9px] text-gray-400 hover:text-red-500 flex items-center gap-1 transition-colors bg-transparent border-0 cursor-pointer p-0">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+            Archive goal
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Time Intelligence panel ─────────────────────────────────────────── -->
+    <div class="rounded-xl border border-gray-200 bg-white p-4 mb-6" style="box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+      <div class="flex items-center gap-1.5 mb-3">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4648d4" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span class="font-mono text-[10px] font-bold uppercase tracking-widest text-[#4648d4]">Time Intelligence</span>
+      </div>
+
+      <!-- 4 stat tiles -->
+      <div class="grid grid-cols-4 gap-3 mb-3">
+        <!-- Spent -->
+        <div>
+          <p class="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Spent</p>
+          <p class="text-sm font-bold text-gray-900">2h 20m</p>
+          <p class="font-mono text-[9px] text-gray-400">0 logged</p>
+        </div>
+        <!-- Remaining -->
+        <div>
+          <p class="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Remaining</p>
+          <p class="text-sm font-bold text-gray-900">89h</p>
+          <p class="font-mono text-[9px] text-gray-400">estimated</p>
+        </div>
+        <!-- Velocity -->
+        <div>
+          <p class="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Velocity</p>
+          <p class="text-sm font-bold text-gray-300">—</p>
+          <p class="font-mono text-[9px] text-gray-300">complete tasks to see</p>
+        </div>
+        <!-- Est. Total -->
+        <div>
+          <p class="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Est. Total</p>
+          <p class="text-sm font-bold text-gray-900">91h 20m</p>
+          <p class="font-mono text-[9px] text-gray-400">7/9 tasks timed</p>
+        </div>
+      </div>
+
+      <!-- Progress bar: spent 3% of projected total -->
+      <div class="bg-gray-100 rounded-full h-1.5 overflow-hidden">
+        <div class="bg-[#4648d4] h-full rounded-full" style="width:3%"></div>
+      </div>
+      <p class="font-mono text-[9px] text-gray-400 mt-1">3% of 91h 20m spent</p>
+    </div>
+
+    <!-- ── Tasks section ──────────────────────────────────────────────────── -->
+    <div class="mb-4 flex items-center justify-between">
+      <h2 class="font-headline text-sm font-bold text-gray-900">Tasks</h2>
+      <button class="font-mono text-[10px] text-gray-400 hover:text-[#4648d4] flex items-center gap-1 transition-colors bg-transparent border-0 cursor-pointer">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add task
+      </button>
+    </div>
+
+    <!-- ── MILESTONE CARD: Section Papers (In Progress) ───────────────────── -->
+    <div class="bg-white rounded-xl border border-gray-200 mb-3 overflow-hidden" style="box-shadow:0 1px 3px rgba(0,0,0,0.04)">
+
+      <!-- Milestone header -->
+      <div class="flex items-center gap-3 px-4 py-3 hover:bg-[#f8f9fa] transition-colors">
+        <!-- Expand chevron (expanded = pointing down) -->
+        <button class="text-gray-400 hover:text-[#4648d4] shrink-0 transition-colors bg-transparent border-0 cursor-pointer p-0">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <!-- Status dot (In Progress = indigo) -->
+        <span class="w-2.5 h-2.5 rounded-full shrink-0 bg-[#4648d4]"></span>
+        <!-- Title -->
+        <span class="flex-1 text-xs font-mono font-bold uppercase tracking-wide text-gray-800">Section Papers</span>
+        <!-- Status badge -->
+        <span class="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-md font-bold shrink-0 bg-[#4648d4]/10 text-[#4648d4]">In Progress</span>
+        <!-- Child count -->
+        <span class="text-[10px] font-mono text-gray-400 shrink-0">5</span>
+        <!-- Focus button -->
+        <button class="text-gray-300 hover:text-[#4648d4] transition-colors p-1 rounded bg-transparent border-0 cursor-pointer" title="Open focus page">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        </button>
+      </div>
+
+      <!-- Expanded body -->
+      <div class="px-4 pb-3 border-t border-gray-100 pt-2">
+
+        <!-- ─ Task rows ────────────────────────────────────────────────────── -->
+
+        <!-- ── Section 2 (has children, not done) ───────────────────────── -->
+        <div class="py-1.5">
+          <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+            <!-- Expand chevron (section 2 is expanded) -->
+            <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <!-- Checkbox (unchecked) -->
+            <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+            </button>
+            <!-- Title -->
+            <span class="text-xs text-gray-700 font-medium flex-1 min-w-0">Section 2</span>
+            <!-- Child count -->
+            <span class="text-[9px] font-mono text-gray-300 shrink-0">2</span>
+            <!-- Time pill -->
+            <span class="pill">15h</span>
+            <!-- Hover actions -->
+            <div class="hover-actions">
+              <button class="act-btn" title="Open focus page"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+              <button class="act-btn" title="Add child task"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+              <button class="act-btn" title="Attach resource"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+              <button class="act-btn" title="Upload files"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+              <button class="act-btn del" title="Delete task"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+            </div>
+          </div>
+
+          <!-- Children of Section 2 -->
+          <div class="tree-branch">
+
+            <!-- ── Electrocardiogram (done ✓, has 1 child) ─────────────── -->
+            <div class="py-1.5">
+              <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+                <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <!-- Checkbox: done (green) -->
+                <button class="shrink-0 bg-transparent border-0 cursor-pointer p-0">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                </button>
+                <!-- Title (strikethrough, done) -->
+                <span class="text-xs text-gray-400 font-medium flex-1 min-w-0 truncate line-through">Electrocardiogram (ECG)-based seizure detection using supervised machine-learning Auth: Eva Diab</span>
+                <!-- Child count -->
+                <span class="text-[9px] font-mono text-gray-300 shrink-0">1</span>
+                <!-- Time pill -->
+                <span class="pill">2h</span>
+                <div class="hover-actions">
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+                  <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+                </div>
+              </div>
+
+              <!-- Child of Electrocardiogram -->
+              <div class="tree-branch">
+
+                <!-- ── Computational (done ✓, leaf) ───────────────────── -->
+                <div class="py-1.5">
+                  <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+                    <!-- No children → invisible chevron placeholder -->
+                    <span style="width:13px;height:13px;display:inline-block;visibility:hidden"></span>
+                    <!-- Checkbox: done (green) -->
+                    <button class="shrink-0 bg-transparent border-0 cursor-pointer p-0">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                    </button>
+                    <!-- Title (strikethrough, done) -->
+                    <span class="text-xs text-gray-400 font-medium flex-1 min-w-0 truncate line-through">Computational Diagnostic Techniques for Electrocardiogram Signal Analysis Auth:Liping Xie</span>
+                    <!-- Time pill -->
+                    <span class="pill">20m</span>
+                    <div class="hover-actions">
+                      <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+                      <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+                      <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+                      <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+                      <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+
+              </div><!-- /Electrocardiogram children -->
+            </div><!-- /Electrocardiogram row -->
+
+            <!-- ── ECG-Based Detection (no children, not done, no time) ── -->
+            <div class="py-1.5">
+              <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+                <span style="width:13px;height:13px;display:inline-block;visibility:hidden"></span>
+                <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+                </button>
+                <span class="text-xs text-gray-700 font-medium flex-1 min-w-0 truncate">ECG-Based Detection of Epileptic Seizures in Real-World Wearable Settings: Insights from the SeizeIT2 Dataset Auth : Conrad Reintjes</span>
+                <!-- Time pill: hidden when no time (visible on hover in real app) -->
+                <span class="pill" style="opacity:0">—</span>
+                <div class="hover-actions">
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+                  <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+                  <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+                </div>
+              </div>
+            </div>
+
+          </div><!-- /Section 2 children -->
+        </div><!-- /Section 2 row -->
+
+        <!-- ── Section 3 (leaf, not done, 12h) ──────────────────────────── -->
+        <div class="py-1.5">
+          <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+            <span style="width:13px;height:13px;display:inline-block;visibility:hidden"></span>
+            <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+            </button>
+            <span class="text-xs text-gray-700 font-medium flex-1 min-w-0">Section 3</span>
+            <span class="pill">12h</span>
+            <div class="hover-actions">
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+              <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Section 5 (leaf, not done, 12h) ──────────────────────────── -->
+        <div class="py-1.5">
+          <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+            <span style="width:13px;height:13px;display:inline-block;visibility:hidden"></span>
+            <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+            </button>
+            <span class="text-xs text-gray-700 font-medium flex-1 min-w-0">Section 5</span>
+            <span class="pill">12h</span>
+            <div class="hover-actions">
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+              <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Section 8 (leaf, not done, 10h) ──────────────────────────── -->
+        <div class="py-1.5">
+          <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+            <span style="width:13px;height:13px;display:inline-block;visibility:hidden"></span>
+            <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+            </button>
+            <span class="text-xs text-gray-700 font-medium flex-1 min-w-0">Section 8</span>
+            <span class="pill">10h</span>
+            <div class="hover-actions">
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+              <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Sections(MISC) (leaf, not done, 40h) ─────────────────────── -->
+        <div class="py-1.5">
+          <div class="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+            <span style="width:13px;height:13px;display:inline-block;visibility:hidden"></span>
+            <button class="text-gray-300 hover:text-[#4648d4] shrink-0 bg-transparent border-0 cursor-pointer p-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+            </button>
+            <span class="text-xs text-gray-700 font-medium flex-1 min-w-0">Sections(MISC)</span>
+            <span class="pill">40h</span>
+            <div class="hover-actions">
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+              <button class="act-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg></button>
+              <button class="act-btn del"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add subtask button -->
+        <button class="mt-1 flex items-center gap-1.5 text-[11px] font-mono text-gray-400 hover:text-[#4648d4] transition-colors bg-transparent border-0 cursor-pointer p-0">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add subtask
+        </button>
+
+      </div><!-- /Milestone expanded body -->
+    </div><!-- /MilestoneCard -->
+
+  </div><!-- /container -->
+</main>
+
+</body>
+</html>

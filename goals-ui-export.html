@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Goals — Marina OS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans:     ['Inter', 'sans-serif'],
+            headline: ['Hanken Grotesk', 'sans-serif'],
+            mono:     ['JetBrains Mono', 'monospace'],
+          },
+          boxShadow: {
+            card:       '0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03)',
+            'card-hover': '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)',
+            ambient:    '0 4px 24px -4px rgba(0,0,0,0.05)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .font-headline { font-family: 'Hanken Grotesk', sans-serif; }
+    .font-mono     { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background-color: #e1e3e4; border-radius: 10px; }
+  </style>
+</head>
+<body class="bg-white text-gray-900 antialiased">
+
+<!-- ─── SIDEBAR ──────────────────────────────────────────────────────────────── -->
+<nav class="bg-[#111827] h-screen w-[260px] fixed left-0 top-0 flex flex-col p-4 z-50">
+
+  <!-- Logo -->
+  <div class="mb-6 px-1 flex items-center gap-3">
+    <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-[#6063ee] to-purple-800 flex items-center justify-center text-white font-headline font-bold text-lg">M</div>
+    <div>
+      <h1 class="font-headline text-lg font-bold text-white tracking-tight leading-tight">Marina OS</h1>
+      <p class="font-mono text-[10px] text-gray-400 uppercase tracking-widest">Personal Copilot</p>
+    </div>
+  </div>
+
+  <!-- New Goal button -->
+  <button class="w-full bg-white text-[#111827] font-sans font-semibold text-xs py-2.5 rounded-lg mb-6 flex items-center justify-center gap-2 hover:bg-gray-100 transition-all shadow-sm cursor-pointer">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    <span>New Goal</span>
+  </button>
+
+  <!-- Nav items -->
+  <div class="flex-1 flex flex-col gap-1.5">
+    <!-- Brain Dump -->
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg transition-all text-gray-400 hover:bg-gray-800/50 hover:text-white">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      <span>Brain Dump</span>
+    </button>
+    <!-- Goals — ACTIVE -->
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg transition-all text-white bg-gray-800 font-bold border-l-4 border-[#6063ee]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c0c1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+      <span>Goals</span>
+    </button>
+    <!-- Schedule -->
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg transition-all text-gray-400 hover:bg-gray-800/50 hover:text-white">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <span>Schedule</span>
+    </button>
+    <!-- Resources -->
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg transition-all text-gray-400 hover:bg-gray-800/50 hover:text-white">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span>Resources</span>
+    </button>
+    <!-- Settings -->
+    <button class="flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg transition-all text-gray-400 hover:bg-gray-800/50 hover:text-white">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>Settings</span>
+    </button>
+  </div>
+
+  <!-- Footer -->
+  <div class="flex flex-col gap-1 mt-auto pt-4 border-t border-gray-800">
+    <button class="flex items-center gap-3 px-3 py-2 text-xs font-mono text-gray-400 hover:text-white transition-colors">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>Help</span>
+      <span class="ml-auto text-[8px] font-mono text-[#c0c1ff] bg-[#1e1b4b] px-1.5 py-0.5 rounded uppercase">Soon</span>
+    </button>
+    <button class="flex items-center gap-3 px-3 py-2 text-xs font-mono text-gray-400 hover:text-[#F59E0B] transition-colors">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+      <span>Reset Defaults</span>
+    </button>
+    <div class="flex items-center gap-2.5 px-3 py-2.5 mt-2 bg-gray-900/50 rounded-lg">
+      <div class="w-7 h-7 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0">
+        <span class="font-mono text-xs text-white font-bold">U</span>
+      </div>
+      <div class="min-w-0 flex-1">
+        <p class="text-[11px] font-bold text-white truncate leading-tight">ab2.kobaissi</p>
+        <p class="text-[9px] font-mono text-gray-500 truncate leading-tight">Premium User</p>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ─── HEADER ───────────────────────────────────────────────────────────────── -->
+<header class="fixed top-0 right-0 left-[260px] h-16 z-40 bg-white/90 backdrop-blur-md flex justify-between items-center px-6 border-b border-gray-100">
+  <div class="flex items-center gap-6">
+    <div class="flex items-center gap-2">
+      <span class="font-headline text-lg font-black text-black tracking-tight">Marina</span>
+      <div class="bg-[#EEF2FF] border border-[#c0c1ff]/40 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase text-[#4648d4] font-bold">OS 2.0</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <button class="font-mono text-xs uppercase tracking-wider pb-1 text-gray-400 hover:text-black transition-all">Focus</button>
+      <!-- Reflect tab is active since Goals is selected -->
+      <button class="font-mono text-xs uppercase tracking-wider pb-1 text-black font-bold border-b-2 border-black transition-all">Reflect</button>
+    </nav>
+  </div>
+
+  <div class="flex items-center gap-4">
+    <!-- Search -->
+    <div class="relative">
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" placeholder="Filter mental map…" class="bg-[#f3f4f5] border-none rounded-full py-1.5 pl-9 pr-4 font-mono text-[11px] text-black placeholder:text-gray-400 focus:outline-none w-40" />
+    </div>
+
+    <!-- Sync AI -->
+    <button class="font-mono text-[10px] uppercase tracking-wider text-black border border-gray-200 px-3.5 py-1.5 rounded-full hover:bg-gray-50 transition-colors cursor-pointer flex items-center gap-1.5">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      <span>Sync AI</span>
+    </button>
+
+    <!-- Zap -->
+    <button class="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+    </button>
+
+    <!-- Bell -->
+    <button class="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- ─── MAIN CONTENT ─────────────────────────────────────────────────────────── -->
+<main class="ml-[260px] mt-16 min-h-screen bg-white">
+  <div class="max-w-[1000px] mx-auto px-10 py-6">
+
+    <!-- Page header row -->
+    <div class="flex items-end justify-between gap-4 mb-6">
+      <div>
+        <h2 class="font-headline text-2xl font-bold text-black mb-1">Goals</h2>
+        <p class="text-sm text-gray-500 max-w-xl">Bird's-eye view of your current trajectories. Keep your primary objectives in focus.</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <!-- Filter tabs -->
+        <div class="flex items-center gap-1.5 bg-[#f3f4f5] rounded-full p-1 border border-gray-200">
+          <button class="px-3 py-1 font-mono text-xs uppercase tracking-wider rounded-full bg-white text-black font-bold shadow-sm">Active</button>
+          <button class="px-3 py-1 font-mono text-xs uppercase tracking-wider rounded-full text-gray-400 hover:text-black">Completed</button>
+          <button class="px-3 py-1 font-mono text-xs uppercase tracking-wider rounded-full text-gray-400 hover:text-black">Archived</button>
+        </div>
+        <!-- New Goal button -->
+        <button class="bg-black text-white w-10 h-10 rounded-full flex items-center justify-center shadow-md hover:scale-[1.03] transition-all">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="grid grid-cols-4 gap-4 mb-8">
+      <div class="bg-[#f8f9fa] rounded-xl p-4 border border-gray-200" style="box-shadow:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03)">
+        <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Total Goals</p>
+        <p class="font-headline text-2xl font-bold text-black">2</p>
+      </div>
+      <div class="bg-[#f8f9fa] rounded-xl p-4 border border-gray-200" style="box-shadow:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03)">
+        <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">On Track</p>
+        <p class="font-headline text-2xl font-bold text-[#10B981]">1</p>
+      </div>
+      <div class="bg-[#f8f9fa] rounded-xl p-4 border border-gray-200" style="box-shadow:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03)">
+        <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Needs Attention</p>
+        <p class="font-headline text-2xl font-bold text-[#F59E0B]">0</p>
+      </div>
+      <div class="bg-[#f8f9fa] rounded-xl p-4 border border-gray-200" style="box-shadow:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03)">
+        <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">At Risk</p>
+        <p class="font-headline text-2xl font-bold text-[#EF4444]">1</p>
+      </div>
+    </div>
+
+    <!-- Goal cards grid -->
+    <div class="grid grid-cols-2 gap-6">
+
+      <!-- ── CARD 1: ECG&EEG (Risky) ──────────────────────────────────────── -->
+      <div class="bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 relative overflow-hidden group cursor-pointer flex flex-col h-full" style="box-shadow:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03); transition: box-shadow 0.2s, border-color 0.2s">
+        <!-- Status stripe -->
+        <div class="absolute top-0 left-0 w-full h-1 bg-[#EF4444]"></div>
+
+        <!-- Top row: status badge + archive -->
+        <div class="flex justify-between items-start mb-4">
+          <div class="flex flex-col gap-1">
+            <div class="bg-[#f8f9fa] border border-gray-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-gray-600 flex items-center gap-1.5 uppercase tracking-wide">
+              <span class="w-1.5 h-1.5 rounded-full bg-[#EF4444] inline-block"></span>
+              Risky
+            </div>
+          </div>
+          <button class="text-gray-300 hover:text-[#4648d4] opacity-0 group-hover:opacity-100 transition-all" title="Archive goal">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+          </button>
+        </div>
+
+        <!-- Title -->
+        <h3 class="font-headline text-base font-bold text-gray-900 group-hover:text-[#4648d4] transition-colors mb-1 leading-snug">ECG&amp;EEG</h3>
+
+        <!-- Deadline -->
+        <p class="font-mono text-[10px] text-gray-400 mb-6 flex items-center gap-1">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="uppercase tracking-wider">Target</span>
+          <span title="Goal deadline: 2026-06-26">Jun 26</span>
+        </p>
+
+        <!-- Ring + Activity -->
+        <div class="flex items-center justify-between mt-auto mb-6">
+          <!-- Progress Ring: progress=3%, activityLevel=5, status=Risky -->
+          <!-- circO=251.327, dashOffsetO=251.327*(1-0.03)=243.787 -->
+          <!-- circI=201.062, dashOffsetI=0 (fully active) -->
+          <div class="relative shrink-0" style="width:64px;height:64px">
+            <svg class="w-full h-full origin-center" style="transform:rotate(-90deg)" viewBox="0 0 100 100">
+              <!-- Outer track -->
+              <circle cx="50" cy="50" r="40" fill="transparent" stroke="#e1e3e4" stroke-width="6"/>
+              <!-- Inner track -->
+              <circle cx="50" cy="50" r="32" fill="transparent" stroke="#edeeef" stroke-width="4"/>
+              <!-- Inner activity ring (full, activityLevel=5) -->
+              <circle cx="50" cy="50" r="32" fill="transparent" stroke="#c0c1ff" stroke-width="4"
+                stroke-dasharray="201.062" stroke-dashoffset="0" stroke-linecap="round"/>
+              <!-- Outer progress ring (3%) -->
+              <circle cx="50" cy="50" r="40" fill="transparent" stroke="#EF4444" stroke-width="6"
+                stroke-dasharray="251.327" stroke-dashoffset="243.787" stroke-linecap="round"/>
+            </svg>
+            <div class="absolute inset-0 flex items-center justify-center font-mono text-[11px] text-gray-900 font-bold">3%</div>
+          </div>
+
+          <!-- Activity bars -->
+          <div class="text-right pl-4">
+            <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Activity Level</p>
+            <div class="flex gap-1 justify-end items-end" style="height:16px">
+              <!-- All 5 bars active = Risky color = #EF4444, h-3 (12px) -->
+              <div class="w-1 rounded-full bg-[#EF4444]" style="height:12px"></div>
+              <div class="w-1 rounded-full bg-[#EF4444]" style="height:12px"></div>
+              <div class="w-1 rounded-full bg-[#EF4444]" style="height:12px"></div>
+              <div class="w-1 rounded-full bg-[#EF4444]" style="height:12px"></div>
+              <div class="w-1 rounded-full bg-[#EF4444]" style="height:12px"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Next Action -->
+        <div class="border-t border-gray-100 pt-4">
+          <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-2 font-bold">Next Action</p>
+          <p class="text-xs text-gray-400 italic">No next action set.</p>
+        </div>
+      </div>
+
+      <!-- ── CARD 2: Fix Courses (Safe) ────────────────────────────────────── -->
+      <div class="bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 relative overflow-hidden group cursor-pointer flex flex-col h-full" style="box-shadow:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03); transition: box-shadow 0.2s, border-color 0.2s">
+        <!-- Status stripe -->
+        <div class="absolute top-0 left-0 w-full h-1 bg-[#10B981]"></div>
+
+        <!-- Top row: status badge + archive -->
+        <div class="flex justify-between items-start mb-4">
+          <div class="flex flex-col gap-1">
+            <div class="bg-[#f8f9fa] border border-gray-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-gray-600 flex items-center gap-1.5 uppercase tracking-wide">
+              <span class="w-1.5 h-1.5 rounded-full bg-[#10B981] inline-block"></span>
+              Safe
+            </div>
+          </div>
+          <button class="text-gray-300 hover:text-[#4648d4] opacity-0 group-hover:opacity-100 transition-all" title="Archive goal">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+          </button>
+        </div>
+
+        <!-- Title -->
+        <h3 class="font-headline text-base font-bold text-gray-900 group-hover:text-[#4648d4] transition-colors mb-1 leading-snug">Fix Courses</h3>
+
+        <!-- Deadline -->
+        <p class="font-mono text-[10px] text-gray-400 mb-6 flex items-center gap-1">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="uppercase tracking-wider">Target</span>
+          <span title="Goal deadline: 2026-08-05">Aug 5</span>
+        </p>
+
+        <!-- Ring + Activity -->
+        <div class="flex items-center justify-between mt-auto mb-6">
+          <!-- Progress Ring: progress=0%, activityLevel=5, status=Safe -->
+          <!-- circO=251.327, dashOffsetO=251.327 (empty ring, 0%) -->
+          <!-- circI=201.062, dashOffsetI=0 (fully active) -->
+          <div class="relative shrink-0" style="width:64px;height:64px">
+            <svg class="w-full h-full origin-center" style="transform:rotate(-90deg)" viewBox="0 0 100 100">
+              <!-- Outer track -->
+              <circle cx="50" cy="50" r="40" fill="transparent" stroke="#e1e3e4" stroke-width="6"/>
+              <!-- Inner track -->
+              <circle cx="50" cy="50" r="32" fill="transparent" stroke="#edeeef" stroke-width="4"/>
+              <!-- Inner activity ring (full) -->
+              <circle cx="50" cy="50" r="32" fill="transparent" stroke="#c0c1ff" stroke-width="4"
+                stroke-dasharray="201.062" stroke-dashoffset="0" stroke-linecap="round"/>
+              <!-- Outer progress ring (0% = fully offset = invisible arc) -->
+              <circle cx="50" cy="50" r="40" fill="transparent" stroke="#10B981" stroke-width="6"
+                stroke-dasharray="251.327" stroke-dashoffset="251.327" stroke-linecap="round"/>
+            </svg>
+            <div class="absolute inset-0 flex items-center justify-center font-mono text-[11px] text-gray-900 font-bold">0%</div>
+          </div>
+
+          <!-- Activity bars -->
+          <div class="text-right pl-4">
+            <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Activity Level</p>
+            <div class="flex gap-1 justify-end items-end" style="height:16px">
+              <!-- All 5 bars active = Safe color = #4648d4, h-4 (16px) -->
+              <div class="w-1 rounded-full bg-[#4648d4]" style="height:16px"></div>
+              <div class="w-1 rounded-full bg-[#4648d4]" style="height:16px"></div>
+              <div class="w-1 rounded-full bg-[#4648d4]" style="height:16px"></div>
+              <div class="w-1 rounded-full bg-[#4648d4]" style="height:16px"></div>
+              <div class="w-1 rounded-full bg-[#4648d4]" style="height:16px"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Next Action -->
+        <div class="border-t border-gray-100 pt-4">
+          <p class="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-2 font-bold">Next Action</p>
+          <p class="text-xs text-gray-400 italic">No next action set.</p>
+        </div>
+      </div>
+
+    </div><!-- /grid -->
+  </div><!-- /container -->
+</main>
+
+</body>
+</html>

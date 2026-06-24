@@ -14,7 +14,9 @@ export interface GoalFinishEstimate {
 
 function parseDateOnly(value: string | null): Date | null {
   if (!value) return null;
-  const date = new Date(`${value}T00:00:00`);
+  // Support both "YYYY-MM-DD" and "YYYY-MM-DDTHH:MM" — normalise to midnight for date-only
+  const iso = value.includes('T') ? value : `${value}T00:00:00`;
+  const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 

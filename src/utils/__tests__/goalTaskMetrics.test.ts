@@ -134,14 +134,16 @@ describe('calculateGoalTaskMetrics — progress', () => {
 });
 
 describe('calculateGoalTaskMetrics — counts', () => {
-  it('only counts leaf tasks', () => {
+  it('counts ALL non-milestone tasks; only explicitly-done ones increment completedTasks', () => {
     const parent = makeTask({ id: 'p' });
     const child1 = makeTask({ parent_task_id: 'p', completed: true });
     const child2 = makeTask({ parent_task_id: 'p' });
     const { totalTasks, completedTasks, remainingTasks } = calculateGoalTaskMetrics([parent, child1, child2]);
-    expect(totalTasks).toBe(2);
+    // parent + child1 + child2 = 3 non-milestone tasks
+    expect(totalTasks).toBe(3);
+    // only child1 is explicitly done — parent is NOT counted via child completion
     expect(completedTasks).toBe(1);
-    expect(remainingTasks).toBe(1);
+    expect(remainingTasks).toBe(2);
   });
 });
 

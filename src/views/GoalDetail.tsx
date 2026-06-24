@@ -2,20 +2,65 @@ import { useState, useRef, useEffect } from 'react';
 import {
   ChevronLeft, Clock, Folder, Calendar, Target, Sparkles,
   FolderOpen, Upload, FileText, CheckSquare, Square,
-  Plus, Trash2, X, Paperclip, ChevronDown, ChevronRight, Check,
+  Plus, Trash2, X, Paperclip, ChevronDown, ChevronRight, Check, GripVertical,
 } from 'lucide-react';
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { reorderPositions } from '../utils/reorderPositions';
+import { useNow } from '../utils/useNow';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { useGoal, useGoalTasks, useGoalResources, useTaskResources } from '../api/hooks';
+import { ActualTimeModal } from '../components/ActualTimeModal';
+import { ActualTimeChip } from '../components/ActualTimeChip';
+import { useGoal, useGoalTasks, useGoalResources, useTaskResources, useInvalidate } from '../api/hooks';
 import { archiveGoal, restoreGoal, updateGoal } from '../db/queries/goals';
 import { toggleTask, createTask, deleteTask, updateTask } from '../db/queries/tasks';
 import { createResource, deleteResource, detectResourceType } from '../db/queries/resources';
 import { getGoalFinishEstimate } from '../utils/goalFinishEstimate';
-import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
+import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getTaskTimeProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
 import { calculateGoalTaskMetrics, computeGoalStatus } from '../utils/goalTaskMetrics';
+import { computeGoalTimeStats, formatVelocity, velocityColor, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
 import { generateSuggestions } from '../utils/subtaskSuggestions';
 import type { DBTask, DBResource, CriticalPathStatus } from '../db/schema';
+
+// ─── Task progress tree tooltip ────────────────────────────────────────────────
+function TaskProgressTree({ tasks }: { tasks: DBTask[] }) {
+  function renderNode(task: DBTask, depth: number): React.ReactNode {
+    const done    = task.completed || task.status === 'done';
+    const partial = !done && getTaskLeafProgress(task, tasks) > 0;
+    const kids    = tasks.filter(t => t.parent_task_id === task.id);
+    const isMilestone = task.kind === 'critical_path';
+
+    const icon      = done ? '✓' : partial ? '◑' : '○';
+    const iconCls   = done ? 'text-emerald-400' : partial ? 'text-amber-400' : 'text-gray-600';
+    const labelCls  = done ? 'text-emerald-300' : partial ? 'text-amber-200/80' : 'text-gray-400';
+    const time      = task.estimated_minutes ? formatTaskTime(task.estimated_minutes) : null;
+    const label     = task.title.length > 18 ? task.title.slice(0, 17) + '…' : task.title;
+
+    return (
+      <div key={task.id}>
+        <div className="flex items-center gap-1.5 py-[2px]" style={{ paddingLeft: `${depth * 12}px` }}>
+          {depth > 0 && <span className="text-gray-700 text-[9px] select-none">└</span>}
+          {isMilestone
+            ? <span className="text-[#6366f1] text-[9px]">⬡</span>
+            : <span className={`text-[9px] font-bold ${iconCls}`}>{icon}</span>
+          }
+          {time && <span className="font-mono text-[9px] text-gray-500 w-7 text-right shrink-0">{time}</span>}
+          <span className={`text-[9px] leading-tight ${isMilestone ? 'text-[#6366f1] font-semibold' : labelCls}`}>{label}</span>
+        </div>
+        {kids.map(child => renderNode(child, depth + 1))}
+      </div>
+    );
+  }
+
+  const roots = tasks.filter(t => !t.parent_task_id);
+  return <div className="space-y-0">{roots.map(r => renderNode(r, 0))}</div>;
+}
 
 // ─── Progress ring ─────────────────────────────────────────────────────────────
 function DetailRing({ progress, status }: { progress: number; status: 'Safe' | 'Watch' | 'Risky' }) {
@@ -133,6 +178,35 @@ function InlineTitle({
 }
 
 // ─── Deadline pill ────────────────────────────────────────────────────────────
+// ─── Deadline helpers ──────────────────────────────────────────────────────────
+
+/** Parse a due_date value (date-only OR datetime) into a Date.
+ *  Date-only values (no T) are treated as end-of-day 23:59 so a day deadline
+ *  doesn't expire at midnight. */
+function parseDueDate(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value)) return null;
+  if (value.includes('T')) return new Date(value);
+  return new Date(`${value}T23:59:00`);
+}
+
+/** Format time remaining/elapsed into a compact label. */
+function formatCountdown(diffMs: number): { badge: string; detail: string } {
+  const abs = Math.abs(diffMs);
+  const totalMins = Math.floor(abs / 60_000);
+  const hours = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  const days = Math.floor(hours / 24);
+  const remH = hours % 24;
+  const sign = diffMs < 0 ? '-' : '';
+
+  if (days >= 7)  return { badge: '',            detail: '' };
+  if (days >= 2)  return { badge: `${sign}${days}d ${remH}h`, detail: `${days} days ${remH}h` };
+  if (hours >= 1) return { badge: `${sign}${hours}h ${mins}m`, detail: `${hours}h ${mins}m` };
+  if (totalMins >= 1) return { badge: `${sign}${totalMins}m`, detail: `${totalMins} minutes` };
+  return { badge: diffMs < 0 ? 'just now' : '<1m', detail: '' };
+}
+
+// ─── DeadlinePill ──────────────────────────────────────────────────────────────
 function DeadlinePill({
   value,
   label = 'deadline',
@@ -146,37 +220,67 @@ function DeadlinePill({
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
 
-  const isIso = value ? /^\d{4}-\d{2}-\d{2}/.test(value) : false;
-  const parsed = isIso ? new Date(`${value!.slice(0, 10)}T00:00:00`) : null;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const diffDays = parsed ? Math.round((parsed.getTime() - today.getTime()) / 86_400_000) : null;
-  const isOverdue = diffDays !== null && diffDays < 0;
-  const isSoon = diffDays !== null && diffDays >= 0 && diffDays <= 3;
+  const now = useNow(); // updates every 30 s — shared across all pills
+
+  const parsed = value ? parseDueDate(value) : null;
+  const diffMs = parsed ? parsed.getTime() - now.getTime() : null;
+  const isOverdue = diffMs !== null && diffMs < 0;
+  // "soon" = within 24 hours
+  const isSoon = diffMs !== null && diffMs >= 0 && diffMs < 24 * 3_600_000;
+  // For far-future deadlines, only show date label (no countdown re-renders needed)
+  const isFar = diffMs !== null && Math.abs(diffMs) >= 7 * 86_400_000;
+
+  const hasTime = value?.includes('T') ?? false;
 
   const dateLabel = parsed
     ? parsed.toLocaleDateString('en-US', {
         month: 'short', day: 'numeric',
+        ...(hasTime ? { hour: 'numeric', minute: '2-digit' } : {}),
         year: parsed.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
       })
-    : value;
+    : null;
 
-  const proximityBadge =
-    diffDays === 0 ? 'today' :
-    diffDays === 1 ? 'tmrw' :
-    diffDays !== null && diffDays > 0 && diffDays <= 6 ? `${diffDays}d` :
-    diffDays !== null && diffDays < 0 ? `${Math.abs(diffDays)}d ago` :
-    null;
+  const { badge } = diffMs !== null ? formatCountdown(diffMs) : { badge: '' };
+
+  // Editing: use datetime-local so user can optionally add time.
+  // Pre-fill: datetime value or date + T23:59 for date-only.
+  const editDefault = (() => {
+    if (!value) return '';
+    if (hasTime) return value.slice(0, 16);
+    return `${value.slice(0, 10)}T23:59`;
+  })();
+
+  const handleSave = (raw: string) => {
+    if (!raw) { onSave(null); return; }
+    // If user left time at 23:59 and no time was previously set, strip time back to date-only
+    if (raw.endsWith('T23:59') && !hasTime) {
+      onSave(raw.slice(0, 10));
+    } else {
+      onSave(raw);
+    }
+  };
 
   if (editing) {
     return (
-      <input
-        ref={ref}
-        type="date"
-        defaultValue={isIso ? value!.slice(0, 10) : ''}
-        onBlur={e => { onSave(e.target.value || null); setEditing(false); }}
-        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditing(false); }}
-        className="h-[22px] rounded-full border border-[#4648d4]/40 bg-white px-2.5 text-[10px] text-[#4648d4] outline-none ring-1 ring-[#4648d4]/20"
-      />
+      <div className="flex items-center gap-1">
+        <input
+          ref={ref}
+          type="datetime-local"
+          defaultValue={editDefault}
+          onBlur={e => { handleSave(e.target.value); setEditing(false); }}
+          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditing(false); }}
+          className="h-[22px] rounded-full border border-[#4648d4]/40 bg-white px-2.5 text-[10px] text-[#4648d4] outline-none ring-1 ring-[#4648d4]/20"
+        />
+        {value && (
+          <button
+            onMouseDown={e => { e.preventDefault(); onSave(null); setEditing(false); }}
+            className="text-gray-300 hover:text-red-400 transition-colors"
+            title="Clear deadline"
+          >
+            <X size={10} />
+          </button>
+        )}
+      </div>
     );
   }
 
@@ -193,10 +297,14 @@ function DeadlinePill({
     );
   }
 
+  const title = isOverdue
+    ? `Overdue by ${badge.replace('-', '')}`
+    : `Due: ${dateLabel}${!isFar && badge ? ` (${badge} left)` : ''}`;
+
   return (
     <button
       onClick={() => setEditing(true)}
-      title={isOverdue ? `Overdue by ${Math.abs(diffDays!)} day${Math.abs(diffDays!) === 1 ? '' : 's'}` : `Due: ${dateLabel}`}
+      title={title}
       className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${
         isOverdue
           ? 'border-red-200 bg-red-50 text-red-500 hover:border-red-300 hover:bg-red-100'
@@ -207,11 +315,11 @@ function DeadlinePill({
     >
       <Calendar size={9} className="shrink-0" />
       <span>{dateLabel}</span>
-      {proximityBadge && (
+      {!isFar && badge && (
         <span className={`rounded-full px-1 py-px text-[8px] font-bold ${
           isOverdue ? 'bg-red-100 text-red-500' : isSoon ? 'bg-amber-100 text-amber-600' : 'bg-gray-100 text-gray-400'
         }`}>
-          {proximityBadge}
+          {badge}
         </span>
       )}
     </button>
@@ -228,9 +336,8 @@ function InlineTimePill({
   allTasks: DBTask[];
   onSave: (minutes: number | null) => void;
 }) {
-  const { minutes, isRollup, conflict } = getRolledUpTime(task, allTasks);
-  const progress = getTaskLeafProgress(task, allTasks);
-  const ownMinutes = getTaskEstimatedMinutes(task);
+  const { minutes, isRollup, ownMinutes, childrenSum } = getRolledUpTime(task, allTasks);
+  const tp = getTaskTimeProgress(task, allTasks);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(ownMinutes === null ? '' : formatTaskTime(ownMinutes));
   const ref = useRef<HTMLInputElement>(null);
@@ -246,9 +353,13 @@ function InlineTimePill({
     setEditing(false);
   };
 
-  const isDone = progress >= 1;
-  const hasProgress = progress > 0 && !isDone;
-  const remainingMinutes = minutes !== null ? Math.max(0, Math.round(minutes * (1 - progress))) : null;
+  const hasOverhead = isRollup && ownMinutes !== null && childrenSum !== null;
+
+  const tooltipText = hasOverhead
+    ? `${formatTaskTime(minutes)} total · ${formatTaskTime(ownMinutes)} own + ${formatTaskTime(childrenSum)} subtasks`
+    : isRollup
+    ? `Summed from subtasks: ${formatTaskTime(minutes)}`
+    : `Estimated: ${formatTaskTime(minutes)}`;
 
   if (editing) {
     return (
@@ -280,50 +391,24 @@ function InlineTimePill({
     );
   }
 
-  const tooltipText = isDone
-    ? `Done · estimated ${formatTaskTime(minutes)}`
-    : hasProgress
-    ? `${formatTaskTime(remainingMinutes)} remaining of ${formatTaskTime(minutes)} · ${Math.round(progress * 100)}% done`
-    : isRollup
-    ? `Summed from children: ${formatTaskTime(minutes)}`
-    : `Estimated: ${formatTaskTime(minutes)}`;
-
   return (
     <span className="inline-flex items-center gap-1">
       <button
         onClick={() => setEditing(true)}
         title={tooltipText}
         className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${
-          isDone
-            ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:border-emerald-300'
-            : hasProgress
-            ? 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300'
-            : isRollup
+          isRollup
             ? 'border-[#4648d4]/20 bg-[#4648d4]/5 text-[#4648d4]/70 hover:border-[#4648d4]/40'
             : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-[#4648d4]/30 hover:bg-[#4648d4]/5 hover:text-[#4648d4]'
         }`}
       >
         <Clock size={9} className="shrink-0" />
-        {isRollup && !isDone && <span className="text-[8px] opacity-50 font-bold">Σ</span>}
-
-        {isDone ? (
-          <span className="flex items-center gap-1">
-            <Check size={9} />
-            <span>{formatTaskTime(minutes)}</span>
-          </span>
-        ) : hasProgress ? (
-          <span className="flex items-center gap-1">
-            <span className="font-semibold">{formatTaskTime(remainingMinutes)}</span>
-            <span className="text-[9px] opacity-40">/</span>
-            <span className="text-[9px] opacity-50">{formatTaskTime(minutes)}</span>
-          </span>
-        ) : (
-          <span>{formatTaskTime(minutes)}</span>
+        {isRollup && (
+          <span className="text-[8px] opacity-50 font-bold">{hasOverhead ? '+' : 'Σ'}</span>
         )}
+
+        <span>{formatTaskTime(minutes)}</span>
       </button>
-      {conflict && !isDone && (
-        <span title="Own estimate differs from children's sum" className="cursor-help text-amber-400 text-[11px] leading-none">⚠</span>
-      )}
     </span>
   );
 }
@@ -345,6 +430,7 @@ function TaskTreeRow({
   onOpenFocus,
   onUpdateDeadline,
   onUpdateTime,
+  onUpdateActualTime,
 }: {
   task: DBTask;
   allTasks: DBTask[];
@@ -361,6 +447,7 @@ function TaskTreeRow({
   onOpenFocus: (taskId: string) => void;
   onUpdateDeadline: (taskId: string, date: string | null) => void;
   onUpdateTime: (taskId: string, minutes: number | null) => void;
+  onUpdateActualTime: (taskId: string, minutes: number | null) => void;
 }) {
   const children = childrenByParent[task.id] ?? [];
   const resources = taskResources[task.id] ?? [];
@@ -391,8 +478,9 @@ function TaskTreeRow({
     if (!title) return;
     await onAddSubtask(task.id, title);
     setChildTitle('');
-    setAddingChild(false);
     setExpanded(true);
+    // Stay open for rapid entry — Escape closes
+    setTimeout(() => childRef.current?.focus(), 0);
   };
 
   return (
@@ -422,7 +510,7 @@ function TaskTreeRow({
         )}
 
         {/* Deadline + time — visible when set; shown on hover when empty */}
-        <div className={`flex items-center gap-1 shrink-0 ${!task.due_date && getTaskEstimatedMinutes(task) === null ? 'opacity-0 group-hover/sub:opacity-100' : ''} transition-opacity`}>
+        <div className={`flex items-center gap-1 shrink-0 ${!task.due_date && getTaskEstimatedMinutes(task) === null && !task.actual_minutes ? 'opacity-0 group-hover/sub:opacity-100' : ''} transition-opacity`}>
           <DeadlinePill
             value={task.due_date}
             onSave={d => onUpdateDeadline(task.id, d)}
@@ -432,6 +520,13 @@ function TaskTreeRow({
             allTasks={allTasks}
             onSave={m => onUpdateTime(task.id, m)}
           />
+          {task.completed && task.actual_minutes != null && (
+            <ActualTimeChip
+              minutes={task.actual_minutes}
+              estimatedMinutes={task.estimated_minutes}
+              onSave={m => onUpdateActualTime(task.id, m)}
+            />
+          )}
         </div>
 
         <div className="flex items-center gap-1 opacity-0 group-hover/sub:opacity-100 transition-opacity shrink-0">
@@ -527,8 +622,11 @@ function TaskTreeRow({
               ref={childRef}
               value={childTitle}
               onChange={e => setChildTitle(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') submitChild(); if (e.key === 'Escape') { setAddingChild(false); setChildTitle(''); } }}
-              placeholder="Child task title..."
+              onKeyDown={e => {
+                if (e.key === 'Enter') submitChild();
+                if (e.key === 'Escape') { setAddingChild(false); setChildTitle(''); }
+              }}
+              placeholder="Child task… (Enter to add, Esc to finish)"
               className="flex-1 bg-white border border-gray-200 rounded-lg px-2.5 py-1 text-[11px] text-gray-700 focus:outline-none focus:border-[#4648d4] transition-all"
             />
             <button onClick={submitChild} className="bg-[#4648d4] text-white rounded-lg px-2 py-1 hover:opacity-90 transition-colors">
@@ -564,6 +662,7 @@ function TaskTreeRow({
                 onOpenFocus={onOpenFocus}
                 onUpdateDeadline={onUpdateDeadline}
                 onUpdateTime={onUpdateTime}
+                onUpdateActualTime={onUpdateActualTime}
               />
             ))}
           </motion.div>
@@ -591,6 +690,7 @@ function MilestoneCard({
   onOpenFocus,
   onUpdateDeadline,
   onUpdateTime,
+  onUpdateActualTime,
 }: {
   milestone: DBTask;
   allTasks: DBTask[];
@@ -608,6 +708,7 @@ function MilestoneCard({
   onOpenFocus: (taskId: string) => void;
   onUpdateDeadline: (taskId: string, date: string | null) => void;
   onUpdateTime: (taskId: string, minutes: number | null) => void;
+  onUpdateActualTime: (taskId: string, minutes: number | null) => void;
 }) {
   const subtasks = subtasksByParent[milestone.id] ?? [];
   const [expanded, setExpanded] = useState(milestone.critical_path_status === 'In Progress');
@@ -631,8 +732,9 @@ function MilestoneCard({
     if (!t) return;
     await onAddSubtask(milestone.id, t);
     setAddInput('');
-    setChips([]);
-    setAdding(false);
+    // Stay open for rapid entry — Escape closes. Refresh suggestions with new task included.
+    setChips(generateSuggestions(goalTitle, category, milestone.title, '', [...subtasks.map(s => s.title), t]));
+    setTimeout(() => addRef.current?.focus(), 0);
   };
 
   // Refresh chips on mount
@@ -651,18 +753,17 @@ function MilestoneCard({
     'bg-gray-100 text-gray-400';
 
   return (
-    <div className="bg-white rounded-xl border border-gray-150 shadow-sm overflow-hidden">
-      {/* Milestone header */}
-      <div className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f8f9fa] transition-colors">
-        <button
-          onClick={() => setExpanded(v => !v)}
-          className="text-gray-400 hover:text-[#4648d4] transition-colors shrink-0"
-          title={expanded ? 'Collapse milestone' : 'Expand milestone'}
-        >
+    <div id={`ms-${milestone.id}`} className="bg-white rounded-xl border border-gray-150 shadow-sm overflow-hidden">
+      {/* Milestone header — full row is the expand/collapse target */}
+      <div
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f8f9fa] transition-colors cursor-pointer select-none"
+        onClick={() => setExpanded(v => !v)}
+      >
+        <span className="text-gray-400 hover:text-[#4648d4] transition-colors shrink-0">
           {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </button>
+        </span>
         <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotCls}`} />
-        <span className="flex-1 min-w-0">
+        <span className="flex-1 min-w-0" onClick={e => e.stopPropagation()}>
           <InlineTitle
             value={milestone.title}
             onSave={title => updateTask(milestone.id, { title })}
@@ -673,18 +774,22 @@ function MilestoneCard({
           {milestone.critical_path_status}
         </span>
         <span className="text-[10px] font-mono text-gray-400 shrink-0">{subtasks.length}</span>
-        <DeadlinePill
-          value={milestone.due_date}
-          label="milestone deadline"
-          onSave={d => onUpdateDeadline(milestone.id, d)}
-        />
-        <InlineTimePill
-          task={milestone}
-          allTasks={allTasks}
-          onSave={m => onUpdateTime(milestone.id, m)}
-        />
+        <span onClick={e => e.stopPropagation()}>
+          <DeadlinePill
+            value={milestone.due_date}
+            label="milestone deadline"
+            onSave={d => onUpdateDeadline(milestone.id, d)}
+          />
+        </span>
+        <span onClick={e => e.stopPropagation()}>
+          <InlineTimePill
+            task={milestone}
+            allTasks={allTasks}
+            onSave={m => onUpdateTime(milestone.id, m)}
+          />
+        </span>
         <button
-          onClick={() => onOpenFocus(milestone.id)}
+          onClick={e => { e.stopPropagation(); onOpenFocus(milestone.id); }}
           className="text-gray-300 hover:text-[#4648d4] transition-colors p-1 rounded"
           title="Open focus page"
         >
@@ -723,6 +828,7 @@ function MilestoneCard({
                       onOpenFocus={onOpenFocus}
                       onUpdateDeadline={onUpdateDeadline}
                       onUpdateTime={onUpdateTime}
+                      onUpdateActualTime={onUpdateActualTime}
                     />
                   ))}
                 </div>
@@ -738,14 +844,17 @@ function MilestoneCard({
                       ref={addRef}
                       value={addInput}
                       onChange={e => handleInputChange(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') { setAdding(false); setAddInput(''); setChips([]); } }}
-                      placeholder="Subtask title…"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleAdd();
+                        if (e.key === 'Escape') { setAdding(false); setAddInput(''); setChips([]); }
+                      }}
+                      placeholder="Subtask title… (Enter to add, Esc to finish)"
                       className="flex-1 bg-[#f8f9fa] border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-[#4648d4] transition-all"
                     />
                     <button onClick={() => handleAdd()} className="bg-[#4648d4] text-white rounded-lg px-2.5 py-1.5 hover:opacity-90 transition-colors">
                       <Plus size={12} />
                     </button>
-                    <button onClick={() => { setAdding(false); setAddInput(''); setChips([]); }} className="text-gray-300 hover:text-gray-500 transition-colors">
+                    <button onClick={() => { setAdding(false); setAddInput(''); setChips([]); }} className="text-gray-300 hover:text-gray-500 transition-colors" title="Done adding">
                       <X size={14} />
                     </button>
                   </div>
@@ -754,15 +863,132 @@ function MilestoneCard({
               ) : (
                 <button
                   onClick={() => { setAdding(true); setChips(generateSuggestions(goalTitle, category, milestone.title, '', subtasks.map(s => s.title))); }}
-                  className="flex items-center gap-1.5 text-[11px] font-mono text-gray-400 hover:text-[#4648d4] transition-colors"
+                  className="w-full flex items-center gap-2 rounded-lg border border-dashed border-gray-200 px-3 py-2 text-[11px] font-mono text-gray-300 hover:text-[#4648d4] hover:border-[#4648d4]/30 transition-all mt-1"
                 >
-                  <Plus size={11} /> Add subtask
+                  <Plus size={11} className="shrink-0" />
+                  <span>Add subtask</span>
+                  <kbd className="ml-auto text-[8px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded font-mono leading-tight">⏎ to keep adding</kbd>
                 </button>
               )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── Sortable task row wrapper (DnD handle) ───────────────────────────────────
+function SortableTaskRow(props: Parameters<typeof TaskTreeRow>[0]) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.task.id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
+      className="relative group/sortable"
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-5 p-0.5 text-gray-300 opacity-0 group-hover/sortable:opacity-100 transition-opacity cursor-grab active:cursor-grabbing hover:text-gray-500 touch-none"
+        tabIndex={-1}
+        title="Drag to reorder"
+      >
+        <GripVertical size={12} />
+      </button>
+      <TaskTreeRow {...props} />
+    </div>
+  );
+}
+
+// ─── Goal Time Panel ─────────────────────────────────────────────────────────
+function GoalTimePanel({ tasks }: { tasks: DBTask[] }) {
+  const stats = computeGoalTimeStats(tasks);
+  const { spentMinutes, adjustedRemainingMinutes, velocityRatio, velocityConfidence, totalEstimatedMinutes } = stats;
+
+  const projectedTotalMinutes =
+    adjustedRemainingMinutes !== null ? spentMinutes + adjustedRemainingMinutes :
+    totalEstimatedMinutes !== null    ? totalEstimatedMinutes :
+    null;
+
+  const spentPct = projectedTotalMinutes && projectedTotalMinutes > 0
+    ? Math.min(100, Math.round((spentMinutes / projectedTotalMinutes) * 100))
+    : 0;
+
+  if (stats.taskCount === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-1.5 mb-3">
+        <Clock size={12} className="text-[#4648d4]" />
+        <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-[#4648d4]">Time Intelligence</span>
+        {velocityConfidence !== 'none' && (
+          <span className="ml-auto font-mono text-[9px] text-gray-400 capitalize">{velocityConfidence} confidence</span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-3">
+        <div>
+          <p className="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Spent</p>
+          <p className="text-sm font-bold text-gray-900">{spentMinutes > 0 ? formatTaskTime(spentMinutes) : '—'}</p>
+          <p className="font-mono text-[9px] text-gray-400">{stats.completedWithActual} logged</p>
+        </div>
+        <div>
+          <p className="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Remaining</p>
+          <p className="text-sm font-bold text-gray-900">
+            {adjustedRemainingMinutes != null ? formatTaskTime(adjustedRemainingMinutes) : '—'}
+          </p>
+          {velocityRatio !== null && adjustedRemainingMinutes !== stats.estimatedRemainingMinutes && (
+            <p className="font-mono text-[9px] text-gray-400">adjusted</p>
+          )}
+          {adjustedRemainingMinutes === stats.estimatedRemainingMinutes && stats.estimatedRemainingMinutes !== null && (
+            <p className="font-mono text-[9px] text-gray-400">estimated</p>
+          )}
+        </div>
+        <div>
+          <p className="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Velocity</p>
+          {velocityRatio !== null ? (
+            <>
+              <p className={`text-sm font-bold ${velocityColor(velocityRatio)}`}>{velocityRatio.toFixed(2)}×</p>
+              <p className={`font-mono text-[9px] ${velocityColor(velocityRatio)}`}>{formatVelocity(velocityRatio)}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-bold text-gray-300">—</p>
+              <p className="font-mono text-[9px] text-gray-300">complete tasks to see</p>
+            </>
+          )}
+        </div>
+        <div>
+          <p className="font-mono text-[9px] uppercase tracking-widest text-gray-400 mb-0.5">Est. Total</p>
+          <p className="text-sm font-bold text-gray-900">
+            {projectedTotalMinutes != null ? formatTaskTime(projectedTotalMinutes) : '—'}
+          </p>
+          <p className="font-mono text-[9px] text-gray-400">
+            {stats.tasksWithEstimate}/{stats.taskCount} tasks timed
+          </p>
+        </div>
+      </div>
+
+      {projectedTotalMinutes != null && projectedTotalMinutes > 0 && (
+        <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden mb-2">
+          <div
+            className="h-full rounded-full bg-[#4648d4] transition-all duration-700"
+            style={{ width: `${spentPct}%` }}
+          />
+        </div>
+      )}
+
+      {(() => {
+        const finishDate = projectedFinishDate(stats);
+        if (!finishDate) return null;
+        return (
+          <p className="font-mono text-[10px] text-gray-400 flex items-center gap-1.5">
+            <span>At your pace:</span>
+            <span className="font-bold text-gray-700">done by {formatProjectedDate(finishDate)}</span>
+          </p>
+        );
+      })()}
     </div>
   );
 }
@@ -783,10 +1009,32 @@ export function GoalDetail() {
 
   const [editingGoalTitle, setEditingGoalTitle] = useState(false);
   const [goalTitleVal, setGoalTitleVal] = useState('');
+  const [pendingComplete, setPendingComplete] = useState<DBTask | null>(null);
+  const [quickTaskTitle, setQuickTaskTitle] = useState('');
+  const [quickTaskTime, setQuickTaskTime] = useState('');
+  const [showTimeField, setShowTimeField] = useState(false);
+  const [showProgressTree, setShowProgressTree] = useState(false);
   const goalTitleRef = useRef<HTMLInputElement>(null);
   const goalFileInputRef = useRef<HTMLInputElement>(null);
+  const quickTaskRef = useRef<HTMLInputElement>(null);
+  const quickTimeRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (editingGoalTitle) goalTitleRef.current?.focus(); }, [editingGoalTitle]);
+
+  // Global N shortcut: jump to quick-add when not typing in an input
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'n' && e.key !== 'N') return;
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      quickTaskRef.current?.focus();
+      quickTaskRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const { data: goal } = useGoal(selectedGoalId);
   const { data: allTasks = [] } = useGoalTasks(selectedGoalId);
@@ -804,11 +1052,17 @@ export function GoalDetail() {
 
   const groupedResources = { goalResources: goalResourceList, taskResources: taskResourceMap };
 
+  const invalidate = useInvalidate();
+
+  // ── DnD sensors must be called before any conditional return (Rules of Hooks) ──
+  const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
   if (!goal) return null;
 
   // Derive tree
-  const milestones = allTasks.filter(t => t.kind === 'critical_path' && !t.parent_task_id);
-  const aiTasks    = allTasks.filter(t => t.kind === 'ai_generated');
+  const milestones  = allTasks.filter(t => t.kind === 'critical_path' && !t.parent_task_id);
+  const manualTasks = allTasks.filter(t => t.kind === 'manual' && !t.parent_task_id);
+  const aiTasks     = allTasks.filter(t => t.kind === 'ai_generated' && !t.parent_task_id);
   const subtasksByParent: Record<string, DBTask[]> = {};
   allTasks.filter(t => t.parent_task_id).forEach(t => {
     subtasksByParent[t.parent_task_id!] = [...(subtasksByParent[t.parent_task_id!] ?? []), t];
@@ -829,7 +1083,12 @@ export function GoalDetail() {
 
   // ── Subtask actions ──
   const handleToggleSubtask = async (task: DBTask) => {
-    await toggleTask(task.id);
+    if (!task.completed) {
+      setPendingComplete(task);
+    } else {
+      await toggleTask(task.id);
+      invalidate.tasks(selectedGoalId ?? undefined);
+    }
   };
 
   const handleDeleteSubtask = (task: DBTask) => {
@@ -849,6 +1108,21 @@ export function GoalDetail() {
 
   const handleUpdateTime = async (taskId: string, minutes: number | null) => {
     await updateTask(taskId, { estimated_minutes: minutes });
+  };
+
+  const handleUpdateActualTime = async (taskId: string, minutes: number | null) => {
+    await updateTask(taskId, { actual_minutes: minutes });
+  };
+
+  const handleManualTaskDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const ids = manualTasks.map(t => t.id);
+    const changed = reorderPositions(ids, String(active.id), String(over.id));
+    if (Object.keys(changed).length === 0) return;
+    await Promise.all(
+      Object.entries(changed).map(([id, pos]) => updateTask(id, { position: pos }))
+    );
   };
 
   const handleAddSubtask = async (milestoneId: string, title: string) => {
@@ -872,6 +1146,35 @@ export function GoalDetail() {
       position: pos,
     });
     triggerToast('Subtask added.', 'success');
+  };
+
+  const handleQuickAddTask = async () => {
+    const title = quickTaskTitle.trim();
+    if (!title) return;
+    const estimatedMinutes = quickTaskTime.trim()
+      ? parseTaskTimeInput(quickTaskTime.trim())
+      : null;
+    await createTask({
+      goal_id: goal.id,
+      parent_task_id: null,
+      title,
+      description: '',
+      status: 'todo',
+      priority: 'medium',
+      kind: 'manual',
+      critical_path_status: null,
+      tags_json: '[]',
+      due_date: null,
+      estimated_duration: null,
+      estimated_minutes: estimatedMinutes,
+      completed: false,
+      position: manualTasks.length,
+    });
+    setQuickTaskTitle('');
+    setQuickTaskTime('');
+    setShowTimeField(false);
+    quickTaskRef.current?.focus();
+    triggerToast('Task added.', 'success');
   };
 
   const handleAttachResource = async (
@@ -920,6 +1223,7 @@ export function GoalDetail() {
   // ── AI task toggle ──
   const handleToggleAiTask = async (task: DBTask) => {
     await toggleTask(task.id);
+    invalidate.tasks(selectedGoalId ?? undefined);
   };
 
   // ── Goal-level resource drop ──
@@ -984,18 +1288,31 @@ export function GoalDetail() {
             </h1>
           )}
 
-          <p className="text-xs text-gray-400 mt-2">
+          <p className="text-xs text-gray-400 mt-2 flex items-center gap-1 flex-wrap">
             {milestones.length} milestone{milestones.length !== 1 ? 's' : ''}
             {' · '}
             {allTasks.filter(t => t.parent_task_id).length} subtask{allTasks.filter(t => t.parent_task_id).length !== 1 ? 's' : ''}
             {' · '}
-            {taskMetrics.completedTasks}/{taskMetrics.totalTasks} done
-            {taskMetrics.usesExplicitWeights && (
-              <>
-                {' / '}
-                weighted progress
-              </>
-            )}
+            <span
+              className="relative cursor-default"
+              onMouseEnter={() => setShowProgressTree(true)}
+              onMouseLeave={() => setShowProgressTree(false)}
+            >
+              <span className="underline decoration-dotted underline-offset-2">
+                {taskMetrics.completedTasks}/{taskMetrics.totalTasks} tasks done
+              </span>
+              {taskMetrics.usesExplicitWeights && ' / weighted progress'}
+              {showProgressTree && (
+                <div className="absolute z-50 bottom-full left-0 mb-2 bg-gray-950 border border-gray-800 rounded-xl p-3 shadow-2xl min-w-[220px]">
+                  <p className="text-[8px] font-bold text-gray-600 uppercase tracking-widest mb-2">Task Tree</p>
+                  <TaskProgressTree tasks={allTasks} />
+                  <div className="border-t border-gray-800 mt-2 pt-2 flex items-center justify-between">
+                    <span className="text-[8px] text-gray-600">{taskMetrics.completedTasks} explicitly done</span>
+                    <span className="text-[8px] font-mono text-gray-500">{taskMetrics.progress}% by time</span>
+                  </div>
+                </div>
+              )}
+            </span>
           </p>
         </div>
 
@@ -1029,6 +1346,67 @@ export function GoalDetail() {
       </header>
 
       <div className="space-y-8">
+        {/* ── Time Intelligence ── */}
+        <GoalTimePanel tasks={allTasks} />
+
+        {/* ── Quick Add Task ── */}
+        <section>
+          <div className="flex gap-2">
+            <input
+              ref={quickTaskRef}
+              value={quickTaskTitle}
+              onChange={e => setQuickTaskTitle(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { handleQuickAddTask(); return; }
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  setShowTimeField(true);
+                  setTimeout(() => quickTimeRef.current?.focus(), 0);
+                }
+              }}
+              placeholder="Add a task… (Tab to add time)"
+              className="flex-1 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-800 outline-none focus:border-[#4648d4] focus:ring-2 focus:ring-[#4648d4]/10 transition-all placeholder:text-gray-300"
+            />
+            <AnimatePresence>
+              {showTimeField && (
+                <motion.input
+                  ref={quickTimeRef}
+                  key="time-field"
+                  initial={{ width: 0, opacity: 0 }}
+                  animate={{ width: 96, opacity: 1 }}
+                  exit={{ width: 0, opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                  value={quickTaskTime}
+                  onChange={e => setQuickTaskTime(e.target.value.replace(/[^\d.hm\s]/gi, ''))}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { handleQuickAddTask(); return; }
+                    if (e.key === 'Escape') { setShowTimeField(false); setQuickTaskTime(''); quickTaskRef.current?.focus(); }
+                    if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); quickTaskRef.current?.focus(); }
+                  }}
+                  placeholder="e.g. 2h"
+                  className="rounded-xl border border-[#4648d4]/30 bg-[#EEF2FF] px-3 py-2.5 text-sm text-[#4648d4] outline-none focus:border-[#4648d4] focus:ring-2 focus:ring-[#4648d4]/10 transition-all placeholder:text-[#4648d4]/30 font-mono"
+                  style={{ minWidth: 0 }}
+                />
+              )}
+            </AnimatePresence>
+            <button
+              onClick={handleQuickAddTask}
+              disabled={!quickTaskTitle.trim()}
+              className="flex items-center gap-1.5 rounded-xl bg-[#4648d4] px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              <Plus size={13} />
+              Add Task
+            </button>
+          </div>
+          {!showTimeField && (
+            <p className="mt-1.5 font-mono text-[9px] text-gray-300 pl-1">
+              Press <kbd className="bg-gray-100 text-gray-500 px-1 py-px rounded text-[8px]">N</kbd> from anywhere to jump here
+              {' · '}
+              <kbd className="bg-gray-100 text-gray-500 px-1 py-px rounded text-[8px]">Tab</kbd> to add time estimate
+            </p>
+          )}
+        </section>
+
         {goal.archived_at && (
           <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
@@ -1046,12 +1424,71 @@ export function GoalDetail() {
           </section>
         )}
 
+        {/* ── Tasks (manual) ── */}
+        {manualTasks.length > 0 && (
+          <section>
+            <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-4">
+              <CheckSquare size={15} className="text-black" />
+              Tasks
+              <span className="font-mono text-[10px] text-gray-400 font-normal">
+                {manualTasks.filter(t => t.completed).length}/{manualTasks.length}
+              </span>
+            </h2>
+            <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleManualTaskDragEnd}>
+              <SortableContext items={manualTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-0.5 pl-5">
+                  {manualTasks.map(task => (
+                    <SortableTaskRow
+                      key={task.id}
+                      task={task}
+                      allTasks={allTasks}
+                      childrenByParent={subtasksByParent}
+                      taskResources={groupedResources.taskResources}
+                      onToggleSubtask={handleToggleSubtask}
+                      onDeleteSubtask={handleDeleteSubtask}
+                      onUpdateSubtaskTitle={handleUpdateSubtaskTitle}
+                      onAddSubtask={handleAddSubtask}
+                      onAttachResource={handleAttachResource}
+                      onAttachFiles={handleAttachFiles}
+                      onDeleteResource={handleDeleteResource}
+                      onOpenFocus={setFocusedTaskId}
+                      onUpdateDeadline={handleUpdateDeadline}
+                      onUpdateTime={handleUpdateTime}
+                      onUpdateActualTime={handleUpdateActualTime}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          </section>
+        )}
+
         {/* ── Critical Path ── */}
+        {milestones.length > 0 && (
         <section>
-          <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-4">
+          <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-3">
             <Target size={15} className="text-black" />
             Critical Path
           </h2>
+
+          {/* Jump bar — shown when there are 2+ milestones */}
+          {milestones.length > 1 && (
+            <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+              {milestones.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => document.getElementById(`ms-${m.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+                  className={`shrink-0 font-mono text-[9px] uppercase tracking-wide px-2.5 py-1 rounded-full border transition-colors ${
+                    m.critical_path_status === 'Completed'   ? 'border-emerald-200 bg-emerald-50 text-[#10B981]' :
+                    m.critical_path_status === 'In Progress' ? 'border-[#4648d4]/20 bg-[#4648d4]/5 text-[#4648d4]' :
+                    'border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600'
+                  }`}
+                >
+                  {m.title.length > 22 ? m.title.slice(0, 21) + '…' : m.title}
+                </button>
+              ))}
+            </div>
+          )}
 
           {milestones.length === 0 ? (
             <div className="text-center py-8 text-xs text-gray-400 italic border-2 border-dashed border-gray-200 rounded-xl">
@@ -1078,11 +1515,13 @@ export function GoalDetail() {
                   onOpenFocus={setFocusedTaskId}
                   onUpdateDeadline={handleUpdateDeadline}
                   onUpdateTime={handleUpdateTime}
+                  onUpdateActualTime={handleUpdateActualTime}
                 />
               ))}
             </div>
           )}
         </section>
+        )}
 
         {/* ── AI Micro-tasks ── */}
         {aiTasks.length > 0 && (
@@ -1187,6 +1626,28 @@ export function GoalDetail() {
           )}
         </section>
       </div>
+
+      <AnimatePresence>
+        {pendingComplete && (
+          <ActualTimeModal
+            key="actual-time"
+            taskTitle={pendingComplete.title}
+            estimatedMinutes={pendingComplete.estimated_minutes}
+            onLog={async (minutes) => {
+              await updateTask(pendingComplete.id, { actual_minutes: minutes });
+              await toggleTask(pendingComplete.id);
+              invalidate.tasks(selectedGoalId ?? undefined);
+              setPendingComplete(null);
+              triggerToast('Time logged.', 'success');
+            }}
+            onSkip={async () => {
+              await toggleTask(pendingComplete.id);
+              invalidate.tasks(selectedGoalId ?? undefined);
+              setPendingComplete(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
