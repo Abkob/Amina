@@ -81,22 +81,113 @@ function DetailRing({ progress, status }: { progress: number; status: 'Safe' | '
   );
 }
 
-// ─── Suggestion chips ──────────────────────────────────────────────────────────
-function SuggestionChips({ chips, onPick }: { chips: string[]; onPick: (s: string) => void }) {
-  if (chips.length === 0) return null;
+// ─── Ghost task row ───────────────────────────────────────────────────────────
+// Always-visible click-to-type entry. Enter adds and stays open (rapid entry).
+// Esc or blur-when-empty dismisses back to ghost state.
+function GhostTaskRow({
+  onAdd,
+  placeholder = 'Add a task…',
+  getSuggestions,
+  indent = false,
+}: {
+  onAdd: (title: string) => Promise<void>;
+  placeholder?: string;
+  getSuggestions?: (input: string) => string[];
+  indent?: boolean;
+}) {
+  const [active, setActive] = useState(false);
+  const [value, setValue] = useState('');
+  const [chips, setChips] = useState<string[]>([]);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (active) {
+      ref.current?.focus();
+      if (getSuggestions) setChips(getSuggestions(''));
+    }
+  }, [active]);
+
+  const submit = async () => {
+    const title = value.trim();
+    if (!title) return;
+    await onAdd(title);
+    setValue('');
+    if (getSuggestions) setChips(getSuggestions(''));
+    setTimeout(() => ref.current?.focus(), 0);
+  };
+
+  const handleChange = (val: string) => {
+    setValue(val);
+    if (getSuggestions) setChips(getSuggestions(val));
+  };
+
+  const indentCls = indent ? 'ml-4' : '';
+
+  if (!active) {
+    return (
+      <button
+        onClick={() => setActive(true)}
+        className={`w-full flex items-center gap-2 rounded-lg px-1 py-1.5 text-gray-200 hover:text-gray-400 hover:bg-gray-50 cursor-text transition-colors group/ghost ${indentCls}`}
+      >
+        <span className="w-[13px] shrink-0" />
+        <Plus size={12} className="shrink-0 opacity-0 group-hover/ghost:opacity-50 transition-opacity" />
+        <span className="text-[11px] font-medium">{placeholder}</span>
+      </button>
+    );
+  }
+
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2">
-      <NeedsImplementationBadge />
-      {chips.map(chip => (
+    <div className={`space-y-1.5 py-0.5 ${indentCls}`}>
+      <div className="flex items-center gap-2 rounded-lg px-1 py-1 bg-[#f8f9fa] ring-1 ring-[#4648d4]/20">
+        <span className="w-[13px] shrink-0" />
+        <Square size={13} className="text-gray-200 shrink-0" />
+        <input
+          ref={ref}
+          value={value}
+          onChange={e => handleChange(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') submit();
+            if (e.key === 'Escape') { setActive(false); setValue(''); setChips([]); }
+          }}
+          onBlur={() => { if (!value.trim()) { setActive(false); setChips([]); } }}
+          placeholder="Task title… (⏎ add · Esc finish)"
+          className="flex-1 bg-transparent text-[11px] text-gray-700 font-medium outline-none placeholder:text-gray-300"
+        />
         <button
-          key={chip}
-          onClick={() => onPick(chip)}
-          className="flex items-center gap-1 text-[10px] font-mono bg-[#EEF2FF] hover:bg-[#dde3ff] text-[#4648d4] px-2 py-0.5 rounded-full border border-[#4648d4]/20 transition-colors"
+          onMouseDown={e => { e.preventDefault(); submit(); }}
+          className="text-[#4648d4] shrink-0 p-0.5 rounded hover:bg-[#4648d4]/10 transition-colors"
+          title="Add (Enter)"
         >
-          <Sparkles size={8} />
-          {chip}
+          <Plus size={12} />
         </button>
-      ))}
+        <button
+          onMouseDown={e => { e.preventDefault(); setActive(false); setValue(''); setChips([]); }}
+          className="text-gray-300 hover:text-gray-500 shrink-0 p-0.5 rounded transition-colors"
+          title="Cancel (Esc)"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      {chips.length > 0 && (
+        <div className="pl-7 flex flex-wrap gap-1">
+          {chips.slice(0, 5).map(chip => (
+            <button
+              key={chip}
+              onMouseDown={e => {
+                e.preventDefault();
+                onAdd(chip).then(() => {
+                  if (getSuggestions) setChips(getSuggestions(''));
+                  setTimeout(() => ref.current?.focus(), 0);
+                });
+              }}
+              className="flex items-center gap-1 text-[9px] font-mono text-[#4648d4]/70 bg-[#EEF2FF] hover:bg-[#4648d4]/15 px-2 py-0.5 rounded-full transition-colors"
+            >
+              <Sparkles size={8} />
+              {chip.length > 28 ? chip.slice(0, 27) + '…' : chip}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -452,16 +543,12 @@ function TaskTreeRow({
   const children = childrenByParent[task.id] ?? [];
   const resources = taskResources[task.id] ?? [];
   const [expanded, setExpanded] = useState(depth === 0);
-  const [addingChild, setAddingChild] = useState(false);
-  const [childTitle, setChildTitle] = useState('');
   const [showResourceInput, setShowResourceInput] = useState(false);
   const [resourceInput, setResourceInput] = useState('');
   const resRef = useRef<HTMLInputElement>(null);
-  const childRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (showResourceInput) resRef.current?.focus(); }, [showResourceInput]);
-  useEffect(() => { if (addingChild) childRef.current?.focus(); }, [addingChild]);
 
   const submitResource = () => {
     const val = resourceInput.trim();
@@ -473,23 +560,13 @@ function TaskTreeRow({
     setShowResourceInput(false);
   };
 
-  const submitChild = async () => {
-    const title = childTitle.trim();
-    if (!title) return;
-    await onAddSubtask(task.id, title);
-    setChildTitle('');
-    setExpanded(true);
-    // Stay open for rapid entry — Escape closes
-    setTimeout(() => childRef.current?.focus(), 0);
-  };
-
   return (
     <div className="group/sub flex flex-col gap-1 py-1.5">
       <div className="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
         <button
           onClick={() => setExpanded(v => !v)}
-          className={`text-gray-300 hover:text-[#4648d4] shrink-0 transition-colors ${children.length === 0 ? 'invisible' : ''}`}
-          title={expanded ? 'Collapse child tasks' : 'Expand child tasks'}
+          className={`shrink-0 transition-colors ${children.length === 0 ? 'text-gray-200 hover:text-gray-300' : 'text-gray-300 hover:text-[#4648d4]'}`}
+          title={expanded ? 'Collapse' : children.length === 0 ? 'Expand to add child tasks' : 'Expand child tasks'}
         >
           {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
@@ -538,9 +615,9 @@ function TaskTreeRow({
             <FileText size={11} />
           </button>
           <button
-            onClick={() => { setAddingChild(v => !v); setExpanded(true); }}
+            onClick={() => setExpanded(true)}
             className="text-gray-300 hover:text-[#4648d4] transition-colors p-0.5 rounded"
-            title="Add child task"
+            title="Expand to add child tasks"
           >
             <Plus size={11} />
           </button>
@@ -610,34 +687,8 @@ function TaskTreeRow({
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {addingChild && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="ml-6 flex gap-2 overflow-hidden"
-          >
-            <input
-              ref={childRef}
-              value={childTitle}
-              onChange={e => setChildTitle(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') submitChild();
-                if (e.key === 'Escape') { setAddingChild(false); setChildTitle(''); }
-              }}
-              placeholder="Child task… (Enter to add, Esc to finish)"
-              className="flex-1 bg-white border border-gray-200 rounded-lg px-2.5 py-1 text-[11px] text-gray-700 focus:outline-none focus:border-[#4648d4] transition-all"
-            />
-            <button onClick={submitChild} className="bg-[#4648d4] text-white rounded-lg px-2 py-1 hover:opacity-90 transition-colors">
-              <Check size={11} />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       <AnimatePresence initial={false}>
-        {expanded && children.length > 0 && (
+        {expanded && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
@@ -665,6 +716,10 @@ function TaskTreeRow({
                 onUpdateActualTime={onUpdateActualTime}
               />
             ))}
+            <GhostTaskRow
+              onAdd={title => onAddSubtask(task.id, title)}
+              placeholder="Add child task…"
+            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -712,35 +767,6 @@ function MilestoneCard({
 }) {
   const subtasks = subtasksByParent[milestone.id] ?? [];
   const [expanded, setExpanded] = useState(milestone.critical_path_status === 'In Progress');
-  const [addInput, setAddInput] = useState('');
-  const [chips, setChips] = useState<string[]>([]);
-  const [adding, setAdding] = useState(false);
-  const addRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (adding) addRef.current?.focus();
-  }, [adding]);
-
-  const handleInputChange = (val: string) => {
-    setAddInput(val);
-    const existing = subtasks.map(s => s.title);
-    setChips(generateSuggestions(goalTitle, category, milestone.title, val, existing));
-  };
-
-  const handleAdd = async (text?: string) => {
-    const t = (text ?? addInput).trim();
-    if (!t) return;
-    await onAddSubtask(milestone.id, t);
-    setAddInput('');
-    // Stay open for rapid entry — Escape closes. Refresh suggestions with new task included.
-    setChips(generateSuggestions(goalTitle, category, milestone.title, '', [...subtasks.map(s => s.title), t]));
-    setTimeout(() => addRef.current?.focus(), 0);
-  };
-
-  // Refresh chips on mount
-  useEffect(() => {
-    setChips(generateSuggestions(goalTitle, category, milestone.title, '', subtasks.map(s => s.title)));
-  }, [subtasks.length]);
 
   const dotCls =
     milestone.critical_path_status === 'Completed'   ? 'bg-[#10B981]' :
@@ -837,39 +863,11 @@ function MilestoneCard({
               )}
 
               {/* Add subtask */}
-              {adding ? (
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <input
-                      ref={addRef}
-                      value={addInput}
-                      onChange={e => handleInputChange(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') handleAdd();
-                        if (e.key === 'Escape') { setAdding(false); setAddInput(''); setChips([]); }
-                      }}
-                      placeholder="Subtask title… (Enter to add, Esc to finish)"
-                      className="flex-1 bg-[#f8f9fa] border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-[#4648d4] transition-all"
-                    />
-                    <button onClick={() => handleAdd()} className="bg-[#4648d4] text-white rounded-lg px-2.5 py-1.5 hover:opacity-90 transition-colors">
-                      <Plus size={12} />
-                    </button>
-                    <button onClick={() => { setAdding(false); setAddInput(''); setChips([]); }} className="text-gray-300 hover:text-gray-500 transition-colors" title="Done adding">
-                      <X size={14} />
-                    </button>
-                  </div>
-                  <SuggestionChips chips={chips} onPick={text => handleAdd(text)} />
-                </div>
-              ) : (
-                <button
-                  onClick={() => { setAdding(true); setChips(generateSuggestions(goalTitle, category, milestone.title, '', subtasks.map(s => s.title))); }}
-                  className="w-full flex items-center gap-2 rounded-lg border border-dashed border-gray-200 px-3 py-2 text-[11px] font-mono text-gray-300 hover:text-[#4648d4] hover:border-[#4648d4]/30 transition-all mt-1"
-                >
-                  <Plus size={11} className="shrink-0" />
-                  <span>Add subtask</span>
-                  <kbd className="ml-auto text-[8px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded font-mono leading-tight">⏎ to keep adding</kbd>
-                </button>
-              )}
+              <GhostTaskRow
+                onAdd={title => onAddSubtask(milestone.id, title)}
+                placeholder="Add a task…"
+                getSuggestions={input => generateSuggestions(goalTitle, category, milestone.title, input, subtasks.map(s => s.title))}
+              />
             </div>
           </motion.div>
         )}
