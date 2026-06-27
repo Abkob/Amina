@@ -34,7 +34,7 @@ export interface DBGoal {
 }
 
 // ─── Tasks (with subtask hierarchy) ─────────────────────────────────────────
-export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'blocked';
+export type TaskStatus = 'todo' | 'in_progress' | 'inactive' | 'done' | 'blocked';
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type TaskKind = 'next_action' | 'critical_path' | 'ai_generated' | 'manual';
 export type CriticalPathStatus = 'Completed' | 'In Progress' | 'Future';
@@ -57,6 +57,8 @@ export interface DBTask {
   weight_percent?: number | null;      // optional explicit progress weight, 0-100
   completed: boolean;
   position: number;                    // ordering within sibling tasks
+  last_activity_at?: string | null;
+  completion_note?: string;
   created_at: string;
   updated_at: string;
 }
@@ -101,7 +103,8 @@ export interface DBNote {
 }
 
 // ─── Resources ───────────────────────────────────────────────────────────────
-export type ResourceType = 'figma' | 'document' | 'link' | 'other';
+export type ResourceType      = 'figma' | 'document' | 'link' | 'paper' | 'person' | 'dataset' | 'concept' | 'other';
+export type ResourceReadState = 'Unread' | 'Reading' | 'Done' | 'Shelved';
 
 export interface DBResource {
   id: string;
@@ -109,7 +112,33 @@ export interface DBResource {
   url: string | null;
   type: ResourceType;
   info: string;
+  read_state: ResourceReadState;
+  next_action: string;
+  tags_json: string;   // JSON: string[]
   created_at: string;
+}
+
+export interface DBResourceMention {
+  id: string;          // edge id
+  resource_id: string;
+  source_id: string;
+  source_type: string; // 'note' | 'task' | 'braindump' | 'goal'
+  created_at: string;
+}
+
+export interface ResourceLog {
+  id: string;
+  resource_id: string;
+  content: string;
+  is_insight: number;  // 0 = progress note, 1 = key insight
+  created_at: string;
+}
+
+export interface ResourceStats {
+  total_minutes: number;
+  reference_count: number;
+  goals_count: number;
+  last_engaged: string | null;
 }
 
 // ─── Calendar Events ─────────────────────────────────────────────────────────

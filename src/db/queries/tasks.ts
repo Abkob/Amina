@@ -58,6 +58,23 @@ export async function toggleTask(taskId: string): Promise<{ completed: boolean; 
   return r.json();
 }
 
+export async function completeTask(taskId: string, completionNote: string): Promise<{ metrics?: GoalTaskMetrics }> {
+  const r = await fetch(`${API}/tasks/${taskId}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ completion_note: completionNote }),
+  });
+  return r.json();
+}
+
+export async function touchTask(taskId: string): Promise<void> {
+  await fetch(`${API}/tasks/${taskId}/touch`, { method: 'POST' });
+}
+
+export async function deactivateTask(taskId: string): Promise<void> {
+  await fetch(`${API}/tasks/${taskId}/deactivate`, { method: 'POST' });
+}
+
 export async function updateTask(
   taskId: string,
   updates: Partial<Omit<DBTask, 'id' | 'created_at'>>

@@ -12,7 +12,7 @@ const NAV: { id: Tab; label: string; Icon: React.ElementType }[] = [
 ];
 
 export function Sidebar() {
-  const { currentTab, setCurrentTab, openNewGoalModal, openNewNoteModal, openNewEventModal, triggerToast, showConfirm } = useAppStore();
+  const { currentTab, setCurrentTab, setFocusedResourceId, openNewGoalModal, openNewNoteModal, openNewEventModal, triggerToast, showConfirm } = useAppStore();
 
   const handleNew = () => {
     if (currentTab === 'Goals') openNewGoalModal();
@@ -53,7 +53,7 @@ export function Sidebar() {
         {NAV.map(({ id, label, Icon }) => (
           <button
             key={id}
-            onClick={() => setCurrentTab(id)}
+            onClick={() => { if (id === 'Resources') setFocusedResourceId(null); setCurrentTab(id); }}
             className={`flex items-center gap-3 px-3 py-2.5 text-xs font-mono uppercase tracking-wider rounded-lg transition-all duration-150 ${
               currentTab === id
                 ? 'text-white bg-gray-800 font-bold border-l-4 border-[#6063ee]'

@@ -95,7 +95,9 @@ function GraphLoader({
     });
 
     loadGraph(graph);
-  }, [goalId, tasks.length]);
+  // Re-layout whenever any task's identity, completion, status, or milestone state changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goalId, tasks.map(t => `${t.id}:${t.completed}:${t.status}:${t.critical_path_status}`).join('|')]);
 
   return null;
 }

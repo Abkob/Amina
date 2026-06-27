@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus, AlertCircle, Clock } from 'lucide-react';
+import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus, AlertCircle, Clock, Trash2, Milestone } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { ProgressRing } from '../components/ProgressRing';
 import { useGoals } from '../api/hooks';
-import { archiveGoal, restoreGoal } from '../db/queries/goals';
+import { archiveGoal, restoreGoal, deleteGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
 import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
 import { calculateGoalTaskMetrics, computeGoalStatus, getClosestDueTask, type GoalTaskMetrics, type ClosestDue } from '../utils/goalTaskMetrics';
@@ -43,6 +43,7 @@ function GoalCard({
   finishEstimate,
   metrics,
   closestDue,
+  tab,
 }: {
   goal: DBGoal;
   tasks: DBTask[];
@@ -50,6 +51,7 @@ function GoalCard({
   finishEstimate: GoalFinishEstimate;
   metrics: GoalTaskMetrics;
   closestDue: ClosestDue | null;
+  tab: 'Active' | 'Completed' | 'Archived';
 }) {
   const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
   const isArchived = Boolean(goal.archived_at);
@@ -79,6 +81,17 @@ function GoalCard({
     await toggleTask(nextAction.id);
   };
 
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    showConfirm(
+      `Permanently delete "${goal.title}"? This removes all tasks, notes, and resources linked to it. This cannot be undone.`,
+      async () => {
+        await deleteGoal(goal.id);
+        triggerToast('Goal permanently deleted.', 'info');
+      }
+    );
+  };
+
   return (
     <motion.div
       layout
@@ -104,13 +117,24 @@ function GoalCard({
             </p>
           )}
         </div>
-        <button
-          onClick={handleArchiveToggle}
-          className="text-gray-300 hover:text-[#4648d4] opacity-0 group-hover:opacity-100 transition-all"
-          title={isArchived ? 'Restore goal' : 'Archive goal'}
-        >
-          {isArchived ? <RotateCcw size={13} /> : <Archive size={13} />}
-        </button>
+        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+          {isArchived && (
+            <button
+              onClick={handleDelete}
+              className="text-gray-300 hover:text-red-400 transition-colors"
+              title="Delete goal permanently"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+          <button
+            onClick={handleArchiveToggle}
+            className="text-gray-300 hover:text-[#4648d4] transition-colors"
+            title={isArchived ? 'Restore goal' : 'Archive goal'}
+          >
+            {isArchived ? <RotateCcw size={13} /> : <Archive size={13} />}
+          </button>
+        </div>
       </div>
 
       <h3 className="font-headline text-base font-bold text-gray-900 group-hover:text-[#4648d4] transition-colors mb-1 leading-snug">
@@ -166,6 +190,20 @@ function GoalCard({
           <p className="text-xs text-gray-400 italic">No next action set.</p>
         )}
       </div>
+
+      {tab === 'Active' && (
+        <div className="border-t border-gray-100 pt-3 mt-3" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}
+            className="flex items-center gap-1.5 text-[11px] font-mono text-gray-400 hover:text-[#4648d4] transition-colors group/ms"
+          >
+            <span className="w-5 h-5 rounded-md bg-gray-100 group-hover/ms:bg-[#EEF2FF] flex items-center justify-center transition-colors">
+              <Milestone size={11} className="group-hover/ms:text-[#4648d4]" />
+            </span>
+            Add milestone
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -281,6 +319,7 @@ export function GoalsDashboard() {
               finishEstimate={getGoalFinishEstimate(g, tasksByGoal[g.id] ?? [])}
               metrics={calculateGoalTaskMetrics(tasksByGoal[g.id] ?? [])}
               closestDue={getClosestDueTask(tasksByGoal[g.id] ?? [])}
+              tab={goalsFilter}
             />
           ))}
         </div>

@@ -139,8 +139,30 @@ db.exec(`
   );
 `);
 
-// Runtime migrations — ADD COLUMN throws if column already exists; we ignore that
+// Runtime migrations — ADD COLUMN / CREATE TABLE IF NOT EXISTS for schema evolutions
 try { db.exec('ALTER TABLE tasks ADD COLUMN actual_minutes INTEGER'); } catch {}
+
+// resource_logs table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS resource_logs (
+    id          TEXT PRIMARY KEY,
+    resource_id TEXT NOT NULL,
+    content     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+  );
+`);
+
+// 1.1.1 — 1.1.3: new columns on resources
+try { db.exec("ALTER TABLE resources ADD COLUMN read_state  TEXT NOT NULL DEFAULT 'Unread'"); } catch {}
+try { db.exec("ALTER TABLE resources ADD COLUMN next_action TEXT NOT NULL DEFAULT ''");        } catch {}
+try { db.exec("ALTER TABLE resources ADD COLUMN tags_json   TEXT NOT NULL DEFAULT '[]'");      } catch {}
+
+// 1.2.1: insight flag on resource_logs
+try { db.exec('ALTER TABLE resource_logs ADD COLUMN is_insight INTEGER NOT NULL DEFAULT 0');   } catch {}
+
+// 1.3.x: task activity tracking + completion reports
+try { db.exec("ALTER TABLE tasks ADD COLUMN last_activity_at TEXT");                               } catch {}
+try { db.exec("ALTER TABLE tasks ADD COLUMN completion_note  TEXT NOT NULL DEFAULT ''");            } catch {}
 
 export function rowToGoal(row: Record<string, unknown>) {
   return { ...row, overdue: Boolean(row.overdue) };

@@ -390,3 +390,91 @@ Total across all tasks = 5480m ≈ 91h 20m = exactly what Time Intelligence show
 `actual_minutes` is only set when the user explicitly logs time via the ActualTimeModal. Just toggling a task done leaves `actual_minutes = null`. Showing "— | 0 Logged" after completing a task feels like the system didn't register the work. Using `estimated_minutes` as a proxy shows "~20m" which at least confirms the system knows the task is done.
 
 Velocity still needs real `actual_minutes` because velocity = actual/estimated. Using estimated as both numerator and denominator always gives 1.0 (meaningless).
+
+---
+
+## Update: Merged Goal Tasks and Critical Path UI
+
+Date: 2026-06-25
+
+### User Request
+
+The user shared a screenshot of the goal detail page showing a separate top `Tasks` block and a separate `Critical Path` block below it. They said this did not make sense and wanted tasks and critical path merged. They also reiterated that UI changes should be visually inspected before and after.
+
+### Files Changed
+
+- `src/views/GoalDetail.tsx`
+
+### Changes Made
+
+1. Removed the standalone quick-add task section above the goal content.
+
+2. Replaced the old separate manual `Tasks` section and separate `Critical Path` section with one unified `Tasks` section.
+
+3. Added `rootWorkItems`, which combines root critical-path milestones and root manual tasks:
+   - `critical_path` root tasks render as `MilestoneCard`.
+   - `manual` root tasks render as `SortableTaskRow`.
+   - Critical-path milestones are grouped first, then manual root tasks, with position/title sorting as fallback.
+
+4. Removed the rendered `Critical Path` heading entirely. Browser verification found:
+   - `taskHeadingCount: 1`
+   - `criticalPathTextCount: 0`
+   - rendered headings: `ECG&EEG`, `Tasks3/10`
+
+5. Moved the root task quick-add widget into the right side of the `Tasks` header:
+   - placeholder: `New root task`
+   - compact text input
+   - compact optional time input
+   - icon-only plus button with title `Add root task`
+
+6. Changed quick-add task positioning so a newly added root task is placed after the current unified root work list:
+   - old behavior used `manualTasks.length`
+   - new behavior computes `nextPosition` from `rootWorkItems`
+
+7. Made manual root task rows more visually like siblings of critical-path cards:
+   - `rounded-xl`
+   - border
+   - white background
+   - padding
+   - subtle shadow
+
+8. Removed the now-unused `Target` icon import after deleting the separate Critical Path heading.
+
+### Important Implementation Notes
+
+- Drag sorting still uses `manualTasks.map(t => t.id)` inside `SortableContext`, so normal manual tasks remain sortable without turning critical-path milestones into sortable manual rows.
+- The unified list still uses the existing `MilestoneCard` and `SortableTaskRow` components, so milestone behavior and manual task behavior remain mostly unchanged.
+- The milestone jump bar remains inside the unified `Tasks` section when more than one milestone exists.
+- Empty state now says: `No tasks yet. Add a root task to start shaping this goal.`
+
+### Visual Verification
+
+Before changing, the provided screenshot showed:
+
+- top `Tasks` section with manual tasks
+- separate `Critical Path` heading below
+- `SECTION PAPERS` milestone card under that separate heading
+
+After changing, I opened the app in the in-app browser at `http://127.0.0.1:3000/`, navigated to the `ECG&EEG` goal, and verified:
+
+- one `Tasks` heading only
+- no rendered `Critical Path` heading
+- quick-add widget is tucked to the right of the `Tasks` heading
+- `SECTION PAPERS` renders inside `Tasks`
+- manual task `PowerPoints For Section Papers...` renders directly below the milestone card as a sibling in the same Tasks list
+
+### Validation
+
+Ran:
+
+```powershell
+npm run lint
+```
+
+Result:
+
+```text
+tsc --noEmit
+```
+
+No TypeScript errors.

@@ -75,17 +75,56 @@ router.patch('/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/tasks/:id/toggle
+// POST /api/tasks/:id/toggle  (uncomplete only — completing goes through /complete)
 router.post('/:id/toggle', (req, res) => {
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
   if (!row) return res.status(404).json({ error: 'Not found' });
   const completed = !row.completed;
   const now = new Date().toISOString();
+  // When un-completing, revert to in_progress if there was activity, else todo
+  const revertStatus = row.last_activity_at ? 'in_progress' : 'todo';
   db.prepare('UPDATE tasks SET completed = ?, status = ?, updated_at = ? WHERE id = ?')
-    .run(completed ? 1 : 0, completed ? 'done' : 'todo', now, req.params.id);
+    .run(completed ? 1 : 0, completed ? 'done' : revertStatus, now, req.params.id);
   const goalId = row.goal_id as string | null;
   const metrics = goalId ? syncGoalMetrics(goalId) : undefined;
   res.json({ completed, metrics });
+});
+
+// POST /api/tasks/:id/complete — mark done with optional completion note
+router.post('/:id/complete', (req, res) => {
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const now = new Date().toISOString();
+  const note = (req.body.completion_note ?? '').toString().trim();
+  db.prepare('UPDATE tasks SET completed = 1, status = ?, completion_note = ?, last_activity_at = ?, updated_at = ? WHERE id = ?')
+    .run('done', note, now, now, req.params.id);
+  const goalId = row.goal_id as string | null;
+  const metrics = goalId ? syncGoalMetrics(goalId) : undefined;
+  res.json({ ok: true, metrics });
+});
+
+// POST /api/tasks/:id/touch — record activity, auto-promote todo→in_progress
+router.post('/:id/touch', (req, res) => {
+  const row = db.prepare('SELECT id, status, goal_id FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const now = new Date().toISOString();
+  const newStatus = (row.status === 'todo' || row.status === 'inactive') ? 'in_progress' : row.status;
+  db.prepare('UPDATE tasks SET last_activity_at = ?, status = ?, updated_at = ? WHERE id = ?')
+    .run(now, newStatus, now, req.params.id);
+  const goalId = row.goal_id as string | null;
+  if (goalId) syncGoalMetrics(goalId);
+  res.json({ ok: true, status: newStatus });
+});
+
+// POST /api/tasks/:id/deactivate — manually pause a task
+router.post('/:id/deactivate', (req, res) => {
+  const row = db.prepare('SELECT goal_id FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const now = new Date().toISOString();
+  db.prepare("UPDATE tasks SET status = 'inactive', updated_at = ? WHERE id = ?").run(now, req.params.id);
+  const goalId = row.goal_id as string | null;
+  if (goalId) syncGoalMetrics(goalId);
+  res.json({ ok: true });
 });
 
 // DELETE /api/tasks/:id
@@ -110,9 +149,13 @@ router.post('/:id/notes', (req, res) => {
   const id = crypto.randomUUID();
   db.prepare('INSERT INTO task_notes (id, task_id, content, created_at) VALUES (?, ?, ?, ?)')
     .run(id, req.params.id, req.body.content ?? '', now);
-  db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(now, req.params.id);
-  const task = db.prepare('SELECT goal_id FROM tasks WHERE id = ?').get(req.params.id) as { goal_id: string | null } | undefined;
-  if (task?.goal_id) syncGoalMetrics(task.goal_id);
+  // Auto-touch: promote todo→in_progress on note add
+  const task = db.prepare('SELECT goal_id, status FROM tasks WHERE id = ?').get(req.params.id) as { goal_id: string | null; status: string } | undefined;
+  if (task) {
+    const newStatus = task.status === 'todo' ? 'in_progress' : task.status;
+    db.prepare('UPDATE tasks SET updated_at = ?, last_activity_at = ?, status = ? WHERE id = ?').run(now, now, newStatus, req.params.id);
+    if (task.goal_id) syncGoalMetrics(task.goal_id);
+  }
   res.json({ id });
 });
 

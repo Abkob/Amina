@@ -130,6 +130,9 @@ async function runSeed(): Promise<void> {
             url: null,
             type: r.type === 'other' ? 'link' : r.type,
             info: r.info,
+            read_state: 'Unread',
+            next_action: '',
+            tags_json: '[]',
             created_at: now,
           };
           await db.resources.add(resource);

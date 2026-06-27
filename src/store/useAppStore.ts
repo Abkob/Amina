@@ -22,13 +22,14 @@ const DEFAULT_GOAL_CATEGORIES = [
 
 interface AppStore {
   // ─── Navigation (persisted) ───────────────────────────────────────────────
-  currentTab:      Tab;
-  selectedGoalId:  string | null;
-  focusedTaskId:   string | null;
-  activeNoteId:    string;
-  goalsFilter:     'Active' | 'Completed' | 'Archived';
-  searchQuery:     string;
-  goalCategories:  string[];
+  currentTab:        Tab;
+  selectedGoalId:    string | null;
+  focusedTaskId:     string | null;
+  focusedResourceId: string | null;
+  activeNoteId:      string;
+  goalsFilter:       'Active' | 'Completed' | 'Archived';
+  searchQuery:       string;
+  goalCategories:    string[];
 
   // ─── Schedule UI (persisted) ──────────────────────────────────────────────
   selectedEventId: string | null;
@@ -55,9 +56,11 @@ interface AppStore {
   setCurrentTab:        (tab: Tab) => void;
   setSelectedGoalId:    (id: string | null) => void;
   setFocusedTaskId:     (id: string | null) => void;
+  setFocusedResourceId: (id: string | null) => void;
   /** Atomically navigate to a goal detail page — avoids the two-set race where
    *  setCurrentTab clears selectedGoalId before setSelectedGoalId restores it. */
   navigateToGoal:       (goalId: string) => void;
+  navigateToResource:   (resourceId: string) => void;
   setActiveNoteId:      (id: string) => void;
   setGoalsFilter:       (f: 'Active' | 'Completed' | 'Archived') => void;
   setSearchQuery:       (q: string) => void;
@@ -92,16 +95,22 @@ interface AppStore {
   confirmOnOk:    (() => void) | null;
   showConfirm:    (message: string, onOk: () => void) => void;
   closeConfirm:   () => void;
+
+  // ─── Completion report modal ──────────────────────────────────────────────
+  completionReportTaskId: string | null;
+  openCompletionReport:   (taskId: string) => void;
+  closeCompletionReport:  () => void;
 }
 
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
       // ─── Initial UI state ────────────────────────────────────────────────
-      currentTab:      'Goals',
-      selectedGoalId:  null,
-      focusedTaskId:   null,
-      activeNoteId:    '',
+      currentTab:        'Goals',
+      selectedGoalId:    null,
+      focusedTaskId:     null,
+      focusedResourceId: null,
+      activeNoteId:      '',
       goalsFilter:     'Active',
       searchQuery:     '',
       goalCategories:  DEFAULT_GOAL_CATEGORIES,
@@ -127,11 +136,15 @@ export const useAppStore = create<AppStore>()(
       confirmMessage: '',
       confirmOnOk:    null,
 
+      completionReportTaskId: null,
+
       // ─── Setters ──────────────────────────────────────────────────────────
       setCurrentTab:         (tab)  => set({ currentTab: tab, selectedGoalId: null, focusedTaskId: null }),
       setSelectedGoalId:     (id)   => set({ selectedGoalId: id, focusedTaskId: null }),
       setFocusedTaskId:      (id)   => set({ focusedTaskId: id }),
+      setFocusedResourceId:  (id)   => set({ focusedResourceId: id }),
       navigateToGoal:        (goalId) => set({ currentTab: 'Goals', selectedGoalId: goalId, focusedTaskId: null }),
+      navigateToResource:    (resourceId) => set({ currentTab: 'Resources', focusedResourceId: resourceId }),
       setActiveNoteId:       (id)   => set({ activeNoteId: id }),
       setGoalsFilter:        (f)    => set({ goalsFilter: f }),
       setSearchQuery:        (q)    => set({ searchQuery: q }),
@@ -180,19 +193,23 @@ export const useAppStore = create<AppStore>()(
 
       showConfirm:  (message, onOk) => set({ confirmOpen: true, confirmMessage: message, confirmOnOk: onOk }),
       closeConfirm: ()              => set({ confirmOpen: false, confirmMessage: '', confirmOnOk: null }),
+
+      openCompletionReport:  (taskId) => set({ completionReportTaskId: taskId }),
+      closeCompletionReport: ()       => set({ completionReportTaskId: null }),
     }),
     {
       name: 'marina-os-ui-v1',
       // Only persist navigation + schedule drawer state
       partialize: (state) => ({
-        currentTab:      state.currentTab,
-        activeNoteId:    state.activeNoteId,
-        selectedGoalId:  state.selectedGoalId,
-        focusedTaskId:   state.focusedTaskId,
-        selectedEventId: state.selectedEventId,
-        isDrawerOpen:    state.isDrawerOpen,
-        goalsFilter:     state.goalsFilter,
-        goalCategories:  state.goalCategories,
+        currentTab:        state.currentTab,
+        activeNoteId:      state.activeNoteId,
+        selectedGoalId:    state.selectedGoalId,
+        focusedTaskId:     state.focusedTaskId,
+        focusedResourceId: state.focusedResourceId,
+        selectedEventId:   state.selectedEventId,
+        isDrawerOpen:      state.isDrawerOpen,
+        goalsFilter:       state.goalsFilter,
+        goalCategories:    state.goalCategories,
       }),
     }
   )

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Check, CheckSquare, ChevronLeft, ChevronRight, Clock, Download,
-  Eye, FileText, Paperclip, Plus, Square, Target, Trash2, Upload, X,
+  ExternalLink, Eye, FileText, Paperclip, Plus, Square, Target, Trash2, Upload, X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useInvalidate } from '../api/hooks';
-import { createResource, deleteResource, detectResourceType, getResourcesForTask } from '../db/queries/resources';
+import { createResource, deleteResource, detectResourceType, getResourcesForTask, addMention } from '../db/queries/resources';
+import { touchTask } from '../db/queries/tasks';
+import { ResourceMentionPicker, ResourceMentionChip, useResourceMentions } from '../components/ResourceMentionPicker';
 import {
   addTaskNote,
   createTask,
@@ -89,25 +91,28 @@ function groupNotesByDate(notes: DBTaskNote[]) {
   return groups;
 }
 
-function ResourceItem({ resource, onDelete }: { resource: DBResource; onDelete: () => void }) {
-  const body = (
+function ResourceItem({ resource, onDelete, onOpen }: { resource: DBResource; onDelete: () => void; onOpen: () => void }) {
+  const inner = (
     <>
       <FileText size={14} className="text-gray-400 shrink-0" />
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold text-gray-800 truncate">{resource.title}</p>
+        <p className="text-xs font-semibold text-gray-800 truncate group-hover/ri:text-[#4648d4] transition-colors">{resource.title}</p>
         <p className="text-[9px] font-mono text-gray-400 uppercase tracking-widest truncate">{resource.info}</p>
       </div>
     </>
   );
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-gray-150 bg-white p-3 shadow-sm">
-      {resource.url ? (
-        <a href={resource.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center gap-3">
-          {body}
+    <div className="group/ri flex items-center gap-3 rounded-lg border border-gray-150 bg-white p-3 shadow-sm">
+      <button onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+        {inner}
+      </button>
+      {resource.url && (
+        <a href={resource.url} target="_blank" rel="noreferrer"
+          onClick={e => e.stopPropagation()}
+          className="text-gray-300 hover:text-[#4648d4] transition-colors">
+          <ExternalLink size={11} />
         </a>
-      ) : (
-        <div className="flex min-w-0 flex-1 items-center gap-3">{body}</div>
       )}
       <button onClick={onDelete} className="text-gray-300 hover:text-red-400 transition-colors">
         <Trash2 size={12} />
@@ -500,6 +505,7 @@ export function TaskFocusView() {
     setFocusedTaskId,
     triggerToast,
     showConfirm,
+    navigateToResource,
   } = useAppStore();
 
   const invalidate = useInvalidate();
@@ -514,11 +520,19 @@ export function TaskFocusView() {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const journalFileRef = useRef<HTMLInputElement>(null);
+  const journalTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const mentions = useResourceMentions();
 
   const { data: goal }           = useGoal(selectedGoalId);
   const { data: task }           = useTask(focusedTaskId);
   const { data: allTasks = [] }  = useGoalTasks(selectedGoalId);
   const { data: taskNotes = [] } = useTaskNotes(focusedTaskId);
+
+  // Auto-touch: opening a task in focus promotes it to in_progress
+  useEffect(() => {
+    if (focusedTaskId) touchTask(focusedTaskId).catch(() => {});
+  }, [focusedTaskId]);
 
   const [resources, setResources] = useState<DBResource[]>([]);
   useEffect(() => {
@@ -639,13 +653,15 @@ export function TaskFocusView() {
 
   const handleAddJournalEntry = async () => {
     const content = journalDraft.trim();
-    if (!content && pendingFiles.length === 0) return;
+    if (!content && pendingFiles.length === 0 && mentions.pending.length === 0) return;
 
     const noteId = await addTaskNote(task.id, content || '—');
     for (const f of pendingFiles) await addNoteFile(noteId, f);
+    for (const r of mentions.pending) await addMention('note', noteId, r.id);
 
     setJournalDraft('');
     setPendingFiles([]);
+    mentions.clearPending();
     triggerToast('Journal entry appended.', 'success');
   };
 
@@ -924,6 +940,17 @@ export function TaskFocusView() {
               </span>
               <div className="flex items-center gap-1.5">
                 <button
+                  onClick={() => mentions.setShowPicker(v => !v)}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1.5 font-mono text-[9px] transition-colors ${
+                    mentions.showPicker
+                      ? 'border-[#4648d4]/40 bg-[#EEF2FF] text-[#4648d4]'
+                      : 'border-gray-200 bg-white text-gray-500 hover:border-[#4648d4]/40 hover:text-[#4648d4]'
+                  }`}
+                  title="Reference a resource (@)"
+                >
+                  @ Ref
+                </button>
+                <button
                   onClick={() => journalFileRef.current?.click()}
                   className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 font-mono text-[9px] text-gray-500 transition-colors hover:border-[#4648d4]/40 hover:text-[#4648d4]"
                   title="Attach files (or paste / drag-and-drop)"
@@ -943,7 +970,7 @@ export function TaskFocusView() {
                 />
                 <button
                   onClick={handleAddJournalEntry}
-                  disabled={!journalDraft.trim() && pendingFiles.length === 0}
+                  disabled={!journalDraft.trim() && pendingFiles.length === 0 && mentions.pending.length === 0}
                   className="inline-flex items-center gap-1.5 rounded-md bg-[#4648d4] px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Plus size={11} />
@@ -951,16 +978,51 @@ export function TaskFocusView() {
                 </button>
               </div>
             </div>
+
+            {/* @mention picker dropdown */}
+            {mentions.showPicker && (
+              <div className="mb-2">
+                <ResourceMentionPicker
+                  query={mentions.query}
+                  onSelect={r => {
+                    const pos = journalTextareaRef.current?.selectionStart ?? journalDraft.length;
+                    mentions.selectResource(r, { value: journalDraft, set: setJournalDraft }, pos);
+                    journalTextareaRef.current?.focus();
+                  }}
+                  onClose={() => mentions.setShowPicker(false)}
+                  className="w-full"
+                />
+              </div>
+            )}
+
             <textarea
+              ref={journalTextareaRef}
               value={journalDraft}
-              onChange={e => setJournalDraft(e.target.value)}
+              onChange={e => {
+                setJournalDraft(e.target.value);
+                mentions.onTextChange(e.target.value, e.target.selectionStart);
+              }}
               onPaste={handleJournalPaste}
               onKeyDown={e => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddJournalEntry();
               }}
-              placeholder="Write today's section note… (Ctrl+Enter to submit, paste or drag files to attach)"
+              placeholder="Write today's section note… (Ctrl+Enter to submit, type @ to reference a resource)"
               className="min-h-[120px] w-full resize-y bg-transparent text-sm leading-relaxed text-gray-800 outline-none placeholder:text-gray-300"
             />
+
+            {/* Pending @mention chips */}
+            {mentions.pending.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5 border-t border-gray-100 pt-2">
+                <span className="font-mono text-[9px] text-gray-400 self-center">refs:</span>
+                {mentions.pending.map(r => (
+                  <ResourceMentionChip
+                    key={r.id}
+                    resource={r}
+                    onRemove={() => mentions.removePending(r.id)}
+                  />
+                ))}
+              </div>
+            )}
             {pendingFiles.length > 0 && (
               <div className="mt-2.5 border-t border-gray-100 pt-2.5">
                 <AnimatePresence initial={false}>
@@ -1102,6 +1164,7 @@ export function TaskFocusView() {
                   key={resource.id}
                   resource={resource}
                   onDelete={() => handleDeleteResource(resource.id)}
+                  onOpen={() => navigateToResource(resource.id)}
                 />
               )) : (
                 <p className="rounded-lg border border-dashed border-gray-200 p-4 text-center text-[11px] text-gray-300">No resources attached.</p>

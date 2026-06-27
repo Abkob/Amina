@@ -23,7 +23,8 @@ import { NewGoalWizard }    from './modals/NewGoalWizard';
 import { NewNoteModal }     from './modals/NewNoteModal';
 import { NewEventModal }    from './modals/NewEventModal';
 import { AddResourceModal } from './modals/AddResourceModal';
-import { ConfirmModal }     from './components/ConfirmModal';
+import { ConfirmModal }            from './components/ConfirmModal';
+import { CompletionReportModal }  from './modals/CompletionReportModal';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -101,6 +102,7 @@ function AppInner() {
         {newEventModalOpen    && <NewEventModal />}
         {addResourceModalOpen && <AddResourceModal />}
         {confirmOpen          && <ConfirmModal />}
+        <CompletionReportModal />
       </AnimatePresence>
     </div>
   );
