@@ -1,184 +1,136 @@
-import Database from 'better-sqlite3';
+import pg from 'pg';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+const { Pool } = pg;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, '..', 'marina.db');
 
-export const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// Test-mode safety guard: integration tests must use DATABASE_URL_TEST
+// pointing at a database whose name contains 'test' to prevent accidental
+// writes to the live marina database.
+// The guard runs lazily on first DB use so unit-test imports don't fail.
+function resolveConnectionString(): string {
+  const isTest = process.env.NODE_ENV === 'test';
+  if (isTest) {
+    const testUrl = process.env.DATABASE_URL_TEST;
+    if (!testUrl) {
+      throw new Error(
+        '[db] Integration tests require DATABASE_URL_TEST env var. ' +
+        'Set it to a test database URL (e.g. postgresql://...@localhost:5433/marina_test). ' +
+        'Do NOT point it at the live marina database.',
+      );
+    }
+    // Enforce that the database name contains 'test' to prevent accidental live DB usage
+    const dbName = testUrl.split('/').pop()?.split('?')[0] ?? '';
+    if (!dbName.includes('test')) {
+      throw new Error(
+        `[db] DATABASE_URL_TEST database name must contain "test" (got: "${dbName}"). ` +
+        'This guard prevents integration tests from running against the live database.',
+      );
+    }
+    return testUrl;
+  }
+  return process.env.DATABASE_URL ?? 'postgresql://postgres:pgadmin@localhost:5433/marina';
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS goals (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    category TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'Safe',
-    progress REAL NOT NULL DEFAULT 0,
-    deadline TEXT,
-    overdue INTEGER NOT NULL DEFAULT 0,
-    activity_level INTEGER NOT NULL DEFAULT 1,
-    archived_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
+// Lazy pool: only created on first use so unit tests that import server modules
+// but never call query/transaction/initSchema don't trigger the DB guard.
+let _pool: pg.Pool | null = null;
 
-  CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,
-    goal_id TEXT,
-    parent_task_id TEXT,
-    title TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'todo',
-    priority TEXT NOT NULL DEFAULT 'medium',
-    kind TEXT NOT NULL DEFAULT 'manual',
-    critical_path_status TEXT,
-    tags_json TEXT NOT NULL DEFAULT '[]',
-    due_date TEXT,
-    estimated_duration TEXT,
-    estimated_minutes INTEGER,
-    weight_percent REAL,
-    completed INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
+export function getPool(): pg.Pool {
+  if (!_pool) {
+    _pool = new Pool({
+      connectionString: resolveConnectionString(),
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
+    _pool.on('error', (err) => {
+      console.error('[db] Unexpected pool error:', err);
+    });
+  }
+  return _pool;
+}
 
-  CREATE TABLE IF NOT EXISTS task_notes (
-    id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-  );
+// Keep named export for code that imports `pool` directly
+export const pool = new Proxy({} as pg.Pool, {
+  get(_target, prop) {
+    return (getPool() as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});
 
-  CREATE TABLE IF NOT EXISTS task_note_files (
-    id TEXT PRIMARY KEY,
-    note_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    file_path TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
+// Run the schema on startup (idempotent — all CREATE IF NOT EXISTS)
+export async function initSchema() {
+  const schemaPath = path.join(__dirname, 'schema.sql');
+  const sql = fs.readFileSync(schemaPath, 'utf8');
+  const client = await getPool().connect();
+  try {
+    await client.query(sql);
+    console.log('[db] Schema applied');
+  } finally {
+    client.release();
+  }
+}
 
-  CREATE TABLE IF NOT EXISTS notes (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL DEFAULT '',
-    content TEXT NOT NULL DEFAULT '',
-    type TEXT NOT NULL DEFAULT 'capture',
-    date_str TEXT NOT NULL DEFAULT '',
-    suggested_action_text TEXT,
-    suggested_action_applied INTEGER NOT NULL DEFAULT 0,
-    suggested_action_ignored INTEGER NOT NULL DEFAULT 0,
-    extracted_tasks_json TEXT NOT NULL DEFAULT '[]',
-    relevant_docs_json TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
+// ─── Core query helper ────────────────────────────────────────────────────────
 
-  CREATE TABLE IF NOT EXISTS resources (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL DEFAULT '',
-    url TEXT,
-    type TEXT NOT NULL DEFAULT 'link',
-    info TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-  );
+export async function query<T extends Record<string, unknown> = Record<string, unknown>>(
+  sql: string,
+  params?: unknown[],
+): Promise<pg.QueryResult<T>> {
+  return getPool().query<T>(sql, params);
+}
 
-  CREATE TABLE IF NOT EXISTS events (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    type TEXT NOT NULL,
-    day_index INTEGER NOT NULL,
-    start_hour REAL NOT NULL,
-    duration_hours REAL NOT NULL,
-    time_str TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    week_start TEXT,
-    connected_resource_json TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
+// ─── Transaction helper ───────────────────────────────────────────────────────
 
-  CREATE TABLE IF NOT EXISTS daily_scores (
-    id TEXT PRIMARY KEY,
-    date TEXT NOT NULL UNIQUE,
-    score REAL NOT NULL DEFAULT 0,
-    mood INTEGER NOT NULL DEFAULT 3,
-    energy INTEGER NOT NULL DEFAULT 3,
-    focus INTEGER NOT NULL DEFAULT 3,
-    tasks_completed INTEGER NOT NULL DEFAULT 0,
-    notes TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-  );
+export async function transaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
-  CREATE TABLE IF NOT EXISTS edges (
-    id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL,
-    source_type TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    relationship TEXT NOT NULL,
-    metadata TEXT,
-    created_at TEXT NOT NULL
-  );
+// ─── Dynamic UPDATE builder ────────────────────────────────────────────────────
+// Returns the SET clause and values array for positional params starting at $offset+1
 
-  CREATE TABLE IF NOT EXISTS tags (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    color TEXT NOT NULL DEFAULT '#6B7280'
-  );
+const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-  CREATE TABLE IF NOT EXISTS entity_tags (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL,
-    entity_type TEXT NOT NULL,
-    tag_id TEXT NOT NULL
-  );
-`);
+export function buildUpdate(
+  updates: Record<string, unknown>,
+  offset = 0,
+): { sets: string; vals: unknown[] } {
+  const entries = Object.entries(updates).filter(([col]) => SAFE_IDENTIFIER.test(col));
+  const sets = entries.map(([col], i) => `${col} = $${i + 1 + offset}`).join(', ');
+  const vals = entries.map(([, v]) => v);
+  return { sets, vals };
+}
 
-// Runtime migrations — ADD COLUMN / CREATE TABLE IF NOT EXISTS for schema evolutions
-try { db.exec('ALTER TABLE tasks ADD COLUMN actual_minutes INTEGER'); } catch {}
+// ─── Sanitize: strip undefined → null (pg handles booleans natively) ──────────
 
-// resource_logs table
-db.exec(`
-  CREATE TABLE IF NOT EXISTS resource_logs (
-    id          TEXT PRIMARY KEY,
-    resource_id TEXT NOT NULL,
-    content     TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL
-  );
-`);
+export function sanitize(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = v === undefined ? null : v;
+  }
+  return out;
+}
 
-// 1.1.1 — 1.1.3: new columns on resources
-try { db.exec("ALTER TABLE resources ADD COLUMN read_state  TEXT NOT NULL DEFAULT 'Unread'"); } catch {}
-try { db.exec("ALTER TABLE resources ADD COLUMN next_action TEXT NOT NULL DEFAULT ''");        } catch {}
-try { db.exec("ALTER TABLE resources ADD COLUMN tags_json   TEXT NOT NULL DEFAULT '[]'");      } catch {}
-
-// 1.2.1: insight flag on resource_logs
-try { db.exec('ALTER TABLE resource_logs ADD COLUMN is_insight INTEGER NOT NULL DEFAULT 0');   } catch {}
-
-// 1.3.x: task activity tracking + completion reports
-try { db.exec("ALTER TABLE tasks ADD COLUMN last_activity_at TEXT");                               } catch {}
-try { db.exec("ALTER TABLE tasks ADD COLUMN completion_note  TEXT NOT NULL DEFAULT ''");            } catch {}
+// ─── Row coercions (booleans come back from pg as JS booleans already) ────────
 
 export function rowToGoal(row: Record<string, unknown>) {
-  return { ...row, overdue: Boolean(row.overdue) };
+  return row;
 }
 
 export function rowToTask(row: Record<string, unknown>) {
-  return { ...row, completed: Boolean(row.completed) };
-}
-
-// Coerce JS values to SQLite-compatible types: booleans → 0/1, undefined → null
-export function sanitizeForSQLite(obj: Record<string, unknown>): Record<string, string | number | bigint | Buffer | null> {
-  const out: Record<string, string | number | bigint | Buffer | null> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (v === undefined) out[k] = null;
-    else if (typeof v === 'boolean') out[k] = v ? 1 : 0;
-    else out[k] = v as string | number | bigint | Buffer | null;
-  }
-  return out;
+  return row;
 }

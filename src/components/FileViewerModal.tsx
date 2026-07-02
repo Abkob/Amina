@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X, Download, FileText, AlertCircle, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import type { DBTaskNoteFile } from '../db/schema';
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -68,7 +69,8 @@ function TextViewer({ src, mode }: { src: string; mode: 'text' | 'markdown' }) {
   }
 
   if (mode === 'markdown') {
-    const html = marked.parse(content) as string;
+    const rawHtml = marked.parse(content) as string;
+    const html = DOMPurify.sanitize(rawHtml, { USE_PROFILES: { html: true } });
     return (
       <div className="absolute inset-0 overflow-auto">
         <div

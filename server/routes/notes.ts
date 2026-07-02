@@ -1,72 +1,81 @@
 import { Router } from 'express';
-import { db } from '../db.js';
+import { query, buildUpdate, transaction } from '../db.js';
+import { markEmbeddingStale } from '../services/embeddingLifecycle.js';
 
 const router = Router();
 
-// SQLite can't bind JS booleans — coerce to 0/1 and undefined to null
-function sanitize(v: unknown): string | number | bigint | Buffer | null {
-  if (v === undefined) return null;
-  if (typeof v === 'boolean') return v ? 1 : 0;
-  return v as string | number | bigint | Buffer | null;
-}
+const NOTE_UPDATE_FIELDS = new Set([
+  'title', 'content', 'type', 'date_str',
+  'suggested_action_text', 'suggested_action_applied', 'suggested_action_ignored',
+  'extracted_tasks_json', 'relevant_docs_json',
+]);
 
-router.get('/', (_req, res) => {
-  const rows = db.prepare('SELECT * FROM notes ORDER BY created_at DESC').all() as Record<string, unknown>[];
-  res.json(rows.map(r => ({
-    ...r,
-    suggested_action_applied: Boolean(r.suggested_action_applied),
-    suggested_action_ignored: Boolean(r.suggested_action_ignored),
-  })));
+router.get('/', async (_req, res) => {
+  const { rows } = await query('SELECT * FROM notes ORDER BY created_at DESC LIMIT 500');
+  res.json(rows);
 });
 
-router.post('/', (req, res) => {
+router.get('/:id', async (req, res) => {
+  const { rows } = await query('SELECT * FROM notes WHERE id=$1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
+});
+
+router.post('/', async (req, res) => {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const b = req.body;
-  db.prepare(`INSERT INTO notes (id,title,content,type,date_str,suggested_action_text,suggested_action_applied,suggested_action_ignored,extracted_tasks_json,relevant_docs_json,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(
+  await query(
+    `INSERT INTO notes (id,title,content,type,date_str,suggested_action_text,suggested_action_applied,suggested_action_ignored,extracted_tasks_json,relevant_docs_json,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [
       id,
-      sanitize(b.title),
-      sanitize(b.content),
-      sanitize(b.type) ?? 'capture',
-      sanitize(b.date_str),
-      sanitize(b.suggested_action_text),
-      sanitize(b.suggested_action_applied),
-      sanitize(b.suggested_action_ignored),
-      sanitize(b.extracted_tasks_json) ?? '[]',
-      sanitize(b.relevant_docs_json) ?? '[]',
+      b.title ?? '',
+      b.content ?? '',
+      b.type ?? 'capture',
+      b.date_str ?? '',
+      b.suggested_action_text ?? null,
+      Boolean(b.suggested_action_applied),
+      Boolean(b.suggested_action_ignored),
+      b.extracted_tasks_json ?? '[]',
+      b.relevant_docs_json ?? '[]',
       now,
       now,
-    );
+    ],
+  );
   res.json({ id });
 });
 
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
+  const { rows: existing } = await query('SELECT id FROM notes WHERE id=$1', [req.params.id]);
+  if (!existing.length) return res.status(404).json({ error: 'Not found' });
   const now = new Date().toISOString();
-  const updates = req.body as Record<string, unknown>;
-  const sanitized: Record<string, unknown> = { id: req.params.id, updated_at: now };
-  for (const [k, v] of Object.entries(updates)) {
-    sanitized[k] = sanitize(v);
+  const updates: Record<string, unknown> = { updated_at: now };
+  for (const key of NOTE_UPDATE_FIELDS) {
+    if (key in req.body) updates[key] = (req.body as Record<string, unknown>)[key];
   }
-  const sets = Object.keys(updates).map(k => `${k} = @${k}`).join(', ');
-  db.prepare(`UPDATE notes SET ${sets}, updated_at = @updated_at WHERE id = @id`).run(sanitized);
+  const contentChanged = 'title' in req.body || 'content' in req.body;
+  const { sets, vals } = buildUpdate(updates);
+  await query(`UPDATE notes SET ${sets} WHERE id=$${vals.length + 1}`, [...vals, req.params.id]);
+  if (contentChanged) markEmbeddingStale('note', req.params.id).catch(() => {});
   res.json({ ok: true });
 });
 
-router.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM notes WHERE id = ?').run(req.params.id);
-  res.json({ ok: true });
-});
-
-router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json({
-    ...row,
-    suggested_action_applied: Boolean(row.suggested_action_applied),
-    suggested_action_ignored: Boolean(row.suggested_action_ignored),
+router.delete('/:id', async (req, res) => {
+  const noteId = req.params.id;
+  await transaction(async (client) => {
+    await client.query('DELETE FROM entity_summaries WHERE entity_type=$1 AND entity_id=$2', ['note', noteId]);
+    await client.query("DELETE FROM embedding_jobs WHERE entity_type='note' AND entity_id=$1 AND status IN ('pending','failed')", [noteId]);
+    await client.query(`DELETE FROM edges WHERE (source_id=$1 AND source_type='note') OR (target_id=$1 AND target_type='note')`, [noteId]);
+    await client.query("DELETE FROM journal_links WHERE target_type='note' AND target_id=$1", [noteId]);
+    await client.query("DELETE FROM extracted_facts WHERE target_type='note' AND target_id=$1", [noteId]);
+    await client.query("DELETE FROM entity_aliases WHERE entity_type='note' AND entity_id=$1", [noteId]);
+    await client.query("DELETE FROM ai_action_proposals WHERE source_type='note' AND source_id=$1 AND status='pending'", [noteId]);
+    await client.query('DELETE FROM notes WHERE id=$1', [noteId]);
   });
+  res.json({ ok: true });
+  query("DELETE FROM embeddings WHERE entity_type='note' AND entity_id=$1", [noteId])
+    .catch(err => console.error('[cleanup] note embeddings:', err));
 });
 
 export { router as notesRouter };

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
+import { apiFetch } from './utils/apiFetch';
 
 // Layout
 import { Sidebar }   from './components/Sidebar';
@@ -14,9 +15,12 @@ import { BrainDumpView }    from './views/BrainDumpView';
 import { GoalsDashboard }   from './views/GoalsDashboard';
 import { GoalDetail }       from './views/GoalDetail';
 import { TaskFocusView }    from './views/TaskFocusView';
-import { ScheduleView }     from './views/ScheduleView';
 import { ResourcesView }    from './views/ResourcesView';
+import { GanttView }        from './views/GanttView';
 import { SettingsView }     from './views/SettingsView';
+import { CopilotView }      from './views/CopilotView';
+import { JournalView }      from './views/JournalView';
+import { GraphView }        from './views/GraphView';
 
 // Modals
 import { NewGoalWizard }    from './modals/NewGoalWizard';
@@ -47,9 +51,8 @@ function AppInner() {
   useEffect(() => {
     if (!selectedGoalId) return;
     let cancelled = false;
-    fetch(`/api/goals/${selectedGoalId}`)
-      .then(r => { if (!cancelled && r.status === 404) setSelectedGoalId(null); })
-      .catch(() => { if (!cancelled) setSelectedGoalId(null); });
+    apiFetch(`/api/goals/${selectedGoalId}`)
+      .catch((e: { status?: number }) => { if (!cancelled && e?.status === 404) setSelectedGoalId(null); });
     return () => { cancelled = true; };
   }, [selectedGoalId, setSelectedGoalId]);
 
@@ -57,21 +60,23 @@ function AppInner() {
   useEffect(() => {
     if (!selectedGoalId || !focusedTaskId) return;
     let cancelled = false;
-    fetch(`/api/tasks/${focusedTaskId}`)
-      .then(r => r.json())
+    apiFetch<{ goal_id?: string }>(`/api/tasks/${focusedTaskId}`)
       .then((task) => { if (!cancelled && (!task || task.goal_id !== selectedGoalId)) setFocusedTaskId(null); })
       .catch(() => { if (!cancelled) setFocusedTaskId(null); });
     return () => { cancelled = true; };
   }, [selectedGoalId, focusedTaskId, setFocusedTaskId]);
 
   const renderContent = () => {
+    if (currentTab === 'Copilot')   return <CopilotView />;
     if (currentTab === 'Brain Dump') return <BrainDumpView />;
     if (currentTab === 'Goals') {
       if (!selectedGoalId) return <GoalsDashboard />;
       return focusedTaskId ? <TaskFocusView /> : <GoalDetail />;
     }
-    if (currentTab === 'Schedule')  return <ScheduleView />;
+    if (currentTab === 'Journal')   return <JournalView />;
+    if (currentTab === 'Graph')     return <GraphView />;
     if (currentTab === 'Resources') return <ResourcesView />;
+    if (currentTab === 'Gantt')     return <GanttView />;
     if (currentTab === 'Settings')  return <SettingsView />;
     return null;
   };

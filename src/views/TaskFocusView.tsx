@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Check, CheckSquare, ChevronLeft, ChevronRight, Clock, Download,
-  ExternalLink, Eye, FileText, Paperclip, Plus, Square, Target, Trash2, Upload, X,
+  ExternalLink, Eye, FileText, Link2, Paperclip, Plus, Square, Target, Trash2, Upload, X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useInvalidate } from '../api/hooks';
-import { createResource, deleteResource, detectResourceType, getResourcesForTask, addMention } from '../db/queries/resources';
+import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useTaskWorkSessions, useTaskResources, useInvalidate, useCreateWorkSession, useDeleteWorkSession, useEventTaskLinks, useCreateEventTaskLink, useDeleteEventTaskLink, useEvents } from '../api/hooks';
+import { createResource, deleteResource, detectResourceType, addMention } from '../db/queries/resources';
 import { touchTask } from '../db/queries/tasks';
 import { ResourceMentionPicker, ResourceMentionChip, useResourceMentions } from '../components/ResourceMentionPicker';
 import {
@@ -498,6 +498,173 @@ function NoteArticle({
   );
 }
 
+function EventTaskLinksPanel({ taskId }: { taskId: string }) {
+  const { data: links = [] } = useEventTaskLinks({ task_id: taskId });
+  const { data: events = [] } = useEvents();
+  const createLink = useCreateEventTaskLink();
+  const deleteLink = useDeleteEventTaskLink();
+  const { triggerToast } = useAppStore();
+  const [selectedEventId, setSelectedEventId] = useState('');
+
+  const linkedEventIds = new Set(links.map(l => l.event_id));
+  const linkableEvents = events.filter(e => !linkedEventIds.has(e.id));
+
+  if (!links.length && !events.length) return null;
+
+  const handleLink = async () => {
+    if (!selectedEventId) return;
+    try {
+      await createLink.mutateAsync({ event_id: selectedEventId, task_id: taskId });
+      setSelectedEventId('');
+      triggerToast('Event linked.', 'success');
+    } catch {
+      triggerToast('Failed to link event.', 'error');
+    }
+  };
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-1.5">
+        <Link2 size={14} className="text-gray-500" />
+        <h2 className="font-headline text-sm font-bold text-gray-900">Linked Events</h2>
+      </div>
+
+      {links.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          {links.map(l => (
+            <div key={l.id} className="group/el flex items-center gap-2 rounded-lg border border-gray-100 bg-white px-2.5 py-2">
+              <div className="min-w-0 flex-1">
+                <span className="text-xs font-semibold text-gray-700 truncate block">{l.event_title ?? l.event_id.slice(0, 12)}</span>
+                {l.planned_minutes != null && (
+                  <span className="font-mono text-[10px] text-gray-400">{l.planned_minutes}m planned</span>
+                )}
+              </div>
+              <button
+                onClick={() => deleteLink.mutate(l.id)}
+                className="shrink-0 text-gray-300 opacity-0 hover:text-red-400 group-hover/el:opacity-100 transition-all"
+                title="Unlink event"
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {linkableEvents.length > 0 && (
+        <div className="flex gap-2">
+          <select
+            value={selectedEventId}
+            onChange={e => setSelectedEventId(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
+          >
+            <option value="">Link an event…</option>
+            {linkableEvents.map(e => (
+              <option key={e.id} value={e.id}>{e.title || e.type}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleLink}
+            disabled={!selectedEventId || createLink.isPending}
+            className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90 disabled:opacity-40"
+            title="Link event"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WorkSessionPanel({ taskId }: { taskId: string }) {
+  const [minInput, setMinInput] = useState('');
+  const [notesInput, setNotesInput] = useState('');
+  const { data: sessions = [] } = useTaskWorkSessions(taskId);
+  const createWS = useCreateWorkSession();
+  const deleteWS = useDeleteWorkSession();
+  const { triggerToast } = useAppStore();
+
+  const totalLogged = sessions.reduce((sum, s) => sum + (s.minutes ?? 0), 0);
+
+  const handleLog = async () => {
+    const m = Number(minInput);
+    if (!m || m <= 0) return;
+    await createWS.mutateAsync({ task_id: taskId, minutes: m, notes: notesInput.trim() || undefined, source: 'manual' });
+    setMinInput('');
+    setNotesInput('');
+    triggerToast('Time logged.', 'success');
+  };
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-1.5">
+        <Clock size={14} className="text-gray-500" />
+        <h2 className="font-headline text-sm font-bold text-gray-900">Work Sessions</h2>
+        {totalLogged > 0 && (
+          <span className="ml-auto font-mono text-[9px] text-gray-400">{formatTaskTime(totalLogged)} total</span>
+        )}
+      </div>
+
+      <div className="mb-3 flex gap-2">
+        <input
+          type="number"
+          min={1}
+          step={5}
+          value={minInput}
+          onChange={e => setMinInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleLog(); }}
+          placeholder="min"
+          className="w-16 shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
+        />
+        <input
+          value={notesInput}
+          onChange={e => setNotesInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleLog(); }}
+          placeholder="What did you do?"
+          className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
+        />
+        <button
+          onClick={handleLog}
+          disabled={!minInput || Number(minInput) <= 0 || createWS.isPending}
+          className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90 disabled:opacity-40"
+          title="Log time"
+        >
+          <Plus size={13} />
+        </button>
+      </div>
+
+      <div className="max-h-48 space-y-1.5 overflow-y-auto">
+        {sessions.length > 0 ? sessions.slice(0, 10).map(s => (
+          <div key={s.id} className="group/ws flex items-start gap-2 rounded-lg border border-gray-100 bg-white px-2.5 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold text-gray-700">{s.minutes}m</span>
+                <span className="font-mono text-[9px] text-gray-400">
+                  {new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+                {s.source && s.source !== 'manual' && (
+                  <span className="font-mono text-[8px] uppercase text-gray-300">{s.source}</span>
+                )}
+              </div>
+              {s.notes && <p className="mt-0.5 truncate text-[10px] text-gray-500">{s.notes}</p>}
+            </div>
+            <button
+              onClick={() => deleteWS.mutate(s.id)}
+              className="shrink-0 text-gray-300 opacity-0 transition-all hover:text-red-400 group-hover/ws:opacity-100"
+              title="Remove session"
+            >
+              <Trash2 size={11} />
+            </button>
+          </div>
+        )) : (
+          <p className="rounded-lg border border-dashed border-gray-200 p-4 text-center text-[11px] text-gray-300">No sessions logged yet.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function TaskFocusView() {
   const {
     selectedGoalId,
@@ -523,6 +690,7 @@ export function TaskFocusView() {
   const journalTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const mentions = useResourceMentions();
+  const createWorkSession = useCreateWorkSession();
 
   const { data: goal }           = useGoal(selectedGoalId);
   const { data: task }           = useTask(focusedTaskId);
@@ -534,14 +702,7 @@ export function TaskFocusView() {
     if (focusedTaskId) touchTask(focusedTaskId).catch(() => {});
   }, [focusedTaskId]);
 
-  const [resources, setResources] = useState<DBResource[]>([]);
-  useEffect(() => {
-    if (!focusedTaskId) { setResources([]); return; }
-    const load = () => getResourcesForTask(focusedTaskId).then(setResources).catch(() => {});
-    load();
-    const id = setInterval(load, 800);
-    return () => clearInterval(id);
-  }, [focusedTaskId]);
+  const { data: resources = [] } = useTaskResources(focusedTaskId);
 
   useEffect(() => {
     if (task) setTaskTitle(task.title);
@@ -598,6 +759,7 @@ export function TaskFocusView() {
 
   const attachResource = async (title: string, url: string | null, type: DBResource['type'], info = 'attached now') => {
     await createResource({ title, url, type, info }, goal.id, task.id);
+    invalidate.resources();
     triggerToast('Resource attached.', 'success');
   };
 
@@ -712,6 +874,7 @@ export function TaskFocusView() {
   const handleDeleteResource = (resourceId: string) => {
     showConfirm('Remove this resource?', async () => {
       await deleteResource(resourceId);
+      invalidate.resources();
       triggerToast('Resource removed.', 'info');
     });
   };
@@ -902,7 +1065,6 @@ export function TaskFocusView() {
             <ActualTimeChip
               minutes={task.actual_minutes}
               estimatedMinutes={task.estimated_minutes}
-              onSave={async (m) => { await updateTask(task.id, { actual_minutes: m }); }}
             />
           </div>
         )}
@@ -1171,6 +1333,9 @@ export function TaskFocusView() {
               )}
             </div>
           </section>
+
+          {focusedTaskId && <EventTaskLinksPanel taskId={focusedTaskId} />}
+          {focusedTaskId && <WorkSessionPanel taskId={focusedTaskId} />}
         </aside>
       </div>
 
@@ -1191,7 +1356,7 @@ export function TaskFocusView() {
             taskTitle={pendingComplete.title}
             estimatedMinutes={pendingComplete.estimated_minutes}
             onLog={async (minutes) => {
-              await updateTask(pendingComplete.id, { actual_minutes: minutes });
+              await createWorkSession.mutateAsync({ task_id: pendingComplete.id, minutes, source: 'completion' });
               await toggleTask(pendingComplete.id);
               invalidate.tasks(selectedGoalId ?? undefined);
               setPendingComplete(null);

@@ -43,6 +43,8 @@ export function NewEventModal() {
       description:    desc || 'Custom scheduled block designed to support task execution.',
       week_start:     null,
       connected_resource_json: null,
+      locked: false,
+      source: 'manual',
     });
     triggerToast(`Scheduled "${title.trim()}"!`, 'success');
     closeNewEventModal();

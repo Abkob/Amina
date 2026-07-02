@@ -5,7 +5,7 @@ import { formatTaskTime, parseTaskTimeInput } from '../utils/taskTime';
 interface Props {
   minutes: number;
   estimatedMinutes?: number | null;
-  onSave: (minutes: number | null) => void;
+  onSave?: (minutes: number | null) => void;
 }
 
 export function ActualTimeChip({ minutes, estimatedMinutes, onSave }: Props) {
@@ -14,7 +14,7 @@ export function ActualTimeChip({ minutes, estimatedMinutes, onSave }: Props) {
   const ref = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (editing) {
+    if (editing && onSave) {
       setDraft(formatTaskTime(minutes));
       ref.current?.focus();
       ref.current?.select();
@@ -34,7 +34,7 @@ export function ActualTimeChip({ minutes, estimatedMinutes, onSave }: Props) {
 
   const isOver = estimatedMinutes != null && minutes > estimatedMinutes;
 
-  if (editing) {
+  if (editing && onSave) {
     return (
       <input
         ref={ref}
@@ -53,8 +53,9 @@ export function ActualTimeChip({ minutes, estimatedMinutes, onSave }: Props) {
 
   return (
     <button
-      onClick={() => setEditing(true)}
-      title="Click to edit actual time"
+      onClick={() => onSave && setEditing(true)}
+      title={onSave ? 'Click to edit actual time' : undefined}
+      style={!onSave ? { cursor: 'default' } : undefined}
       className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${
         isOver
           ? 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300'

@@ -25,7 +25,7 @@ export interface DBGoal {
   category: string;
   status: 'Safe' | 'Watch' | 'Risky';
   progress: number;                    // 0–100
-  deadline: string | null;             // ISO date or quarter string e.g. "Q3 2024"
+  deadline: string | null;             // YYYY-MM-DD ISO date, or null
   overdue: boolean;
   activity_level: number;              // 1–5
   archived_at: string | null;          // null = visible, ISO date = archived
@@ -59,8 +59,87 @@ export interface DBTask {
   position: number;                    // ordering within sibling tasks
   last_activity_at?: string | null;
   completion_note?: string;
+  start_date?: string | null;
+  deadline_id?: string | null;
+  milestone_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ─── Goal Deadlines ──────────────────────────────────────────────────────────
+export interface DBDeadline {
+  id: string;
+  goal_id: string;
+  title: string;
+  date: string;
+  color: string;
+  created_at: string;
+}
+
+// ─── Meetings ────────────────────────────────────────────────────────────────
+export interface DBMeeting {
+  id: string;
+  goal_id: string | null;
+  milestone_id: string | null;
+  title: string;
+  scheduled_at: string;         // "YYYY-MM-DDTHH:MM"
+  duration_minutes: number;
+  location: string;
+  notes: string;
+  summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Goal Milestones ─────────────────────────────────────────────────────────
+export interface DBMilestone {
+  id: string;
+  goal_id: string;
+  title: string;
+  description: string;
+  due_date: string | null;
+  color: string;
+  position: number;
+  completed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── User Schedule Preferences (single row, id = 'default') ──────────────────
+export interface DBSchedulePrefs {
+  id: string;
+  work_days: string;              // JSON: number[] e.g. [1,2,3,4,5] (Mon=1..Sun=7)
+  work_start: number;             // e.g. 9.0 = 9:00am
+  work_end: number;               // e.g. 18.0 = 6:00pm
+  daily_capacity_minutes: number; // e.g. 480 = 8 hours
+  deep_work_start: number;        // e.g. 9.0
+  deep_work_end: number;          // e.g. 12.0
+  buffer_ratio: number;           // e.g. 0.15 = 15% time buffers
+  timezone: string;               // IANA timezone e.g. 'Asia/Beirut'
+  updated_at: string;
+}
+
+// ─── Event ↔ Task Links ───────────────────────────────────────────────────────
+export interface DBEventTaskLink {
+  id: string;
+  event_id: string;
+  task_id: string;
+  planned_minutes: number | null;
+  created_at: string;
+}
+
+// ─── Work Sessions ────────────────────────────────────────────────────────────
+export interface DBWorkSession {
+  id: string;
+  task_id: string | null;
+  resource_id: string | null;
+  goal_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  minutes: number | null;
+  notes: string;
+  source: 'manual' | 'timer' | 'auto' | 'completion' | 'journal' | 'legacy';
+  created_at: string;
 }
 
 // ─── Notes on tasks (inline comments / thread) ───────────────────────────────
@@ -112,10 +191,16 @@ export interface DBResource {
   url: string | null;
   type: ResourceType;
   info: string;
+  description: string | null;
   read_state: ResourceReadState;
   next_action: string;
-  tags_json: string;   // JSON: string[]
+  tags_json: string;           // JSON: string[]
+  estimated_minutes: number | null;
+  actual_minutes: number | null;
+  file_path: string | null;
+  external_id: string | null;
   created_at: string;
+  updated_at: string | null;
 }
 
 export interface DBResourceMention {
@@ -155,6 +240,8 @@ export interface DBEvent {
   description: string;
   week_start: string | null;           // ISO date of Monday of the week
   connected_resource_json: string | null; // JSON: { title: string; source: string }
+  locked: boolean;
+  source: string;                      // 'manual' | 'ai' | 'import' etc.
   created_at: string;
   updated_at: string;
 }
@@ -216,6 +303,138 @@ export interface GraphEdge {
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+}
+
+// ─── Journal system ──────────────────────────────────────────────────────────
+export type IngestionStatus = 'pending' | 'processing' | 'processed' | 'failed' | 'needs_review';
+
+export interface DBJournalEntry {
+  id: string;
+  entry_date: string;              // YYYY-MM-DD
+  raw_text: string;
+  summary: string | null;
+  mood: string | null;             // positive|neutral|negative|stressed|energized|tired
+  energy_level: number | null;     // 1–10
+  tags_json: string;               // JSON: string[]
+  ingestion_status: IngestionStatus;
+  ingestion_attempts: number;
+  ingestion_error: string | null;
+  content_hash: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DBJournalLink {
+  id: string;
+  journal_entry_id: string;
+  target_type: string;             // goal|task|resource|milestone|note
+  target_id: string;
+  relationship: string;            // progress_update|discusses|created_task|mentions|contributes_to|risk_update|decision|blocker
+  confidence: number;              // 0–1
+  created_by: string;              // ai|manual
+  created_at: string;
+}
+
+export interface DBExtractedFact {
+  id: string;
+  source_type: string;             // journal_entry|meeting|resource|work_session
+  source_id: string;
+  fact_type: string;               // progress|risk|blocker|decision|deadline|task_candidate|meeting_candidate
+  fact_text: string;
+  target_type: string | null;
+  target_id: string | null;
+  confidence: number;
+  status: string;                  // active|confirmed|rejected|stale
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DBEntityAlias {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  alias: string;
+  created_by: string;
+  created_at: string;
+}
+
+// ─── Vector memory ───────────────────────────────────────────────────────────
+export interface DBEmbedding {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  chunk_id: string | null;
+  embedding_scope: string;         // title|summary|full_text|chunk|planning_summary
+  embedding_text: string;
+  embedding_model: string;
+  content_hash: string;
+  is_stale: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DBEmbeddingJob {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  chunk_id: string | null;
+  action: string;                  // upsert|delete|refresh
+  priority: number;
+  status: string;                  // pending|processing|done|failed
+  attempts: number;
+  error: string | null;
+  created_at: string;
+  processed_at: string | null;
+}
+
+export interface DBEntitySummary {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  summary_type: string;            // planning|semantic|graph|journal_digest
+  summary_text: string;
+  source_hash: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── AI proposals ─────────────────────────────────────────────────────────────
+export interface DBAIActionProposal {
+  id: string;
+  source_type: string | null;
+  source_id: string | null;
+  action_type: string;
+  action_payload: string;          // JSON (column was renamed from 'payload' via M-001)
+  confidence: number;
+  status: string;                  // pending|applied|rejected
+  explanation: string | null;
+  created_at: string;
+  applied_at: string | null;
+  idempotency_key: string | null;
+}
+
+// ─── Resource chunks ─────────────────────────────────────────────────────────
+export interface DBResourceChunk {
+  id: string;
+  resource_id: string;
+  chunk_index: number;
+  heading: string | null;
+  content: string;
+  page_start: number | null;
+  page_end: number | null;
+  token_count: number | null;
+  content_hash: string | null;
+  created_at: string;
+}
+
+// ─── Schedule day overrides ───────────────────────────────────────────────────
+export interface DBScheduleDayOverride {
+  id: string;
+  date: string;                    // YYYY-MM-DD
+  available_minutes: number | null;
+  unavailable_blocks: string;      // JSON: {start: number, end: number}[]
+  note: string | null;
+  created_at: string;
 }
 
 // ─── Parsed embedded JSON helpers ────────────────────────────────────────────

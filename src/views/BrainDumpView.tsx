@@ -8,6 +8,7 @@ import { useAppStore } from '../store/useAppStore';
 import { ClassificationPopup } from '../modals/ClassificationPopup';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { useNotes } from '../api/hooks';
+import { apiFetch } from '../utils/apiFetch';
 import { updateNoteContent, deleteNote, applyNoteSuggestedAction, ignoreNoteSuggestedAction } from '../db/queries/notes';
 import { createTask } from '../db/queries/tasks';
 import { parseExtractedTasks, parseRelevantDocs } from '../db/schema';
@@ -85,7 +86,7 @@ function NoteEditor() {
   const handleApply = async () => {
     if (!activeNote?.suggested_action_text) return;
 
-    const allGoals = await fetch('/api/goals').then(r => r.json()) as { id: string; title: string; archived_at: string | null }[];
+    const allGoals = await apiFetch<{ id: string; title: string; archived_at: string | null }[]>('/api/goals');
     const targetGoal = allGoals.filter(g => !g.archived_at)[0];
     if (!targetGoal) {
       triggerToast('No active goals to link this task to.', 'error');
@@ -94,7 +95,7 @@ function NoteEditor() {
 
     await applyNoteSuggestedAction(activeNote.id, targetGoal.id);
 
-    const allTasks = await fetch(`/api/tasks?goal_id=${targetGoal.id}`).then(r => r.json()) as { title: string }[];
+    const allTasks = await apiFetch<{ title: string }[]>(`/api/tasks?goal_id=${targetGoal.id}`);
     const existing = allTasks.find(t => t.title === activeNote.suggested_action_text);
 
     if (!existing) {

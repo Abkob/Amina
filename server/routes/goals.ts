@@ -1,80 +1,101 @@
 import { Router } from 'express';
-import { db, rowToGoal, rowToTask, sanitizeForSQLite } from '../db.js';
+import { query } from '../db.js';
 import { calculateGoalTaskMetrics } from '../../src/utils/goalTaskMetrics.js';
+import { createGoal, updateGoal, deleteGoal } from '../services/goalService.js';
 
 const router = Router();
 
-function syncGoalMetrics(goalId: string) {
-  const tasks = db.prepare('SELECT * FROM tasks WHERE goal_id = ?').all(goalId) as Record<string, unknown>[];
-  const mapped = tasks.map(rowToTask) as Parameters<typeof calculateGoalTaskMetrics>[0];
-  const metrics = calculateGoalTaskMetrics(mapped);
-  db.prepare('UPDATE goals SET progress = ?, activity_level = ?, updated_at = ? WHERE id = ?')
-    .run(metrics.progress, metrics.activityLevel, new Date().toISOString(), goalId);
+export async function syncGoalMetrics(goalId: string) {
+  const { rows: tasks } = await query('SELECT * FROM tasks WHERE goal_id = $1', [goalId]);
+  const metrics = calculateGoalTaskMetrics(tasks as unknown as Parameters<typeof calculateGoalTaskMetrics>[0]);
+  await query(
+    'UPDATE goals SET progress = $1, activity_level = $2, updated_at = $3 WHERE id = $4',
+    [metrics.progress, metrics.activityLevel, new Date().toISOString(), goalId],
+  );
   return metrics;
 }
 
-// GET /api/goals
-router.get('/', (_req, res) => {
-  const rows = db.prepare('SELECT * FROM goals ORDER BY created_at DESC').all() as Record<string, unknown>[];
-  res.json(rows.map(rowToGoal));
+// GET /api/goals?limit=N&offset=N&archived=true
+router.get('/', async (req, res) => {
+  const limit  = Math.min(Math.max(1, Number(req.query.limit)  || 200), 200);
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const archived = req.query.archived === 'true';
+  const where = archived ? '' : 'WHERE archived_at IS NULL';
+  const [{ rows }, { rows: countRows }] = await Promise.all([
+    query(`SELECT * FROM goals ${where} ORDER BY created_at DESC LIMIT $1 OFFSET $2`, [limit, offset]),
+    query<{ total: string }>(`SELECT COUNT(*)::int AS total FROM goals ${where}`),
+  ]);
+  res.setHeader('X-Total-Count', String(Number(countRows[0]?.total ?? 0)));
+  res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+  res.json(rows);
 });
 
 // GET /api/goals/:id
-router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json(rowToGoal(row));
+router.get('/:id', async (req, res) => {
+  const { rows } = await query('SELECT * FROM goals WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
 });
 
 // POST /api/goals
-router.post('/', (req, res) => {
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-  const g = sanitizeForSQLite({ archived_at: null, overdue: 0, activity_level: 1, ...req.body, id, created_at: now, updated_at: now });
-  db.prepare(`INSERT INTO goals (id,title,description,category,status,progress,deadline,overdue,activity_level,archived_at,created_at,updated_at)
-    VALUES (@id,@title,@description,@category,@status,@progress,@deadline,@overdue,@activity_level,@archived_at,@created_at,@updated_at)`)
-    .run(g);
+router.post('/', async (req, res) => {
+  const b = req.body;
+  const id = await createGoal({
+    title: b.title,
+    description: b.description,
+    category: b.category,
+    status: b.status,
+    deadline: b.deadline ?? null,
+  });
   res.json({ id });
 });
 
 // PATCH /api/goals/:id
-router.patch('/:id', (req, res) => {
-  const now = new Date().toISOString();
-  const updates = sanitizeForSQLite({ ...req.body, updated_at: now });
-  const sets = Object.keys(updates).map(k => `${k} = @${k}`).join(', ');
-  db.prepare(`UPDATE goals SET ${sets} WHERE id = @id`).run({ ...updates, id: req.params.id });
+router.patch('/:id', async (req, res) => {
+  await updateGoal(req.params.id, req.body);
   res.json({ ok: true });
 });
 
-// DELETE /api/goals/:id  (cascades tasks → notes → note_files → resources → edges)
-router.delete('/:id', (req, res) => {
-  const goalId = req.params.id;
-  const tasks = db.prepare('SELECT id FROM tasks WHERE goal_id = ?').all(goalId) as { id: string }[];
-  for (const t of tasks) {
-    const notes = db.prepare('SELECT id FROM task_notes WHERE task_id = ?').all(t.id) as { id: string }[];
-    for (const n of notes) {
-      const files = db.prepare('SELECT file_path FROM task_note_files WHERE note_id = ?').all(n.id) as { file_path: string }[];
-      for (const f of files) { try { require('fs').unlinkSync(f.file_path); } catch {} }
-      db.prepare('DELETE FROM task_note_files WHERE note_id = ?').run(n.id);
-    }
-    db.prepare('DELETE FROM task_notes WHERE task_id = ?').run(t.id);
-    db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(t.id, t.id);
-  }
-  const resEdges = db.prepare("SELECT source_id FROM edges WHERE target_id = ? AND relationship = 'attached_to'").all(goalId) as { source_id: string }[];
-  for (const e of resEdges) {
-    db.prepare('DELETE FROM resources WHERE id = ?').run(e.source_id);
-    db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(e.source_id, e.source_id);
-  }
-  db.prepare('DELETE FROM tasks WHERE goal_id = ?').run(goalId);
-  db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(goalId, goalId);
-  db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
+// DELETE /api/goals/:id
+router.delete('/:id', async (req, res) => {
+  await deleteGoal(req.params.id);
   res.json({ ok: true });
 });
 
 // POST /api/goals/:id/sync-metrics
-router.post('/:id/sync-metrics', (req, res) => {
-  const metrics = syncGoalMetrics(req.params.id);
+router.post('/:id/sync-metrics', async (req, res) => {
+  const metrics = await syncGoalMetrics(req.params.id);
   res.json(metrics);
 });
 
-export { router as goalsRouter, syncGoalMetrics };
+// GET /api/goals/health — aggregate task health for all goals in one query (eliminates N+1)
+router.get('/health', async (_req, res) => {
+  const { rows } = await query<{
+    goal_id: string;
+    total: string;
+    completed: string;
+    overdue: string;
+    in_progress: string;
+    estimated_minutes_total: string;
+    actual_minutes_total: string;
+    earliest_due: string | null;
+    latest_due: string | null;
+  }>(`
+    SELECT
+      goal_id,
+      COUNT(*)::int                                          AS total,
+      SUM(CASE WHEN completed THEN 1 ELSE 0 END)::int       AS completed,
+      SUM(CASE WHEN NOT completed AND due_date < CURRENT_DATE::text THEN 1 ELSE 0 END)::int AS overdue,
+      SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END)::int AS in_progress,
+      COALESCE(SUM(CASE WHEN NOT completed THEN estimated_minutes ELSE 0 END), 0)::int AS estimated_minutes_total,
+      COALESCE(SUM(actual_minutes), 0)::int                 AS actual_minutes_total,
+      MIN(CASE WHEN NOT completed THEN due_date END)        AS earliest_due,
+      MAX(CASE WHEN NOT completed THEN due_date END)        AS latest_due
+    FROM tasks
+    WHERE goal_id IS NOT NULL
+    GROUP BY goal_id
+  `);
+  res.json(rows);
+});
+
+export { router as goalsRouter };

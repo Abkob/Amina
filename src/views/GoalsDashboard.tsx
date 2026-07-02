@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus, AlertCircle, Clock, Trash2, Milestone } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { ProgressRing } from '../components/ProgressRing';
-import { useGoals } from '../api/hooks';
+import { useGoals, useAllTasks } from '../api/hooks';
 import { archiveGoal, restoreGoal, deleteGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
 import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
@@ -213,14 +213,7 @@ export function GoalsDashboard() {
   const { goalsFilter, setGoalsFilter, searchQuery, openNewGoalModal } = useAppStore();
 
   const { data: goals = [] } = useGoals();
-
-  const [allTasks, setAllTasks] = useState<DBTask[]>([]);
-  useEffect(() => {
-    const load = () => fetch('/api/tasks').then(r => r.json()).then(setAllTasks).catch(() => {});
-    load();
-    const id = setInterval(load, 800);
-    return () => clearInterval(id);
-  }, []);
+  const { data: allTasks = [] } = useAllTasks();
 
   const nextActions = allTasks.filter(t => t.kind === 'next_action');
 

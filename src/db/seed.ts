@@ -130,10 +130,16 @@ async function runSeed(): Promise<void> {
             url: null,
             type: r.type === 'other' ? 'link' : r.type,
             info: r.info,
+            description: null,
             read_state: 'Unread',
             next_action: '',
             tags_json: '[]',
+            estimated_minutes: null,
+            actual_minutes: null,
+            file_path: null,
+            external_id: null,
             created_at: now,
+            updated_at: null,
           };
           await db.resources.add(resource);
           await addEdge({ source_id: r.id, source_type: 'resource', target_id: g.id, target_type: 'goal', relationship: 'attached_to', metadata: null });
@@ -153,6 +159,8 @@ async function runSeed(): Promise<void> {
           description: e.description,
           week_start: null,
           connected_resource_json: e.connectedResource ? JSON.stringify(e.connectedResource) : null,
+          locked: false,
+          source: 'manual',
           created_at: now,
           updated_at: now,
         };

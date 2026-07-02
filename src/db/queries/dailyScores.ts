@@ -4,8 +4,12 @@ import type { DBDailyScore } from '../schema';
 function id()  { return crypto.randomUUID(); }
 function now() { return new Date().toISOString(); }
 
+function localYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function todayKey(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return localYMD(new Date()); // YYYY-MM-DD in local time, not UTC
 }
 
 export async function getTodayScore(): Promise<DBDailyScore | undefined> {
@@ -28,7 +32,7 @@ export async function upsertDailyScore(
 export async function getScoreHistory(days = 30): Promise<DBDailyScore[]> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const cutoffStr = localYMD(cutoff);
 
   const all = await db.daily_scores.orderBy('date').reverse().toArray();
   return all.filter(s => s.date >= cutoffStr);

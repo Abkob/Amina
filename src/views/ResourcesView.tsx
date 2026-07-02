@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import {
   ExternalLink, Eye, Plus, Search, Trash2, X, Upload,
   Link2, ArrowUpDown, BookOpen, CheckCircle2, Clock, Archive,
@@ -8,9 +8,10 @@ import { FileViewerModal } from '../components/FileViewerModal';
 import { ResourceTypeIcon } from '../components/ResourceMentionPicker';
 import { ResourceProfilePage } from './ResourceProfilePage';
 import {
-  getAllResources, createStandaloneResource, deleteResource,
+  createStandaloneResource, deleteResource,
   updateResource, nextReadState, uploadResourceFile,
 } from '../db/queries/resources';
+import { useAllResources, useInvalidate } from '../api/hooks';
 import { useAppStore } from '../store/useAppStore';
 import type { DBResource, ResourceReadState, ResourceType } from '../db/schema';
 import { parseTags } from '../db/schema';
@@ -336,7 +337,6 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
 
 // ─── Main view ────────────────────────────────────────────────────────────────
 export function ResourcesView() {
-  const [resources, setResources]   = useState<DBResource[]>([]);
   const [search, setSearch]         = useState('');
   const [typeFilter, setTypeFilter] = useState<ResourceType | 'all'>('all');
   const [readFilter, setReadFilter] = useState<ResourceReadState | 'all'>('all');
@@ -344,28 +344,24 @@ export function ResourcesView() {
   const [showAdd, setShowAdd]       = useState(false);
   const [viewing, setViewing]       = useState<DBResource | null>(null);
   const { showConfirm, triggerToast, focusedResourceId, setFocusedResourceId } = useAppStore();
+  const { data: resources = [] } = useAllResources();
+  const invalidate = useInvalidate();
+
+  // All hooks must run unconditionally — early return comes after
 
   if (focusedResourceId) return <ResourceProfilePage resourceId={focusedResourceId} />;
-
-  const load = useCallback(() => getAllResources().then(setResources).catch(() => {}), []);
-
-  useEffect(() => {
-    load();
-    const id = setInterval(load, 2000);
-    return () => clearInterval(id);
-  }, [load]);
 
   const handleDelete = (r: DBResource) => {
     showConfirm(`Remove "${r.title}" from the library?`, async () => {
       await deleteResource(r.id);
+      invalidate.resources();
       triggerToast('Resource removed.', 'info');
-      load();
     });
   };
 
   const handleReadStateChange = async (r: DBResource, next: ResourceReadState) => {
     await updateResource(r.id, { read_state: next });
-    load();
+    invalidate.resources();
   };
 
   const usedTypes = Array.from(new Set(resources.map(r => r.type)));
@@ -427,7 +423,7 @@ export function ResourcesView() {
               transition={{ duration: 0.2 }}
               className="overflow-hidden"
             >
-              <AddPanel onAdded={() => { load(); setShowAdd(false); }} />
+              <AddPanel onAdded={() => { invalidate.resources(); setShowAdd(false); }} />
             </motion.div>
           )}
         </AnimatePresence>

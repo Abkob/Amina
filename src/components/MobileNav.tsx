@@ -1,11 +1,11 @@
-import { BookOpen, Target, Calendar, FolderOpen, Settings as SettingsIcon } from 'lucide-react';
+import { BookOpen, Target, FolderOpen, Settings as SettingsIcon, BarChart2, Zap, ScrollText } from 'lucide-react';
 import { useAppStore, type Tab } from '../store/useAppStore';
 
 const TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
+  { id: 'Copilot',    label: 'Copilot',   Icon: Zap },
   { id: 'Brain Dump', label: 'Capture',   Icon: BookOpen },
   { id: 'Goals',      label: 'Goals',     Icon: Target },
-  { id: 'Schedule',   label: 'Schedule',  Icon: Calendar },
-  { id: 'Resources',  label: 'Resources', Icon: FolderOpen },
+  { id: 'Journal',    label: 'Journal',   Icon: ScrollText },
   { id: 'Settings',   label: 'Settings',  Icon: SettingsIcon },
 ];
 

@@ -1,176 +1,387 @@
 import { Router } from 'express';
-import { db, rowToTask, sanitizeForSQLite } from '../db.js';
+import { query, buildUpdate, transaction } from '../db.js';
 import { syncGoalMetrics } from './goals.js';
+import { generateEntitySummary } from '../services/summaryGenerator.js';
+import { queueEmbeddingUpsert, markEmbeddingStale } from '../services/embeddingLifecycle.js';
+import { requireISODate } from '../utils/localDate.js';
 
 const router = Router();
 
-function deleteTaskCascade(taskId: string) {
-  const children = db.prepare('SELECT id FROM tasks WHERE parent_task_id = ?').all(taskId) as { id: string }[];
-  for (const c of children) deleteTaskCascade(c.id);
-  const notes = db.prepare('SELECT id FROM task_notes WHERE task_id = ?').all(taskId) as { id: string }[];
-  for (const n of notes) {
-    const files = db.prepare('SELECT file_path FROM task_note_files WHERE note_id = ?').all(n.id) as { file_path: string }[];
-    for (const f of files) { try { require('fs').unlinkSync(f.file_path); } catch {} }
-    db.prepare('DELETE FROM task_note_files WHERE note_id = ?').run(n.id);
-  }
-  db.prepare('DELETE FROM task_notes WHERE task_id = ?').run(taskId);
-  db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(taskId, taskId);
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
-}
+const TASK_UPDATE_FIELDS = new Set([
+  'goal_id', 'parent_task_id', 'milestone_id', 'deadline_id',
+  'title', 'description', 'status', 'priority', 'kind', 'critical_path_status',
+  'tags_json', 'due_date', 'start_date', 'estimated_duration', 'estimated_minutes',
+  'weight_percent', 'completed', 'position',
+  'last_activity_at', 'completion_note',
+]);
 
-// GET /api/tasks?goal_id=...
-router.get('/', (req, res) => {
-  const { goal_id } = req.query;
-  const rows = goal_id
-    ? db.prepare('SELECT * FROM tasks WHERE goal_id = ? ORDER BY position ASC, created_at ASC').all(goal_id as string) as Record<string, unknown>[]
-    : db.prepare('SELECT * FROM tasks ORDER BY created_at DESC').all() as Record<string, unknown>[];
-  res.json(rows.map(rowToTask));
+const VALID_TASK_STATUSES = new Set(['todo', 'in_progress', 'done', 'inactive', 'blocked']);
+const VALID_TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
+
+// GET /api/tasks?goal_id=...&parent_task_id=...&limit=N&offset=N
+router.get('/', async (req, res) => {
+  const { goal_id, parent_task_id } = req.query;
+  const limit  = Math.min(Math.max(1, Number(req.query.limit)  || 500), 500);
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  let result;
+  let countResult;
+  if (goal_id) {
+    [result, countResult] = await Promise.all([
+      query('SELECT * FROM tasks WHERE goal_id = $1 ORDER BY position ASC, created_at ASC LIMIT $2 OFFSET $3', [goal_id, limit, offset]),
+      query<{ total: string }>('SELECT COUNT(*)::int AS total FROM tasks WHERE goal_id = $1', [goal_id]),
+    ]);
+  } else if (parent_task_id) {
+    [result, countResult] = await Promise.all([
+      query('SELECT * FROM tasks WHERE parent_task_id = $1 ORDER BY position ASC, created_at ASC LIMIT $2 OFFSET $3', [parent_task_id, limit, offset]),
+      query<{ total: string }>('SELECT COUNT(*)::int AS total FROM tasks WHERE parent_task_id = $1', [parent_task_id]),
+    ]);
+  } else {
+    [result, countResult] = await Promise.all([
+      query('SELECT * FROM tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2', [limit, offset]),
+      query<{ total: string }>('SELECT COUNT(*)::int AS total FROM tasks'),
+    ]);
+  }
+  res.setHeader('X-Total-Count', String(Number(countResult.rows[0]?.total ?? 0)));
+  res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+  res.json(result.rows);
 });
 
 // GET /api/tasks/:id
-router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json(rowToTask(row));
+router.get('/:id', async (req, res) => {
+  const { rows } = await query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
 });
 
 // POST /api/tasks
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
+  const b = req.body;
+  if (!b.title?.trim()) return res.status(400).json({ error: 'title required' });
+  if (b.status !== undefined && !VALID_TASK_STATUSES.has(b.status as string)) {
+    return res.status(400).json({ error: `Invalid status. Must be one of: ${[...VALID_TASK_STATUSES].join(', ')}` });
+  }
+  if (b.priority !== undefined && !VALID_TASK_PRIORITIES.has(b.priority as string)) {
+    return res.status(400).json({ error: `Invalid priority. Must be one of: ${[...VALID_TASK_PRIORITIES].join(', ')}` });
+  }
+  try {
+    requireISODate(b.due_date, 'due_date');
+    requireISODate(b.start_date, 'start_date');
+  } catch (e) {
+    return res.status(400).json({ error: (e as Error).message });
+  }
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const t = sanitizeForSQLite({ goal_id: null, parent_task_id: null, estimated_minutes: null, weight_percent: null, due_date: null, critical_path_status: null, completed: 0, ...req.body, id, created_at: now, updated_at: now });
-  db.prepare(`INSERT INTO tasks (id,goal_id,parent_task_id,title,description,status,priority,kind,critical_path_status,tags_json,due_date,estimated_duration,estimated_minutes,weight_percent,completed,position,created_at,updated_at)
-    VALUES (@id,@goal_id,@parent_task_id,@title,@description,@status,@priority,@kind,@critical_path_status,@tags_json,@due_date,@estimated_duration,@estimated_minutes,@weight_percent,@completed,@position,@created_at,@updated_at)`)
-    .run(t);
 
-  if (t.goal_id) {
-    db.prepare(`INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
-      VALUES (?,?,?,?,?,?,?,?)`)
-      .run(crypto.randomUUID(), t.goal_id, 'goal', id, 'task', 'contains', JSON.stringify({ kind: t.kind }), now);
-    syncGoalMetrics(t.goal_id as string);
+  const { rows: countRows } = await query(
+    'SELECT COUNT(*) as c FROM tasks WHERE goal_id = $1',
+    [b.goal_id ?? null],
+  );
+  const position = b.position ?? Number((countRows[0] as Record<string, unknown>).c ?? 0);
+
+  await query(
+    `INSERT INTO tasks
+      (id,goal_id,parent_task_id,milestone_id,deadline_id,title,description,status,priority,kind,
+       critical_path_status,tags_json,due_date,start_date,estimated_duration,estimated_minutes,
+       weight_percent,completed,position,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+    [
+      id,
+      b.goal_id ?? null,
+      b.parent_task_id ?? null,
+      b.milestone_id ?? null,
+      b.deadline_id ?? null,
+      b.title ?? '',
+      b.description ?? '',
+      b.status ?? 'todo',
+      b.priority ?? 'medium',
+      b.kind ?? 'manual',
+      b.critical_path_status ?? null,
+      b.tags_json ?? '[]',
+      b.due_date ?? null,
+      b.start_date ?? null,
+      b.estimated_duration ?? null,
+      b.estimated_minutes ?? null,
+      b.weight_percent ?? null,
+      b.completed ?? false,
+      position,
+      now,
+      now,
+    ],
+  );
+
+  if (b.goal_id) {
+    await query(
+      `INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+      [crypto.randomUUID(), b.goal_id, 'goal', id, 'task', 'contains', JSON.stringify({ kind: b.kind ?? 'manual' }), now],
+    );
+    await syncGoalMetrics(b.goal_id as string);
   }
-  if (t.parent_task_id) {
-    db.prepare(`INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
-      VALUES (?,?,?,?,?,?,?,?)`)
-      .run(crypto.randomUUID(), id, 'task', t.parent_task_id, 'task', 'subtask_of', null, now);
+  if (b.parent_task_id) {
+    await query(
+      `INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+      [crypto.randomUUID(), id, 'task', b.parent_task_id, 'task', 'subtask_of', null, now],
+    );
   }
 
   res.json({ id });
+  generateEntitySummary('task', id).catch(err => console.error('[summary] task create:', err));
+  queueEmbeddingUpsert('task', id).catch(err => console.error('[embedding] task create:', err));
 });
 
 // PATCH /api/tasks/:id
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
   const now = new Date().toISOString();
-  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!existing) return res.status(404).json({ error: 'Not found' });
+  const { rows: existing } = await query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+  if (!existing.length) return res.status(404).json({ error: 'Not found' });
 
-  const updates = sanitizeForSQLite({ ...req.body, updated_at: now });
-  const sets = Object.keys(updates).map(k => `${k} = @${k}`).join(', ');
-  db.prepare(`UPDATE tasks SET ${sets} WHERE id = @id`).run({ ...updates, id: req.params.id });
+  // Validate enum fields at the boundary
+  const body = req.body as Record<string, unknown>;
+  if (body.status !== undefined && !VALID_TASK_STATUSES.has(body.status as string)) {
+    return res.status(400).json({ error: `Invalid status. Must be one of: ${[...VALID_TASK_STATUSES].join(', ')}` });
+  }
+  if (body.priority !== undefined && !VALID_TASK_PRIORITIES.has(body.priority as string)) {
+    return res.status(400).json({ error: `Invalid priority. Must be one of: ${[...VALID_TASK_PRIORITIES].join(', ')}` });
+  }
+  try {
+    if ('due_date' in body) requireISODate(body.due_date, 'due_date');
+    if ('start_date' in body) requireISODate(body.start_date, 'start_date');
+  } catch (e) {
+    return res.status(400).json({ error: (e as Error).message });
+  }
 
-  const shouldSync = ['completed', 'status', 'parent_task_id', 'weight_percent'].some(k => k in req.body);
-  const goalId = (updates.goal_id ?? existing.goal_id) as string | null;
-  if (shouldSync && goalId) syncGoalMetrics(goalId);
+  const updates: Record<string, unknown> = { updated_at: now };
+  for (const key of TASK_UPDATE_FIELDS) {
+    if (key in body) updates[key] = body[key];
+  }
+  // State coherence: keep completed and status in sync
+  if (updates.completed === true && !('status' in body)) {
+    updates.status = 'done';
+  } else if (updates.completed === false && !('status' in body)) {
+    const task = existing[0] as Record<string, unknown>;
+    updates.status = task.last_activity_at ? 'in_progress' : 'todo';
+  }
+
+  const taskId = req.params.id;
+  const prevParent = (existing[0] as Record<string, unknown>).parent_task_id as string | null;
+  const newParent = 'parent_task_id' in body ? (body.parent_task_id as string | null) : prevParent;
+  const parentChanged = 'parent_task_id' in body && newParent !== prevParent;
+
+  const { sets, vals } = buildUpdate(updates);
+  await transaction(async (client) => {
+    await client.query(`UPDATE tasks SET ${sets} WHERE id = $${vals.length + 1}`, [...vals, taskId]);
+    if (parentChanged) {
+      // Remove old subtask_of edge
+      await client.query(
+        "DELETE FROM edges WHERE source_id=$1 AND source_type='task' AND relationship='subtask_of'",
+        [taskId],
+      );
+      if (newParent) {
+        await client.query(
+          `INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
+           VALUES ($1,$2,'task',$3,'task','subtask_of',NULL,$4) ON CONFLICT DO NOTHING`,
+          [crypto.randomUUID(), taskId, newParent, now],
+        );
+      }
+    }
+  });
+
+  const shouldSync = ['completed', 'status', 'parent_task_id', 'weight_percent'].some(k => k in body);
+  const goalId = (body.goal_id ?? (existing[0] as Record<string, unknown>).goal_id) as string | null;
+  if (shouldSync && goalId) await syncGoalMetrics(goalId);
 
   res.json({ ok: true });
+  generateEntitySummary('task', taskId).catch(err => console.error('[summary] task update:', err));
+  markEmbeddingStale('task', taskId).catch(() => {});
+  queueEmbeddingUpsert('task', taskId).catch(err => console.error('[embedding] task update:', err));
 });
 
-// POST /api/tasks/:id/toggle  (uncomplete only — completing goes through /complete)
-router.post('/:id/toggle', (req, res) => {
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  const completed = !row.completed;
+// POST /api/tasks/:id/toggle
+router.post('/:id/toggle', async (req, res) => {
+  const { rows } = await query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const task = rows[0] as Record<string, unknown>;
+  const completed = !task.completed;
   const now = new Date().toISOString();
-  // When un-completing, revert to in_progress if there was activity, else todo
-  const revertStatus = row.last_activity_at ? 'in_progress' : 'todo';
-  db.prepare('UPDATE tasks SET completed = ?, status = ?, updated_at = ? WHERE id = ?')
-    .run(completed ? 1 : 0, completed ? 'done' : revertStatus, now, req.params.id);
-  const goalId = row.goal_id as string | null;
-  const metrics = goalId ? syncGoalMetrics(goalId) : undefined;
+  const revertStatus = task.last_activity_at ? 'in_progress' : 'todo';
+  await query(
+    'UPDATE tasks SET completed=$1, status=$2, updated_at=$3 WHERE id=$4',
+    [completed, completed ? 'done' : revertStatus, now, req.params.id],
+  );
+  const goalId = task.goal_id as string | null;
+  const metrics = goalId ? await syncGoalMetrics(goalId) : undefined;
   res.json({ completed, metrics });
 });
 
-// POST /api/tasks/:id/complete — mark done with optional completion note
-router.post('/:id/complete', (req, res) => {
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
+// POST /api/tasks/:id/complete
+router.post('/:id/complete', async (req, res) => {
+  const { rows } = await query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const task = rows[0] as Record<string, unknown>;
   const now = new Date().toISOString();
   const note = (req.body.completion_note ?? '').toString().trim();
-  db.prepare('UPDATE tasks SET completed = 1, status = ?, completion_note = ?, last_activity_at = ?, updated_at = ? WHERE id = ?')
-    .run('done', note, now, now, req.params.id);
-  const goalId = row.goal_id as string | null;
-  const metrics = goalId ? syncGoalMetrics(goalId) : undefined;
+  await query(
+    'UPDATE tasks SET completed=true, status=$1, completion_note=$2, last_activity_at=$3, updated_at=$4 WHERE id=$5',
+    ['done', note, now, now, req.params.id],
+  );
+  const goalId = task.goal_id as string | null;
+  const metrics = goalId ? await syncGoalMetrics(goalId) : undefined;
   res.json({ ok: true, metrics });
 });
 
-// POST /api/tasks/:id/touch — record activity, auto-promote todo→in_progress
-router.post('/:id/touch', (req, res) => {
-  const row = db.prepare('SELECT id, status, goal_id FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
+// POST /api/tasks/:id/touch
+router.post('/:id/touch', async (req, res) => {
+  const { rows } = await query('SELECT id, status, goal_id FROM tasks WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const task = rows[0] as Record<string, unknown>;
   const now = new Date().toISOString();
-  const newStatus = (row.status === 'todo' || row.status === 'inactive') ? 'in_progress' : row.status;
-  db.prepare('UPDATE tasks SET last_activity_at = ?, status = ?, updated_at = ? WHERE id = ?')
-    .run(now, newStatus, now, req.params.id);
-  const goalId = row.goal_id as string | null;
-  if (goalId) syncGoalMetrics(goalId);
+  const newStatus = (task.status === 'todo' || task.status === 'inactive') ? 'in_progress' : task.status;
+  await query(
+    'UPDATE tasks SET last_activity_at=$1, status=$2, updated_at=$3 WHERE id=$4',
+    [now, newStatus, now, req.params.id],
+  );
+  const goalId = task.goal_id as string | null;
+  if (goalId) await syncGoalMetrics(goalId);
   res.json({ ok: true, status: newStatus });
 });
 
-// POST /api/tasks/:id/deactivate — manually pause a task
-router.post('/:id/deactivate', (req, res) => {
-  const row = db.prepare('SELECT goal_id FROM tasks WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ error: 'Not found' });
+// POST /api/tasks/:id/deactivate
+router.post('/:id/deactivate', async (req, res) => {
+  const { rows } = await query('SELECT goal_id FROM tasks WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const task = rows[0] as Record<string, unknown>;
   const now = new Date().toISOString();
-  db.prepare("UPDATE tasks SET status = 'inactive', updated_at = ? WHERE id = ?").run(now, req.params.id);
-  const goalId = row.goal_id as string | null;
-  if (goalId) syncGoalMetrics(goalId);
+  await query("UPDATE tasks SET status='inactive', updated_at=$1 WHERE id=$2", [now, req.params.id]);
+  const goalId = task.goal_id as string | null;
+  if (goalId) await syncGoalMetrics(goalId);
   res.json({ ok: true });
 });
 
 // DELETE /api/tasks/:id
-router.delete('/:id', (req, res) => {
-  const row = db.prepare('SELECT goal_id FROM tasks WHERE id = ?').get(req.params.id) as { goal_id: string | null } | undefined;
-  deleteTaskCascade(req.params.id);
-  if (row?.goal_id) syncGoalMetrics(row.goal_id);
+router.delete('/:id', async (req, res) => {
+  const taskId = req.params.id;
+  const { rows } = await query('SELECT goal_id FROM tasks WHERE id = $1', [taskId]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const goalId = (rows[0] as Record<string, unknown>).goal_id as string | null;
+
+  // Collect the full descendant tree (subtasks cascade on delete, but their side data does not)
+  const { rows: descRows } = await query<{ id: string }>(
+    `WITH RECURSIVE tree AS (
+       SELECT id FROM tasks WHERE id = $1
+       UNION ALL
+       SELECT t.id FROM tasks t JOIN tree ON t.parent_task_id = tree.id
+     ) SELECT id FROM tree`,
+    [taskId],
+  );
+  const allTaskIds = descRows.map(r => r.id);
+
+  await transaction(async (client) => {
+    // Delete resources exclusively attached to any task in the tree
+    await client.query(
+      `DELETE FROM resources WHERE id IN (
+         SELECT source_id FROM edges
+         WHERE source_type = 'resource' AND relationship = 'attached_to'
+           AND target_id = ANY($1::text[]) AND target_type = 'task'
+           AND source_id NOT IN (
+             SELECT source_id FROM edges
+             WHERE source_type = 'resource' AND relationship = 'attached_to'
+               AND (target_id != ALL($1::text[]) OR target_type != 'task')
+           )
+       )`,
+      [allTaskIds],
+    );
+    // Explicitly delete work sessions (task_id FK is SET NULL, not CASCADE)
+    await client.query('DELETE FROM work_sessions WHERE task_id = ANY($1::text[])', [allTaskIds]);
+    // Clean up derived data for the whole tree
+    await client.query(
+      "DELETE FROM entity_summaries WHERE entity_type='task' AND entity_id = ANY($1::text[])",
+      [allTaskIds],
+    );
+    await client.query(
+      "DELETE FROM embedding_jobs WHERE entity_type='task' AND entity_id = ANY($1::text[]) AND status IN ('pending','failed')",
+      [allTaskIds],
+    );
+    await client.query(
+      `DELETE FROM edges WHERE (source_id = ANY($1::text[]) AND source_type = 'task')
+                            OR (target_id = ANY($1::text[]) AND target_type = 'task')`,
+      [allTaskIds],
+    );
+    // Clean derived evidence for all tasks in the tree
+    await client.query(
+      "DELETE FROM journal_links WHERE target_type='task' AND target_id = ANY($1::text[])",
+      [allTaskIds],
+    );
+    await client.query(
+      "DELETE FROM extracted_facts WHERE target_type='task' AND target_id = ANY($1::text[])",
+      [allTaskIds],
+    );
+    await client.query(
+      "DELETE FROM entity_aliases WHERE entity_type='task' AND entity_id = ANY($1::text[])",
+      [allTaskIds],
+    );
+    await client.query(
+      "DELETE FROM ai_action_proposals WHERE source_type='task' AND source_id = ANY($1::text[]) AND status='pending'",
+      [allTaskIds],
+    );
+    // Delete the root task — subtasks cascade via FK ON DELETE CASCADE
+    await client.query('DELETE FROM tasks WHERE id=$1', [taskId]);
+  });
+
+  if (goalId) await syncGoalMetrics(goalId);
   res.json({ ok: true });
+  query(
+    "DELETE FROM embeddings WHERE entity_type='task' AND entity_id = ANY($1::text[])",
+    [allTaskIds],
+  ).catch(err => console.error('[cleanup] task embeddings:', err));
 });
 
 // ── Task notes ────────────────────────────────────────────────────────────────
 
-// GET /api/tasks/:id/notes
-router.get('/:id/notes', (req, res) => {
-  const rows = db.prepare('SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC').all(req.params.id);
+router.get('/:id/notes', async (req, res) => {
+  const { rows } = await query(
+    'SELECT * FROM task_notes WHERE task_id=$1 ORDER BY created_at ASC',
+    [req.params.id],
+  );
   res.json(rows);
 });
 
-// POST /api/tasks/:id/notes
-router.post('/:id/notes', (req, res) => {
+router.post('/:id/notes', async (req, res) => {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO task_notes (id, task_id, content, created_at) VALUES (?, ?, ?, ?)')
-    .run(id, req.params.id, req.body.content ?? '', now);
-  // Auto-touch: promote todo→in_progress on note add
-  const task = db.prepare('SELECT goal_id, status FROM tasks WHERE id = ?').get(req.params.id) as { goal_id: string | null; status: string } | undefined;
-  if (task) {
+  await query(
+    'INSERT INTO task_notes (id,task_id,content,created_at) VALUES ($1,$2,$3,$4)',
+    [id, req.params.id, req.body.content ?? '', now],
+  );
+  const { rows } = await query('SELECT goal_id, status FROM tasks WHERE id=$1', [req.params.id]);
+  if (rows.length) {
+    const task = rows[0] as Record<string, unknown>;
     const newStatus = task.status === 'todo' ? 'in_progress' : task.status;
-    db.prepare('UPDATE tasks SET updated_at = ?, last_activity_at = ?, status = ? WHERE id = ?').run(now, now, newStatus, req.params.id);
-    if (task.goal_id) syncGoalMetrics(task.goal_id);
+    await query(
+      'UPDATE tasks SET updated_at=$1, last_activity_at=$2, status=$3 WHERE id=$4',
+      [now, now, newStatus, req.params.id],
+    );
+    if (task.goal_id) await syncGoalMetrics(task.goal_id as string);
   }
   res.json({ id });
 });
 
-// PATCH /api/task-notes/:noteId
-router.patch('/notes/:noteId', (req, res) => {
-  db.prepare('UPDATE task_notes SET content = ? WHERE id = ?').run(req.body.content, req.params.noteId);
+router.patch('/notes/:noteId', async (req, res) => {
+  await query('UPDATE task_notes SET content=$1 WHERE id=$2', [req.body.content, req.params.noteId]);
   res.json({ ok: true });
 });
 
-// DELETE /api/task-notes/:noteId
-router.delete('/notes/:noteId', (req, res) => {
-  const files = db.prepare('SELECT file_path FROM task_note_files WHERE note_id = ?').all(req.params.noteId) as { file_path: string }[];
-  for (const f of files) { try { require('fs').unlinkSync(f.file_path); } catch {} }
-  db.prepare('DELETE FROM task_note_files WHERE note_id = ?').run(req.params.noteId);
-  db.prepare('DELETE FROM task_notes WHERE id = ?').run(req.params.noteId);
+router.delete('/notes/:noteId', async (req, res) => {
+  // Files cascade via FK; also delete physical files
+  const { rows: files } = await query(
+    'SELECT file_path FROM task_note_files WHERE note_id=$1',
+    [req.params.noteId],
+  );
+  const { unlinkSync } = await import('fs');
+  for (const f of files as { file_path: string }[]) {
+    try { unlinkSync(f.file_path); } catch {}
+  }
+  await query('DELETE FROM task_notes WHERE id=$1', [req.params.noteId]);
   res.json({ ok: true });
 });
 

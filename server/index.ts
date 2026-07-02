@@ -1,5 +1,12 @@
+import 'dotenv/config';
+import 'express-async-errors';
 import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { initSchema } from './db.js';
 import { seedIfEmpty } from './seed.js';
 import { goalsRouter } from './routes/goals.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -8,14 +15,39 @@ import { eventsRouter } from './routes/events.js';
 import { resourcesRouter } from './routes/resources.js';
 import { edgesRouter } from './routes/edges.js';
 import { filesRouter } from './routes/files.js';
+import { meetingsRouter } from './routes/meetings.js';
+import { aiRouter } from './routes/ai.js';
+import { deadlinesRouter } from './routes/deadlines.js';
+import { milestonesRouter } from './routes/milestones.js';
+import { schedulePrefsRouter, ensureDefaultSchedulePrefs } from './routes/schedule-prefs.js';
+import { workSessionsRouter } from './routes/work-sessions.js';
+import { eventTaskLinksRouter } from './routes/event-task-links.js';
+import { journalRouter } from './routes/journal.js';
+import { embeddingsRouter } from './routes/embeddings.js';
+import { graphRouter } from './routes/graph.js';
+import { aliasesRouter } from './routes/aliases.js';
+import { searchRouter } from './routes/search.js';
+import { processEmbeddingJobs, reclaimExpiredJobs } from './services/embeddingWorker.js';
+import { EMBED_DIMENSION, EMBED_MODEL } from './embeddingProvider.js';
+import { getProviderSummary } from './config/providers.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 const app = express();
 const PORT = 3001;
 
-app.use(cors({ origin: 'http://localhost:3000' }));
-app.use(express.json());
-
-seedIfEmpty();
+app.use(cors({
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  credentials: false,
+}));
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+app.use(express.json({ limit: '10mb' }));
 
 app.use('/api/goals', goalsRouter);
 app.use('/api/tasks', tasksRouter);
@@ -24,15 +56,613 @@ app.use('/api/events', eventsRouter);
 app.use('/api/resources', resourcesRouter);
 app.use('/api/edges', edgesRouter);
 app.use('/api/task-note-files', filesRouter);
+app.use('/api/meetings', meetingsRouter);
+app.use('/api/ai', aiRouter);
+app.use('/api/goal-deadlines', deadlinesRouter);
+app.use('/api/milestones', milestonesRouter);
+app.use('/api/schedule-prefs', schedulePrefsRouter);
+app.use('/api/work-sessions', workSessionsRouter);
+app.use('/api/event-task-links', eventTaskLinksRouter);
+app.use('/api/journal', journalRouter);
+app.use('/api/embeddings', embeddingsRouter);
+app.use('/api/graph', graphRouter);
+app.use('/api/entity-aliases', aliasesRouter);
+app.use('/api/search', searchRouter);
 
-// Reset endpoint (for Settings → Factory Reset)
-app.post('/api/reset', async (_req, res) => {
-  const { resetAndSeed } = await import('./seed.js');
-  resetAndSeed();
-  res.json({ ok: true });
+// POST /api/entity-summaries/backfill — generate deterministic planning summaries for all entities missing them
+app.post('/api/entity-summaries/backfill', async (_req, res) => {
+  const { generateDeterministicSummaries } = await import('./services/summaryGenerator.js');
+  const tables: Record<string, string> = { goal: 'goals', task: 'tasks', milestone: 'goal_milestones', resource: 'resources', meeting: 'meetings' };
+  let queued = 0, skipped = 0;
+  for (const [type, table] of Object.entries(tables)) {
+    const { query } = await import('./db.js');
+    const { rows } = await query(
+      `SELECT t.id FROM ${table} t
+       LEFT JOIN entity_summaries es ON es.entity_type=$1 AND es.entity_id=t.id AND es.summary_type='planning' AND es.summary_model='deterministic'
+       WHERE es.id IS NULL`,
+      [type],
+    );
+    for (const row of rows as { id: string }[]) {
+      try {
+        await generateDeterministicSummaries(type, row.id);
+        queued++;
+      } catch { skipped++; }
+    }
+  }
+  res.json({ queued, skipped });
 });
 
-app.listen(PORT, () => {
-  console.log(`[server] Marina API running on http://localhost:${PORT}`);
-  console.log(`[server] Database: marina.db`);
+// GET /api/health/live — fast liveness check, no external I/O
+app.get('/api/health/live', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// GET /api/health/ready — readiness check including DB connectivity
+app.get('/api/health/ready', async (_req, res) => {
+  try {
+    const { query } = await import('./db.js');
+    await query('SELECT 1');
+    res.json({ status: 'ready', db: 'connected', timestamp: new Date().toISOString() });
+  } catch (e) {
+    res.status(503).json({ status: 'not_ready', db: 'error', timestamp: new Date().toISOString() });
+  }
+});
+
+// GET /api/health — liveness + DB + Ollama connectivity check
+app.get('/api/health', async (_req, res) => {
+  const ts = new Date().toISOString();
+  let db: 'connected' | 'error' = 'error';
+  let queueStats: Record<string, number> = {};
+  let ollama: 'ok' | 'unavailable' = 'unavailable';
+
+  let schemaVersion: string | null = null;
+  let migrationCount = 0;
+  try {
+    const { query } = await import('./db.js');
+    await query('SELECT 1');
+    db = 'connected';
+    const { rows } = await query<{ status: string; count: string }>(
+      `SELECT status, COUNT(*)::int as count FROM embedding_jobs GROUP BY status`,
+    );
+    for (const r of rows) queueStats[r.status] = Number(r.count);
+    // Schema version: latest applied migration name + count
+    try {
+      const mv = await query<{ name: string; applied_at: string }>(
+        `SELECT name, applied_at FROM schema_migrations ORDER BY applied_at DESC, name DESC LIMIT 1`,
+      );
+      if (mv.rows.length) {
+        schemaVersion = mv.rows[0].name;
+        const mc = await query<{ count: string }>(`SELECT COUNT(*)::int as count FROM schema_migrations`);
+        migrationCount = Number(mc.rows[0].count);
+      }
+    } catch { /* schema_migrations may not exist yet on first run */ }
+  } catch { /* db error already captured */ }
+
+  // Worker diagnostics: oldest pending age, stuck leases, stale embeddings
+  let workerDiagnostics: Record<string, unknown> = {};
+  if (db === 'connected') {
+    try {
+      const { query: q } = await import('./db.js');
+      const [{ rows: oldestRows }, { rows: stuckRows }, { rows: staleRows }] = await Promise.all([
+        q<{ age_seconds: string }>(`
+          SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at::TIMESTAMPTZ)))::int AS age_seconds
+          FROM embedding_jobs WHERE status = 'pending'`),
+        q<{ count: string }>(`
+          SELECT COUNT(*)::int AS count FROM embedding_jobs
+          WHERE status = 'processing'
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at::TIMESTAMPTZ < NOW()`),
+        q<{ count: string }>(`SELECT COUNT(*)::int AS count FROM embeddings WHERE is_stale = true`),
+      ]);
+      workerDiagnostics = {
+        oldest_pending_seconds: oldestRows[0]?.age_seconds ?? null,
+        stuck_leases: Number(stuckRows[0]?.count ?? 0),
+        stale_embeddings: Number(staleRows[0]?.count ?? 0),
+      };
+    } catch { /* diagnostics are informational — don't fail health on error */ }
+  }
+
+  try {
+    const { ollamaHealth } = await import('./ollama.js');
+    const h = await ollamaHealth();
+    if (h.ok) ollama = 'ok';
+  } catch { /* ollama unavailable */ }
+
+  const status = db === 'connected' ? 'ok' : 'degraded';
+  res.status(db === 'connected' ? 200 : 503).json({
+    status,
+    db,
+    ollama,
+    embed_model: EMBED_MODEL,
+    embed_dimension: EMBED_DIMENSION,
+    queue: queueStats,
+    worker: workerDiagnostics,
+    schema_version: schemaVersion,
+    migration_count: migrationCount,
+    provider: getProviderSummary(),
+    timestamp: ts,
+  });
+});
+
+// GET /api/data-health — read-only orphan detection report (no repairs)
+app.get('/api/data-health', async (_req, res) => {
+  const { query } = await import('./db.js');
+
+  // Edges whose source or target no longer exist in any canonical table.
+  // We check all entity types used as edge endpoints.
+  const { rows: orphanEdges } = await query<{ direction: string; count: string }>(`
+    SELECT 'source' as direction, COUNT(*)::int as count FROM edges e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM goals    WHERE id = e.source_id AND source_type = 'goal'
+      UNION ALL
+      SELECT 1 FROM tasks    WHERE id = e.source_id AND source_type = 'task'
+      UNION ALL
+      SELECT 1 FROM resources WHERE id = e.source_id AND source_type = 'resource'
+      UNION ALL
+      SELECT 1 FROM meetings WHERE id = e.source_id AND source_type = 'meeting'
+      UNION ALL
+      SELECT 1 FROM notes    WHERE id = e.source_id AND source_type = 'note'
+    )
+    UNION ALL
+    SELECT 'target', COUNT(*)::int FROM edges e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM goals    WHERE id = e.target_id AND target_type = 'goal'
+      UNION ALL
+      SELECT 1 FROM tasks    WHERE id = e.target_id AND target_type = 'task'
+      UNION ALL
+      SELECT 1 FROM resources WHERE id = e.target_id AND target_type = 'resource'
+      UNION ALL
+      SELECT 1 FROM meetings WHERE id = e.target_id AND target_type = 'meeting'
+      UNION ALL
+      SELECT 1 FROM notes    WHERE id = e.target_id AND target_type = 'note'
+    )
+  `);
+  const orphanEdgeCounts: Record<string, number> = {};
+  for (const r of orphanEdges) orphanEdgeCounts[r.direction] = Number(r.count);
+
+  // entity_summaries for entity_ids no longer present in any canonical table
+  const { rows: orphanSummaries } = await query<{ count: string }>(`
+    SELECT COUNT(*)::int as count FROM entity_summaries es
+    WHERE NOT EXISTS (
+      SELECT 1 FROM goals        WHERE id = es.entity_id AND es.entity_type = 'goal'
+      UNION ALL
+      SELECT 1 FROM tasks        WHERE id = es.entity_id AND es.entity_type = 'task'
+      UNION ALL
+      SELECT 1 FROM goal_milestones WHERE id = es.entity_id AND es.entity_type = 'milestone'
+      UNION ALL
+      SELECT 1 FROM resources    WHERE id = es.entity_id AND es.entity_type = 'resource'
+      UNION ALL
+      SELECT 1 FROM meetings     WHERE id = es.entity_id AND es.entity_type = 'meeting'
+      UNION ALL
+      SELECT 1 FROM journal_entries WHERE id = es.entity_id AND es.entity_type = 'journal_entry'
+    )
+  `);
+
+  // embeddings for entity_ids no longer present in any canonical table
+  const { rows: orphanEmbeddings } = await query<{ count: string }>(`
+    SELECT COUNT(*)::int as count FROM embeddings emb
+    WHERE NOT EXISTS (
+      SELECT 1 FROM goals        WHERE id = emb.entity_id AND emb.entity_type = 'goal'
+      UNION ALL
+      SELECT 1 FROM tasks        WHERE id = emb.entity_id AND emb.entity_type = 'task'
+      UNION ALL
+      SELECT 1 FROM goal_milestones WHERE id = emb.entity_id AND emb.entity_type = 'milestone'
+      UNION ALL
+      SELECT 1 FROM resources    WHERE id = emb.entity_id AND emb.entity_type = 'resource'
+      UNION ALL
+      SELECT 1 FROM meetings     WHERE id = emb.entity_id AND emb.entity_type = 'meeting'
+      UNION ALL
+      SELECT 1 FROM journal_entries WHERE id = emb.entity_id AND emb.entity_type = 'journal_entry'
+      UNION ALL
+      SELECT 1 FROM resource_chunks WHERE id = emb.entity_id AND emb.entity_type = 'resource_chunk'
+    )
+  `);
+
+  // embedding_jobs (pending or failed) for deleted entities
+  const { rows: orphanJobs } = await query<{ count: string }>(`
+    SELECT COUNT(*)::int as count FROM embedding_jobs ej
+    WHERE ej.status IN ('pending', 'failed')
+      AND NOT EXISTS (
+        SELECT 1 FROM goals        WHERE id = ej.entity_id AND ej.entity_type = 'goal'
+        UNION ALL
+        SELECT 1 FROM tasks        WHERE id = ej.entity_id AND ej.entity_type = 'task'
+        UNION ALL
+        SELECT 1 FROM goal_milestones WHERE id = ej.entity_id AND ej.entity_type = 'milestone'
+        UNION ALL
+        SELECT 1 FROM resources    WHERE id = ej.entity_id AND ej.entity_type = 'resource'
+        UNION ALL
+        SELECT 1 FROM meetings     WHERE id = ej.entity_id AND ej.entity_type = 'meeting'
+        UNION ALL
+        SELECT 1 FROM journal_entries WHERE id = ej.entity_id AND ej.entity_type = 'journal_entry'
+        UNION ALL
+        SELECT 1 FROM resource_chunks WHERE id = ej.entity_id AND ej.entity_type = 'resource_chunk'
+      )
+  `);
+
+  // work_sessions pointing to tasks that no longer exist
+  const { rows: orphanWorkSessions } = await query<{ count: string }>(`
+    SELECT COUNT(*)::int as count FROM work_sessions ws
+    WHERE ws.task_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM tasks WHERE id = ws.task_id)
+  `);
+
+  // Physical file orphans: files on disk not referenced by any resource row
+  let orphanFileCount = 0;
+  const orphanFileNames: string[] = [];
+  try {
+    const diskFiles = fs.readdirSync(UPLOADS_DIR);
+    const { rows: fileRows } = await query<{ file_path: string; url: string }>(
+      `SELECT COALESCE(file_path, '') AS file_path, COALESCE(url, '') AS url FROM resources WHERE file_path IS NOT NULL OR url LIKE '/api/resources/serve/%'`,
+    );
+    const referencedNames = new Set<string>();
+    for (const r of fileRows) {
+      // file_path is the absolute on-disk path stored during upload
+      if (r.file_path) referencedNames.add(path.basename(r.file_path));
+      // url is '/api/resources/serve/<filename>'
+      if (r.url?.startsWith('/api/resources/serve/')) referencedNames.add(r.url.split('/').pop() ?? '');
+    }
+    for (const name of diskFiles) {
+      if (!referencedNames.has(name)) {
+        orphanFileCount++;
+        if (orphanFileNames.length < 20) orphanFileNames.push(name);
+      }
+    }
+  } catch { /* uploads dir may not exist on first run */ }
+
+  const totalOrphans =
+    (orphanEdgeCounts['source'] ?? 0) +
+    (orphanEdgeCounts['target'] ?? 0) +
+    Number(orphanSummaries[0]?.count ?? 0) +
+    Number(orphanEmbeddings[0]?.count ?? 0) +
+    Number(orphanJobs[0]?.count ?? 0) +
+    Number(orphanWorkSessions[0]?.count ?? 0) +
+    orphanFileCount;
+
+  res.json({
+    ok: totalOrphans === 0,
+    total_orphans: totalOrphans,
+    details: {
+      orphan_edges_by_source: orphanEdgeCounts['source'] ?? 0,
+      orphan_edges_by_target: orphanEdgeCounts['target'] ?? 0,
+      orphan_entity_summaries: Number(orphanSummaries[0]?.count ?? 0),
+      orphan_embeddings: Number(orphanEmbeddings[0]?.count ?? 0),
+      orphan_embedding_jobs: Number(orphanJobs[0]?.count ?? 0),
+      orphan_work_sessions: Number(orphanWorkSessions[0]?.count ?? 0),
+      orphan_upload_files: orphanFileCount,
+      ...(orphanFileNames.length ? { orphan_file_sample: orphanFileNames } : {}),
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// GET /api/data-readiness — planning gaps: tasks missing estimate/due-date, goals without tasks, etc.
+app.get('/api/data-readiness', async (_req, res) => {
+  const { query: dbQuery } = await import('./db.js');
+
+  const [
+    { rows: tasksNoGoal },
+    { rows: tasksNoEstimate },
+    { rows: tasksNoDueDate },
+    { rows: goalsNoTasks },
+    { rows: resourcesUnattached },
+    { rows: journalPending },
+    { rows: goalsNoPlanSummary },
+  ] = await Promise.all([
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM tasks
+      WHERE goal_id IS NULL AND completed = false`),
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM tasks t
+      JOIN goals g ON g.id = t.goal_id
+      WHERE t.completed = false AND g.archived_at IS NULL
+        AND (t.estimated_minutes IS NULL OR t.estimated_minutes = 0)`),
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM tasks t
+      JOIN goals g ON g.id = t.goal_id
+      WHERE t.completed = false AND g.archived_at IS NULL AND t.due_date IS NULL`),
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM goals g
+      WHERE g.archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM tasks WHERE goal_id = g.id AND completed = false)`),
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM resources r
+      WHERE NOT EXISTS (SELECT 1 FROM edges WHERE source_id = r.id AND source_type = 'resource' AND relationship = 'attached_to')`),
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM journal_entries WHERE ingestion_status IN ('pending','failed','needs_review')`),
+    dbQuery<{ count: string }>(`
+      SELECT COUNT(*)::int as count FROM goals g
+      WHERE g.archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM entity_summaries WHERE entity_type='goal' AND entity_id=g.id AND summary_type='planning')`),
+  ]);
+
+  const items = [
+    { bucket: 'tasks_no_goal',           count: Number(tasksNoGoal[0]?.count ?? 0),         severity: 'info',    description: 'Incomplete tasks not attached to any goal' },
+    { bucket: 'tasks_no_estimate',        count: Number(tasksNoEstimate[0]?.count ?? 0),      severity: 'warning', description: 'Incomplete tasks with no time estimate — cannot be scheduled' },
+    { bucket: 'tasks_no_due_date',        count: Number(tasksNoDueDate[0]?.count ?? 0),       severity: 'info',    description: 'Incomplete tasks with no due date — excluded from deadline scheduling' },
+    { bucket: 'goals_no_tasks',           count: Number(goalsNoTasks[0]?.count ?? 0),         severity: 'info',    description: 'Active goals with no incomplete tasks' },
+    { bucket: 'resources_unattached',     count: Number(resourcesUnattached[0]?.count ?? 0),  severity: 'info',    description: 'Resources not attached to any goal or task' },
+    { bucket: 'journal_pending_failed',   count: Number(journalPending[0]?.count ?? 0),       severity: 'warning', description: 'Journal entries pending ingestion or failed extraction' },
+    { bucket: 'goals_no_plan_summary',    count: Number(goalsNoPlanSummary[0]?.count ?? 0),   severity: 'info',    description: 'Active goals without a planning summary (Copilot context is weaker)' },
+  ];
+
+  const total_gaps = items.reduce((s, i) => s + i.count, 0);
+  res.json({ ok: total_gaps === 0, total_gaps, items, timestamp: new Date().toISOString() });
+});
+
+// POST /api/data-health/repair — purge confirmed orphan records (non-destructive for live data)
+app.post('/api/data-health/repair', async (_req, res) => {
+  const { query: dbQuery } = await import('./db.js');
+
+  // Purge pending/failed embedding_jobs whose entity no longer exists
+  const { rowCount: purgedJobs } = await dbQuery(`
+    DELETE FROM embedding_jobs ej
+    WHERE ej.status IN ('pending', 'failed')
+      AND NOT EXISTS (
+        SELECT 1 FROM goals WHERE id = ej.entity_id AND ej.entity_type = 'goal'
+        UNION ALL SELECT 1 FROM tasks WHERE id = ej.entity_id AND ej.entity_type = 'task'
+        UNION ALL SELECT 1 FROM goal_milestones WHERE id = ej.entity_id AND ej.entity_type = 'milestone'
+        UNION ALL SELECT 1 FROM resources WHERE id = ej.entity_id AND ej.entity_type = 'resource'
+        UNION ALL SELECT 1 FROM meetings WHERE id = ej.entity_id AND ej.entity_type = 'meeting'
+        UNION ALL SELECT 1 FROM journal_entries WHERE id = ej.entity_id AND ej.entity_type = 'journal_entry'
+        UNION ALL SELECT 1 FROM resource_chunks WHERE id = ej.entity_id AND ej.entity_type = 'resource_chunk'
+      )
+  `);
+
+  // Purge entity_summaries whose entity no longer exists
+  const { rowCount: purgedSummaries } = await dbQuery(`
+    DELETE FROM entity_summaries es
+    WHERE NOT EXISTS (
+      SELECT 1 FROM goals WHERE id = es.entity_id AND es.entity_type = 'goal'
+      UNION ALL SELECT 1 FROM tasks WHERE id = es.entity_id AND es.entity_type = 'task'
+      UNION ALL SELECT 1 FROM goal_milestones WHERE id = es.entity_id AND es.entity_type = 'milestone'
+      UNION ALL SELECT 1 FROM resources WHERE id = es.entity_id AND es.entity_type = 'resource'
+      UNION ALL SELECT 1 FROM meetings WHERE id = es.entity_id AND es.entity_type = 'meeting'
+      UNION ALL SELECT 1 FROM journal_entries WHERE id = es.entity_id AND es.entity_type = 'journal_entry'
+    )
+  `);
+
+  // Purge work_sessions whose task no longer exists
+  const { rowCount: purgedWorkSessions } = await dbQuery(`
+    DELETE FROM work_sessions ws
+    WHERE ws.task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks WHERE id = ws.task_id)
+  `);
+
+  // Purge orphan upload files (files on disk not referenced in DB)
+  let purgedFiles = 0;
+  try {
+    const diskFiles = fs.readdirSync(UPLOADS_DIR);
+    const { rows: fileRows } = await dbQuery<{ file_path: string; url: string }>(
+      `SELECT COALESCE(file_path, '') AS file_path, COALESCE(url, '') AS url FROM resources WHERE file_path IS NOT NULL OR url LIKE '/api/resources/serve/%'`,
+    );
+    const referencedNames = new Set<string>();
+    for (const r of fileRows) {
+      if (r.file_path) referencedNames.add(path.basename(r.file_path));
+      if (r.url?.startsWith('/api/resources/serve/')) referencedNames.add(r.url.split('/').pop() ?? '');
+    }
+    for (const name of diskFiles) {
+      if (!referencedNames.has(name)) {
+        try {
+          fs.unlinkSync(path.join(UPLOADS_DIR, name));
+          purgedFiles++;
+        } catch { /* ignore individual file errors */ }
+      }
+    }
+  } catch { /* uploads dir may not exist */ }
+
+  res.json({
+    ok: true,
+    purged: {
+      embedding_jobs: purgedJobs ?? 0,
+      entity_summaries: purgedSummaries ?? 0,
+      work_sessions: purgedWorkSessions ?? 0,
+      upload_files: purgedFiles,
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// GET /api/inventory — read-only row counts per canonical table (never mutates)
+app.get('/api/inventory', async (_req, res) => {
+  const { query: dbQuery } = await import('./db.js');
+  const TABLES = [
+    'goals', 'tasks', 'goal_deadlines', 'goal_milestones', 'meetings', 'events',
+    'event_task_links', 'work_sessions', 'task_notes', 'task_note_files', 'notes',
+    'resources', 'resource_logs', 'edges', 'tags', 'entity_tags', 'daily_scores',
+    'user_schedule_prefs', 'journal_entries', 'journal_links', 'extracted_facts',
+    'entity_aliases', 'embeddings', 'embedding_jobs', 'entity_summaries',
+    'ai_action_proposals', 'resource_chunks', 'schedule_day_overrides',
+    'chat_sessions', 'chat_messages', 'schema_migrations',
+  ];
+  const counts: Record<string, number> = {};
+  await Promise.all(
+    TABLES.map(async (t) => {
+      try {
+        const { rows } = await dbQuery<{ count: string }>(`SELECT COUNT(*)::int AS count FROM ${t}`);
+        counts[t] = Number(rows[0]?.count ?? 0);
+      } catch {
+        counts[t] = -1; // table may not exist yet (pre-migration)
+      }
+    }),
+  );
+  res.json({ tables: counts, timestamp: new Date().toISOString() });
+});
+
+// Factory reset — disabled by default; requires ALLOW_FACTORY_RESET=true
+app.post('/api/reset', async (_req, res, next) => {
+  if (process.env.ALLOW_FACTORY_RESET !== 'true') {
+    return res.status(403).json({ error: 'Factory reset is disabled. Set ALLOW_FACTORY_RESET=true to enable.' });
+  }
+  try {
+    const { resetAndSeed } = await import('./seed.js');
+    await resetAndSeed();
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Centralized error handler — express-async-errors forwards async rejections here too
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (res.headersSent) return;
+
+  // Zod validation errors → 400
+  if (err && typeof err === 'object' && (err as Record<string, unknown>).name === 'ZodError') {
+    return res.status(400).json({ error: 'Validation error', issues: (err as Record<string, unknown>).issues });
+  }
+
+  // PostgreSQL unique-violation → 409
+  if (err && typeof err === 'object' && (err as Record<string, unknown>).code === '23505') {
+    return res.status(409).json({ error: 'Conflict: duplicate entry' });
+  }
+
+  // PostgreSQL FK violation → 400
+  if (err && typeof err === 'object' && (err as Record<string, unknown>).code === '23503') {
+    return res.status(400).json({ error: 'Referenced entity does not exist' });
+  }
+
+  // Errors thrown with a .status property (e.g. Object.assign(new Error('…'), { status: 404 }))
+  if (err && typeof err === 'object' && typeof (err as Record<string, unknown>).status === 'number') {
+    const status = (err as Record<string, unknown>).status as number;
+    const message = err instanceof Error ? err.message : 'Error';
+    return res.status(status).json({ error: message });
+  }
+
+  const message = err instanceof Error ? err.message : 'Internal server error';
+  console.error('[server] Unhandled error:', message);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+async function start() {
+  try {
+    await initSchema();
+    await ensureDefaultSchedulePrefs();
+    await seedIfEmpty();
+    const server = app.listen(PORT, '127.0.0.1', () => {
+      console.log(`[server] Amina API running on http://127.0.0.1:${PORT}`);
+      const rawDbUrl = process.env.DATABASE_URL ?? '';
+      let dbDisplay = 'localhost:5432/amina';
+      try {
+        if (rawDbUrl) {
+          const u = new URL(rawDbUrl);
+          dbDisplay = `${u.hostname}:${u.port || 5432}${u.pathname}`;
+        }
+      } catch { /* malformed url */ }
+      console.log(`[server] Database: PostgreSQL (${dbDisplay})`);
+      console.log(`[server] AI model: ${process.env.OLLAMA_MODEL ?? 'qwen2.5:72b'} via ${process.env.OLLAMA_HOST ?? 'http://localhost:11434'}`);
+      console.log(`[server] Embeddings: ${EMBED_MODEL} (${EMBED_DIMENSION} dimensions)`);
+
+      // Reclaim any 'processing' jobs left by a prior crash
+      reclaimExpiredJobs().then(n => {
+        if (n > 0) console.log(`[embedding-worker] reclaimed ${n} expired lease(s) on startup`);
+      }).catch(err => console.error('[embedding-worker] reclaim error on startup:', err));
+
+      // Reclaim journal entries stuck in 'processing' from a prior crash.
+      // Journals that stayed in processing past 15 minutes are assumed crashed.
+      (async () => {
+        try {
+          const { query: dbQuery } = await import('./db.js');
+          const { rowCount } = await dbQuery(
+            `UPDATE journal_entries
+             SET ingestion_status='pending', ingestion_attempts=LEAST(ingestion_attempts, 2)
+             WHERE ingestion_status='processing'
+               AND updated_at < (NOW() - INTERVAL '15 minutes')::TEXT`,
+          );
+          if (rowCount && rowCount > 0) {
+            console.log(`[journal] reclaimed ${rowCount} stuck processing journal(s) on startup`);
+          }
+        } catch { /* non-fatal — table may not exist on first run */ }
+      })();
+
+      // Auto-process embedding jobs every 30 seconds.
+      // Guard prevents overlapping ticks if a batch takes longer than 30s.
+      let workerRunning = false;
+      const workerInterval = setInterval(async () => {
+        if (workerRunning) return;
+        workerRunning = true;
+        try {
+          const reclaimed = await reclaimExpiredJobs();
+          if (reclaimed > 0) console.log(`[embedding-worker] reclaimed ${reclaimed} expired lease(s)`);
+          const { processed, failed } = await processEmbeddingJobs(10);
+          if (processed > 0 || failed > 0) {
+            console.log(`[embedding-worker] processed=${processed} failed=${failed}`);
+          }
+        } catch (err) {
+          console.error('[embedding-worker] error:', err);
+        } finally {
+          workerRunning = false;
+        }
+      }, 30_000);
+      console.log('[embedding-worker] started, interval=30s, lease_timeout=10min');
+
+      // Auto-retry failed journal entries every 5 minutes (max 3 attempts).
+      // Entries exceeding 3 attempts are set to 'needs_review' during ingestion.
+      let journalRetryRunning = false;
+      const journalRetryInterval = setInterval(async () => {
+        if (journalRetryRunning) return;
+        journalRetryRunning = true;
+        try {
+          const { query: dbQ } = await import('./db.js');
+          const { rows: failed } = await dbQ<{ id: string }>(
+            `SELECT id FROM journal_entries
+             WHERE ingestion_status = 'failed'
+               AND ingestion_attempts < 3
+             ORDER BY updated_at ASC
+             LIMIT 3`,
+          );
+          if (failed.length) {
+            const { ingestJournalEntry } = await import('./routes/journal.js');
+            // Mark as pending so ingestJournalEntry's claim guard will pick them up
+            await dbQ(
+              `UPDATE journal_entries SET ingestion_status='pending', updated_at=$1 WHERE id = ANY($2)`,
+              [new Date().toISOString(), failed.map(r => r.id)],
+            );
+            for (const { id } of failed) {
+              ingestJournalEntry(id).catch(err => console.error(`[journal-retry] ${id}:`, err));
+            }
+            console.log(`[journal-retry] queued ${failed.length} failed journal(s) for retry`);
+          }
+        } catch (err) {
+          console.error('[journal-retry] error:', err);
+        } finally {
+          journalRetryRunning = false;
+        }
+      }, 5 * 60_000);
+      console.log('[journal-retry] started, interval=5min');
+
+      // Graceful shutdown — stop worker, drain HTTP, close DB pool
+      const shutdown = (signal: string) => {
+        console.log(`[server] ${signal} received — shutting down gracefully`);
+        clearInterval(workerInterval);
+        clearInterval(journalRetryInterval);
+        server.close(async () => {
+          console.log('[server] HTTP server closed');
+          try {
+            const { pool } = await import('./db.js');
+            await pool.end();
+            console.log('[server] DB pool closed');
+          } catch { /* non-fatal if pool already drained */ }
+          process.exit(0);
+        });
+        setTimeout(() => {
+          console.error('[server] Forced shutdown after 10s drain window');
+          process.exit(1);
+        }, 10_000).unref();
+      };
+      process.on('SIGINT', () => shutdown('SIGINT'));
+      process.on('SIGTERM', () => shutdown('SIGTERM'));
+      process.on('uncaughtException', (err) => {
+        console.error('[server] Uncaught exception:', err);
+        shutdown('uncaughtException');
+      });
+      process.on('unhandledRejection', (reason) => {
+        console.error('[server] Unhandled rejection:', reason);
+        shutdown('unhandledRejection');
+      });
+    });
+  } catch (err) {
+    console.error('[server] Startup failed:', err);
+    process.exit(1);
+  }
+}
+
+start();

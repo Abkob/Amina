@@ -18,16 +18,20 @@ import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge
 import { TaskGraphView } from '../components/TaskGraphView';
 import { ActualTimeModal } from '../components/ActualTimeModal';
 import { ActualTimeChip } from '../components/ActualTimeChip';
-import { useGoal, useGoalTasks, useGoalResources, useTaskResources, useInvalidate } from '../api/hooks';
+import { useGoal, useGoalTasks, useGoalResources, useTaskResources, useInvalidate, useGoalMeetings, useGoalDeadlines, useGoalMilestones, useCreateWorkSession } from '../api/hooks';
 import { archiveGoal, restoreGoal, updateGoal } from '../db/queries/goals';
 import { toggleTask, createTask, deleteTask, updateTask, deactivateTask, touchTask } from '../db/queries/tasks';
 import { createResource, deleteResource, detectResourceType } from '../db/queries/resources';
+import { createMeeting, updateMeeting, deleteMeeting } from '../db/queries/meetings';
+import { createDeadline, updateDeadline, deleteDeadline, assignTaskToDeadline } from '../db/queries/deadlines';
+import type { DBMeeting, DBDeadline } from '../db/schema';
 import { getGoalFinishEstimate } from '../utils/goalFinishEstimate';
 import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getTaskTimeProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
+import { apiFetch, apiPut, apiPatch, apiPost, apiDelete } from '../utils/apiFetch';
 import { calculateGoalTaskMetrics, computeGoalStatus } from '../utils/goalTaskMetrics';
 import { computeGoalTimeStats, formatVelocity, velocityColor, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
 import { generateSuggestions } from '../utils/subtaskSuggestions';
-import type { DBTask, DBResource, CriticalPathStatus } from '../db/schema';
+import type { DBTask, DBResource, CriticalPathStatus, DBMilestone } from '../db/schema';
 
 // ─── Dynamic milestone status ─────────────────────────────────────────────────
 function deriveMilestoneStatus(milestone: DBTask, subtasks: DBTask[]): 'Completed' | 'In Progress' | 'On Hold' | 'Not Started' {
@@ -883,6 +887,210 @@ function TaskTreeRow({
   );
 }
 
+// ─── Goal Milestones section (goal_milestones table — phase checkpoints) ─────
+
+const MILESTONE_COLORS = ['#6366f1','#8b5cf6','#10b981','#f59e0b','#ef4444','#3b82f6'];
+
+function GoalMilestonesSection({
+  goalId, milestones, tasks, onInvalidate, onInvalidateTasks,
+}: {
+  goalId: string;
+  milestones: DBMilestone[];
+  tasks: DBTask[];
+  onInvalidate: () => void;
+  onInvalidateTasks: () => void;
+}) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ title: '', due_date: '', color: MILESTONE_COLORS[0] });
+  const [saving, setSaving] = useState(false);
+
+  if (!milestones.length && !addOpen) {
+    return (
+      <section>
+        <button
+          onClick={() => setAddOpen(true)}
+          className="text-[10px] font-mono text-gray-500 hover:text-indigo-400 transition-colors flex items-center gap-1.5"
+        >
+          <Plus size={11} /> Add Milestone
+        </button>
+      </section>
+    );
+  }
+
+  const tasksByMilestone: Record<string, DBTask[]> = {};
+  for (const t of tasks) {
+    if (t.milestone_id) {
+      if (!tasksByMilestone[t.milestone_id]) tasksByMilestone[t.milestone_id] = [];
+      tasksByMilestone[t.milestone_id].push(t);
+    }
+  }
+
+  const handleToggleComplete = async (m: DBMilestone) => {
+    await apiPut(`/api/milestones/${m.id}`, { completed: !m.completed });
+    onInvalidate();
+  };
+
+  const handleAssignTask = async (taskId: string, milestoneId: string | null) => {
+    await apiPatch('/api/milestones/assign-task', { task_id: taskId, milestone_id: milestoneId });
+    onInvalidateTasks();
+  };
+
+  const handleDelete = async (id: string) => {
+    await apiDelete(`/api/milestones/${id}`);
+    onInvalidate();
+  };
+
+  const handleAdd = async () => {
+    if (!form.title.trim()) return;
+    setSaving(true);
+    try {
+      await apiPost('/api/milestones', { goal_id: goalId, title: form.title, due_date: form.due_date || null, color: form.color });
+      setForm({ title: '', due_date: '', color: MILESTONE_COLORS[0] });
+      setAddOpen(false);
+      onInvalidate();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const unassignedTasks = tasks.filter(t => !t.milestone_id && !t.parent_task_id && !t.completed);
+
+  return (
+    <section>
+      <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-3">
+        <span className="text-[#6366f1]">⬡</span>
+        Milestones
+        <span className="font-mono text-[10px] text-gray-400 font-normal">
+          {milestones.filter(m => m.completed).length}/{milestones.length}
+        </span>
+      </h2>
+
+      <div className="space-y-2">
+        {milestones.map(m => {
+          const mTasks = tasksByMilestone[m.id] ?? [];
+          const isOpen = expanded[m.id] ?? false;
+          const done = mTasks.filter(t => t.completed).length;
+          return (
+            <div key={m.id} className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+              <div className="flex items-center gap-2.5 px-3 py-2.5" style={{ borderLeft: `3px solid ${m.color}` }}>
+                <button onClick={() => handleToggleComplete(m)} className="shrink-0">
+                  {m.completed
+                    ? <Check size={14} className="text-emerald-500" />
+                    : <Square size={14} className="text-gray-400 hover:text-gray-600" />}
+                </button>
+                <button
+                  onClick={() => setExpanded(e => ({ ...e, [m.id]: !isOpen }))}
+                  className="flex-1 text-left flex items-center gap-2 min-w-0"
+                >
+                  <span className={`text-sm font-semibold truncate ${m.completed ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                    {m.title}
+                  </span>
+                  {m.due_date && (
+                    <span className="shrink-0 text-[10px] font-mono text-gray-400 flex items-center gap-0.5">
+                      <Calendar size={10} />
+                      {m.due_date}
+                    </span>
+                  )}
+                  {mTasks.length > 0 && (
+                    <span className="shrink-0 text-[10px] font-mono text-gray-400">{done}/{mTasks.length}</span>
+                  )}
+                  {isOpen ? <ChevronDown size={12} className="text-gray-400 ml-auto shrink-0" /> : <ChevronRight size={12} className="text-gray-400 ml-auto shrink-0" />}
+                </button>
+                <button onClick={() => handleDelete(m.id)} className="shrink-0 text-gray-300 hover:text-red-400 transition-colors">
+                  <Trash2 size={12} />
+                </button>
+              </div>
+              {isOpen && (
+                <div className="px-3 pb-3 pt-1 space-y-1.5 bg-gray-50/50">
+                  {mTasks.length ? mTasks.map(t => (
+                    <div key={t.id} className="flex items-center gap-2 text-xs text-gray-600">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${t.completed ? 'bg-emerald-400' : 'bg-gray-300'}`} />
+                      <span className={`flex-1 truncate ${t.completed ? 'line-through text-gray-400' : ''}`}>{t.title}</span>
+                      {!t.completed && (
+                        <button
+                          onClick={() => handleAssignTask(t.id, null)}
+                          className="shrink-0 text-gray-300 hover:text-red-400 transition-colors"
+                          title="Remove from milestone"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
+                    </div>
+                  )) : <p className="text-xs text-gray-400 italic">No tasks assigned to this milestone.</p>}
+
+                  {unassignedTasks.length > 0 && (
+                    <div className="pt-1.5">
+                      <select
+                        onChange={e => { if (e.target.value) { handleAssignTask(e.target.value, m.id); e.target.value = ''; } }}
+                        className="text-[10px] font-mono bg-white border border-gray-200 rounded-lg px-2 py-1 text-gray-500 cursor-pointer"
+                        defaultValue=""
+                      >
+                        <option value="">+ Assign task…</option>
+                        {unassignedTasks.map(t => (
+                          <option key={t.id} value={t.id}>{t.title.slice(0, 40)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {addOpen ? (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+            <input
+              autoFocus
+              value={form.title}
+              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') setAddOpen(false); }}
+              placeholder="Milestone title…"
+              className="w-full text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400"
+            />
+            <div className="flex gap-2 items-center">
+              <input
+                type="date"
+                value={form.due_date}
+                onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
+                className="flex-1 text-xs font-mono bg-white border border-gray-200 rounded-lg px-2 py-1.5 outline-none"
+              />
+              <div className="flex gap-1">
+                {MILESTONE_COLORS.map(c => (
+                  <button
+                    key={c}
+                    onClick={() => setForm(f => ({ ...f, color: c }))}
+                    className={`w-5 h-5 rounded-full border-2 transition-all ${form.color === c ? 'border-gray-900 scale-110' : 'border-transparent'}`}
+                    style={{ background: c }}
+                  />
+                ))}
+              </div>
+              <button
+                onClick={handleAdd}
+                disabled={saving || !form.title.trim()}
+                className="px-3 py-1.5 text-xs font-semibold bg-indigo-600 text-white rounded-lg disabled:opacity-40"
+              >
+                {saving ? '…' : 'Add'}
+              </button>
+              <button onClick={() => setAddOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setAddOpen(true)}
+            className="text-[10px] font-mono text-gray-500 hover:text-indigo-400 transition-colors flex items-center gap-1.5 px-1"
+          >
+            <Plus size={11} /> Add Milestone
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Milestone card ───────────────────────────────────────────────────────────
 function MilestoneCard({
   milestone,
@@ -1323,6 +1531,378 @@ function GoalTimePanel({ tasks }: { tasks: DBTask[] }) {
   );
 }
 
+// ─── Deadline Modal ───────────────────────────────────────────────────────────
+const DEADLINE_COLORS = [
+  '#ef4444', '#f97316', '#f59e0b', '#10b981',
+  '#3b82f6', '#8b5cf6', '#ec4899', '#6366f1',
+];
+
+function DeadlineModal({
+  initial,
+  onSave,
+  onClose,
+}: {
+  initial?: DBDeadline;
+  onSave: (d: { title: string; date: string; color: string }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [title,   setTitle]   = useState(initial?.title ?? '');
+  const [date,    setDate]    = useState(initial?.date  ?? '');
+  const [color,   setColor]   = useState(initial?.color ?? '#ef4444');
+  const [saving,  setSaving]  = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !date) return;
+    setSaving(true);
+    await onSave({ title: title.trim(), date, color });
+    setSaving(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <form
+        className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-5 w-[380px] flex flex-col gap-3 shadow-2xl"
+        onClick={e => e.stopPropagation()}
+        onSubmit={handleSubmit}
+      >
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-bold text-white">{initial ? 'Edit Deadline' : 'New Deadline'}</span>
+          <button type="button" onClick={onClose} className="text-gray-500 hover:text-white"><X size={16} /></button>
+        </div>
+        <input
+          autoFocus
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-[#6063ee]"
+          placeholder="Deadline name (e.g. Alpha Review)"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          required
+        />
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">Date</label>
+          <input
+            type="date"
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-[#6063ee] [color-scheme:dark]"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            required
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">Color</label>
+          <div className="flex gap-2 flex-wrap">
+            {DEADLINE_COLORS.map(c => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColor(c)}
+                className="w-6 h-6 rounded-full border-2 transition-transform hover:scale-110"
+                style={{ backgroundColor: c, borderColor: color === c ? 'white' : 'transparent' }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end mt-1">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-gray-400 hover:text-white">Cancel</button>
+          <button
+            type="submit"
+            disabled={saving || !title.trim() || !date}
+            className="px-4 py-2 text-xs rounded-lg font-semibold text-white disabled:opacity-40 transition-colors"
+            style={{ backgroundColor: color }}
+          >
+            {saving ? 'Saving…' : initial ? 'Save' : 'Create'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ─── Deadline Card ─────────────────────────────────────────────────────────────
+function DeadlineCard({
+  deadline,
+  tasks,
+  allTasks,
+  onEdit,
+  onDelete,
+  onAssign,
+  onUnassign,
+  onAddTask,
+}: {
+  deadline: DBDeadline;
+  tasks: DBTask[];          // tasks assigned to this deadline
+  allTasks: DBTask[];       // all goal tasks (for assign dropdown)
+  onEdit: () => void;
+  onDelete: () => void;
+  onAssign: (taskId: string) => void;
+  onUnassign: (taskId: string) => void;
+  onAddTask: (title: string) => void;
+}) {
+  const [showAssign,   setShowAssign]   = useState(false);
+  const [addingTask,   setAddingTask]   = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [collapsed,    setCollapsed]    = useState(false);
+  const assignRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showAssign) return;
+    const handler = (e: MouseEvent) => {
+      if (assignRef.current && !assignRef.current.contains(e.target as Node)) setShowAssign(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showAssign]);
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dl    = new Date(deadline.date);
+  const daysLeft = Math.ceil((dl.getTime() - today.getTime()) / 86400000);
+  const isPast   = daysLeft < 0;
+  const isToday  = daysLeft === 0;
+  const isSoon   = daysLeft > 0 && daysLeft <= 3;
+
+  const done  = tasks.filter(t => t.completed || t.status === 'done').length;
+  const total = tasks.length;
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  const unassigned = allTasks.filter(t =>
+    !t.completed &&
+    !(t.deadline_id) &&
+    !tasks.find(dt => dt.id === t.id)
+  );
+
+  const dateLabel = dl.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  const countdownLabel = isPast
+    ? `${Math.abs(daysLeft)}d overdue`
+    : isToday ? 'Today'
+    : `${daysLeft}d left`;
+
+  return (
+    <div className="rounded-xl border overflow-hidden" style={{ borderColor: deadline.color + '44' }}>
+      {/* Header */}
+      <div
+        className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer select-none"
+        style={{ backgroundColor: deadline.color + '12' }}
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: deadline.color }} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold text-gray-900 leading-tight">{deadline.title}</span>
+            <span className="text-[10px] font-mono text-gray-500">{dateLabel}</span>
+            <span
+              className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full ${
+                isPast ? 'bg-red-100 text-red-600' : isToday ? 'bg-amber-100 text-amber-700' : isSoon ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              {countdownLabel}
+            </span>
+          </div>
+          {total > 0 && (
+            <div className="flex items-center gap-2 mt-1">
+              <div className="flex-1 h-1 rounded-full bg-gray-200 overflow-hidden" style={{ maxWidth: 80 }}>
+                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: deadline.color }} />
+              </div>
+              <span className="text-[9px] font-mono text-gray-400">{done}/{total} done</span>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+          <button onClick={onEdit} className="p-1 text-gray-400 hover:text-gray-700 transition-colors">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+          </button>
+          <button onClick={onDelete} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={12} /></button>
+          <div className="w-4 h-4 flex items-center justify-center text-gray-400">
+            {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+          </div>
+        </div>
+      </div>
+
+      {/* Body */}
+      {!collapsed && (
+        <div className="px-3 py-2 bg-white">
+          {/* Assigned tasks */}
+          {tasks.length === 0 && !addingTask && (
+            <p className="text-[11px] text-gray-400 italic py-1">No tasks assigned yet.</p>
+          )}
+          <div className="flex flex-col">
+            {tasks.map(t => {
+              const isDone = t.completed || t.status === 'done';
+              return (
+                <div key={t.id} className="flex items-center gap-2 py-1.5 group/dt border-b border-gray-50 last:border-0">
+                  <span className={`text-xs font-mono shrink-0 ${isDone ? 'text-emerald-500' : 'text-gray-400'}`}>
+                    {isDone ? '✓' : t.status === 'in_progress' ? '▶' : '○'}
+                  </span>
+                  <span className={`text-xs flex-1 min-w-0 truncate ${isDone ? 'text-gray-400 line-through' : 'text-gray-700'}`}>
+                    {t.title}
+                  </span>
+                  {t.kind === 'critical_path' && (
+                    <span className="text-[9px] font-mono text-indigo-400 bg-indigo-50 px-1 rounded shrink-0">milestone</span>
+                  )}
+                  {t.due_date && (
+                    <span className="text-[9px] font-mono text-gray-400 shrink-0">
+                      {new Date(t.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => onUnassign(t.id)}
+                    className="opacity-0 group-hover/dt:opacity-100 p-0.5 text-gray-300 hover:text-red-400 transition-all shrink-0"
+                    title="Remove from deadline"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* New task inline */}
+          {addingTask && (
+            <form
+              className="flex items-center gap-2 mt-1 py-1"
+              onSubmit={async e => {
+                e.preventDefault();
+                if (!newTaskTitle.trim()) return;
+                await onAddTask(newTaskTitle.trim());
+                setNewTaskTitle('');
+                setAddingTask(false);
+              }}
+            >
+              <span className="text-xs text-gray-400 font-mono">○</span>
+              <input
+                autoFocus
+                className="flex-1 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 outline-none focus:border-indigo-400"
+                placeholder="Task title…"
+                value={newTaskTitle}
+                onChange={e => setNewTaskTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') { setAddingTask(false); setNewTaskTitle(''); } }}
+              />
+              <button type="submit" className="text-[10px] text-indigo-600 font-semibold hover:text-indigo-700">Add</button>
+              <button type="button" onClick={() => { setAddingTask(false); setNewTaskTitle(''); }} className="text-[10px] text-gray-400">Cancel</button>
+            </form>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-3 mt-2 pt-1.5 border-t border-gray-50">
+            <button
+              onClick={() => { setAddingTask(true); setShowAssign(false); }}
+              className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-indigo-600 transition-colors font-medium"
+            >
+              <Plus size={11} /> New task
+            </button>
+            <div className="relative" ref={assignRef}>
+              <button
+                onClick={() => setShowAssign(s => !s)}
+                className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-indigo-600 transition-colors font-medium"
+              >
+                <ChevronDown size={11} /> Assign existing
+              </button>
+              {showAssign && (
+                <div className="absolute bottom-full mb-1 left-0 bg-white border border-gray-200 rounded-xl shadow-xl z-30 w-64 max-h-48 overflow-y-auto py-1">
+                  {unassigned.length === 0 ? (
+                    <p className="text-[11px] text-gray-400 px-3 py-2">All tasks are assigned</p>
+                  ) : (
+                    unassigned.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => { onAssign(t.id); setShowAssign(false); }}
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 flex items-center gap-2"
+                      >
+                        <span className="text-gray-400 font-mono">{t.kind === 'critical_path' ? '◆' : '○'}</span>
+                        <span className="text-gray-700 truncate">{t.title}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Meeting Modal ────────────────────────────────────────────────────────────
+function MeetingModal({
+  initial,
+  onSave,
+  onClose,
+}: {
+  initial?: DBMeeting;
+  onSave: (data: { title: string; scheduled_at: string; location: string; notes: string }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [title,        setTitle]        = useState(initial?.title        ?? '');
+  const [scheduledAt,  setScheduledAt]  = useState(initial?.scheduled_at ?? '');
+  const [location,     setLocation]     = useState(initial?.location     ?? '');
+  const [meetingNotes, setMeetingNotes] = useState(initial?.notes        ?? '');
+  const [saving,       setSaving]       = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !scheduledAt) return;
+    setSaving(true);
+    await onSave({ title: title.trim(), scheduled_at: scheduledAt, location: location.trim(), notes: meetingNotes.trim() });
+    setSaving(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <form
+        className="bg-[#1a1a2e] border border-gray-700 rounded-xl p-5 w-[420px] flex flex-col gap-3 shadow-2xl"
+        onClick={e => e.stopPropagation()}
+        onSubmit={handleSubmit}
+      >
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-bold text-white">{initial ? 'Edit Meeting' : 'New Meeting'}</span>
+          <button type="button" onClick={onClose} className="text-gray-500 hover:text-white transition-colors"><X size={16} /></button>
+        </div>
+
+        <input
+          autoFocus
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-[#6063ee]"
+          placeholder="Meeting title"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          required
+        />
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">Date & Time</label>
+          <input
+            type="datetime-local"
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-[#6063ee] [color-scheme:dark]"
+            value={scheduledAt}
+            onChange={e => setScheduledAt(e.target.value)}
+            required
+          />
+        </div>
+        <input
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-[#6063ee]"
+          placeholder="Location (optional)"
+          value={location}
+          onChange={e => setLocation(e.target.value)}
+        />
+        <textarea
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-[#6063ee] resize-none h-20"
+          placeholder="Notes (optional)"
+          value={meetingNotes}
+          onChange={e => setMeetingNotes(e.target.value)}
+        />
+        <div className="flex gap-2 justify-end mt-1">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors">Cancel</button>
+          <button
+            type="submit"
+            disabled={saving || !title.trim() || !scheduledAt}
+            className="px-4 py-2 text-xs bg-[#6063ee] text-white rounded-lg hover:bg-[#7b7ef0] disabled:opacity-40 transition-colors font-semibold"
+          >
+            {saving ? 'Saving…' : initial ? 'Save Changes' : 'Create Meeting'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // ─── Goal Detail ──────────────────────────────────────────────────────────────
 export function GoalDetail() {
   const {
@@ -1370,20 +1950,75 @@ export function GoalDetail() {
   const { data: goal } = useGoal(selectedGoalId);
   const { data: allTasks = [] } = useGoalTasks(selectedGoalId);
   const { data: goalResourceList = [] } = useGoalResources(selectedGoalId);
+  const { data: meetings   = [] } = useGoalMeetings(selectedGoalId);
+  const { data: deadlines  = [] } = useGoalDeadlines(selectedGoalId);
+  const { data: goalMilestones = [] } = useGoalMilestones(selectedGoalId);
 
-  // Build per-task resources grouped by task id
+  // Build per-task resources using a single batch fetch (avoids N+1)
   const taskIds = allTasks.map(t => t.id);
   const [taskResourceMap, setTaskResourceMap] = useState<Record<string, DBResource[]>>({});
   useEffect(() => {
     if (taskIds.length === 0) { setTaskResourceMap({}); return; }
-    Promise.all(taskIds.map(id => fetch(`/api/resources?task_id=${id}`).then(r => r.json()).then((res: DBResource[]) => [id, res] as const)))
-      .then(pairs => setTaskResourceMap(Object.fromEntries(pairs)))
+    apiFetch<Array<DBResource & { task_id: string }>>(`/api/resources?task_ids=${taskIds.join(',')}`)
+      .then(rows => {
+        const map: Record<string, DBResource[]> = {};
+        for (const row of rows) {
+          if (!map[row.task_id]) map[row.task_id] = [];
+          map[row.task_id].push(row);
+        }
+        setTaskResourceMap(map);
+      })
       .catch(() => {});
   }, [JSON.stringify(taskIds)]);
 
   const groupedResources = { goalResources: goalResourceList, taskResources: taskResourceMap };
 
   const invalidate = useInvalidate();
+  const createWorkSession = useCreateWorkSession();
+
+  // ── Deadline state ─────────────────────────────────────────────────────────
+  const [deadlineModal, setDeadlineModal] = useState<{ mode: 'create' } | { mode: 'edit'; deadline: DBDeadline } | null>(null);
+
+  const handleSaveDeadline = async (data: { title: string; date: string; color: string }) => {
+    if (!selectedGoalId) return;
+    if (deadlineModal?.mode === 'edit') {
+      await updateDeadline(deadlineModal.deadline.id, data);
+    } else {
+      await createDeadline({ goal_id: selectedGoalId, ...data });
+    }
+    invalidate.deadlines(selectedGoalId);
+    setDeadlineModal(null);
+  };
+
+  const handleDeleteDeadline = async (id: string) => {
+    await deleteDeadline(id);
+    invalidate.deadlines(selectedGoalId ?? undefined);
+    invalidate.tasks(selectedGoalId ?? undefined);
+  };
+
+  const handleAssignTask = async (taskId: string, deadlineId: string | null) => {
+    await assignTaskToDeadline(taskId, deadlineId);
+    invalidate.tasks(selectedGoalId ?? undefined);
+  };
+
+  // ── Meeting state ──────────────────────────────────────────────────────────
+  const [meetingModal, setMeetingModal] = useState<{ mode: 'create' } | { mode: 'edit'; meeting: DBMeeting } | null>(null);
+
+  const handleSaveMeeting = async (data: { title: string; scheduled_at: string; location: string; notes: string }) => {
+    if (!selectedGoalId) return;
+    if (meetingModal?.mode === 'edit') {
+      await updateMeeting(meetingModal.meeting.id, data);
+    } else {
+      await createMeeting({ goal_id: selectedGoalId, ...data });
+    }
+    invalidate.meetings(selectedGoalId);
+    setMeetingModal(null);
+  };
+
+  const handleDeleteMeeting = async (id: string) => {
+    await deleteMeeting(id);
+    invalidate.meetings(selectedGoalId ?? undefined);
+  };
 
   // ── DnD sensors must be called before any conditional return (Rules of Hooks) ──
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -1460,7 +2095,8 @@ export function GoalDetail() {
   };
 
   const handleUpdateActualTime = async (taskId: string, minutes: number | null) => {
-    await updateTask(taskId, { actual_minutes: minutes });
+    if (minutes == null || minutes <= 0) return;
+    await createWorkSession.mutateAsync({ task_id: taskId, minutes, source: 'manual' });
   };
 
   const handleManualTaskDragEnd = async (event: DragEndEvent) => {
@@ -1718,6 +2354,15 @@ export function GoalDetail() {
           </section>
         )}
 
+        {/* ── Goal Milestones ── */}
+        <GoalMilestonesSection
+          goalId={goal.id}
+          milestones={goalMilestones}
+          tasks={allTasks}
+          onInvalidate={() => invalidate.milestones(goal.id)}
+          onInvalidateTasks={() => invalidate.tasks(goal.id)}
+        />
+
         {/* ── Tasks ── */}
         <section>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1879,6 +2524,156 @@ export function GoalDetail() {
           </section>
         )}
 
+        {/* ── Deadlines ── */}
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-mono uppercase tracking-wider text-gray-400">Deadlines</span>
+            <button
+              onClick={() => setDeadlineModal({ mode: 'create' })}
+              className="flex items-center gap-1.5 text-xs text-[#6063ee] hover:text-indigo-500 transition-colors font-mono"
+            >
+              <Plus size={13} /> Add Deadline
+            </button>
+          </div>
+          {deadlines.length === 0 ? (
+            <p className="text-xs text-gray-400 font-mono">No deadlines. Add one to group tasks by target date.</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {deadlines.map(dl => {
+                const assigned = allTasks.filter(t => t.deadline_id === dl.id);
+                return (
+                  <DeadlineCard
+                    key={dl.id}
+                    deadline={dl}
+                    tasks={assigned}
+                    allTasks={allTasks}
+                    onEdit={() => setDeadlineModal({ mode: 'edit', deadline: dl })}
+                    onDelete={() => handleDeleteDeadline(dl.id)}
+                    onAssign={async (taskId) => {
+                      await handleAssignTask(taskId, dl.id);
+                    }}
+                    onUnassign={async (taskId) => {
+                      await handleAssignTask(taskId, null);
+                    }}
+                    onAddTask={async (title) => {
+                      if (!selectedGoalId) return;
+                      const id = await createTask({
+                        goal_id: selectedGoalId,
+                        parent_task_id: null,
+                        title,
+                        description: '',
+                        status: 'todo',
+                        priority: 'medium',
+                        kind: 'manual',
+                        tags_json: '[]',
+                        completed: false,
+                        position: allTasks.length,
+                      } as Parameters<typeof createTask>[0]);
+                      await handleAssignTask(id, dl.id);
+                      invalidate.tasks(selectedGoalId);
+                    }}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ── Meetings ── */}
+        <div className="mt-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-mono uppercase tracking-wider text-gray-400">Meetings</span>
+            <button
+              onClick={() => setMeetingModal({ mode: 'create' })}
+              className="flex items-center gap-1.5 text-xs text-[#9b9dff] hover:text-white transition-colors font-mono"
+            >
+              <Plus size={13} /> Add Meeting
+            </button>
+          </div>
+          {meetings.length === 0 ? (
+            <p className="text-xs text-gray-600 font-mono">No meetings. Click "Add Meeting" to attach a deadline event.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {meetings.map(meeting => {
+                const dt   = new Date(meeting.scheduled_at);
+                const isPast = dt < new Date();
+                const dateStr = dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                const timeStr = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+                const prereqTasks = allTasks
+                  .filter(t => t.due_date && t.due_date <= meeting.scheduled_at)
+                  .sort((a, b) => (a.due_date ?? '').localeCompare(b.due_date ?? ''));
+                return (
+                  <div
+                    key={meeting.id}
+                    className={`rounded-xl border p-4 ${isPast ? 'border-gray-700 bg-gray-900/30' : 'border-amber-500/30 bg-amber-500/5'}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <div className={`mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${isPast ? 'bg-gray-800' : 'bg-amber-500/20'}`}>
+                          <Calendar size={14} className={isPast ? 'text-gray-500' : 'text-amber-400'} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`text-sm font-semibold leading-tight ${isPast ? 'text-gray-400' : 'text-white'}`}>{meeting.title}</p>
+                          <p className={`text-xs font-mono mt-0.5 ${isPast ? 'text-gray-600' : 'text-amber-300/80'}`}>
+                            {dateStr} · {timeStr}{isPast ? ' (past)' : ''}
+                          </p>
+                          {meeting.location && (
+                            <p className="text-xs text-gray-500 mt-0.5">📍 {meeting.location}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => setMeetingModal({ mode: 'edit', meeting })}
+                          className="text-gray-500 hover:text-white transition-colors p-1"
+                          title="Edit meeting"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMeeting(meeting.id)}
+                          className="text-gray-500 hover:text-red-400 transition-colors p-1"
+                          title="Delete meeting"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {meeting.notes && (
+                      <p className="text-xs text-gray-500 mt-2.5 pl-9.5">{meeting.notes}</p>
+                    )}
+
+                    {prereqTasks.length > 0 && (
+                      <div className="mt-3 pl-9.5">
+                        <p className="text-[10px] font-mono uppercase tracking-wider text-gray-600 mb-1.5">Tasks to complete before</p>
+                        <div className="flex flex-col gap-1">
+                          {prereqTasks.map(t => {
+                            const done = t.completed || t.status === 'done';
+                            return (
+                              <div key={t.id} className="flex items-center gap-2">
+                                <span className={`text-xs font-mono ${done ? 'text-emerald-500' : 'text-gray-500'}`}>
+                                  {done ? '✓' : '○'}
+                                </span>
+                                <span className={`text-xs ${done ? 'text-gray-500 line-through' : 'text-gray-300'}`}>{t.title}</span>
+                                {t.due_date && (
+                                  <span className="text-[10px] font-mono text-gray-600 ml-auto">
+                                    due {new Date(t.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* ── Resources ── */}
         <GoalResourcesSection
           resources={groupedResources.goalResources}
@@ -1890,6 +2685,22 @@ export function GoalDetail() {
         />
       </div>
 
+      {deadlineModal && (
+        <DeadlineModal
+          initial={deadlineModal.mode === 'edit' ? deadlineModal.deadline : undefined}
+          onSave={handleSaveDeadline}
+          onClose={() => setDeadlineModal(null)}
+        />
+      )}
+
+      {meetingModal && (
+        <MeetingModal
+          initial={meetingModal.mode === 'edit' ? meetingModal.meeting : undefined}
+          onSave={handleSaveMeeting}
+          onClose={() => setMeetingModal(null)}
+        />
+      )}
+
       <AnimatePresence>
         {pendingComplete && (
           <ActualTimeModal
@@ -1897,7 +2708,7 @@ export function GoalDetail() {
             taskTitle={pendingComplete.title}
             estimatedMinutes={pendingComplete.estimated_minutes}
             onLog={async (minutes) => {
-              await updateTask(pendingComplete.id, { actual_minutes: minutes });
+              await createWorkSession.mutateAsync({ task_id: pendingComplete.id, minutes, source: 'completion' });
               const taskId = pendingComplete.id;
               setPendingComplete(null);
               openCompletionReport(taskId);

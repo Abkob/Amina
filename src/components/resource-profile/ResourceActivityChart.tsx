@@ -3,13 +3,17 @@ import type { ResourceReference } from '../../db/queries/resources';
 
 const WEEKS = 12;
 
+function localYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function weekKey(iso: string): string {
   const d = new Date(iso);
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   const mon = new Date(d);
   mon.setDate(d.getDate() + diff);
-  return mon.toISOString().slice(0, 10);
+  return localYMD(mon);
 }
 
 function mondaysBefore(n: number): string[] {
@@ -22,7 +26,7 @@ function mondaysBefore(n: number): string[] {
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(mon);
     d.setDate(mon.getDate() - i * 7);
-    keys.push(d.toISOString().slice(0, 10));
+    keys.push(localYMD(d));
   }
   return keys;
 }
