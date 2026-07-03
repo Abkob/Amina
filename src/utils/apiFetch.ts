@@ -5,6 +5,16 @@ export class ApiError extends Error {
   }
 }
 
+/** Called after every SUCCESSFUL non-GET request with (method, url).
+ *  App.tsx registers a listener that invalidates the react-query caches the
+ *  mutated endpoint affects — so no page can forget to invalidate and go
+ *  stale ("I have to refresh to see my change"). */
+type MutationListener = (method: string, url: string) => void;
+let mutationListener: MutationListener | null = null;
+export function setMutationListener(fn: MutationListener | null) {
+  mutationListener = fn;
+}
+
 /** Typed fetch wrapper: throws ApiError on non-2xx responses. */
 export async function apiFetch<T = unknown>(
   url: string,
@@ -17,6 +27,10 @@ export async function apiFetch<T = unknown>(
     try { message = (JSON.parse(text) as { error?: string }).error ?? text; }
     catch { message = text; }
     throw new ApiError(res.status, message);
+  }
+  const method = (options?.method ?? 'GET').toUpperCase();
+  if (method !== 'GET' && mutationListener) {
+    try { mutationListener(method, url); } catch { /* invalidation must never break the request */ }
   }
   // 204 No Content — return empty object
   if (res.status === 204) return {} as T;

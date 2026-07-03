@@ -44,13 +44,15 @@ describe.skipIf(SKIP_INTEGRATION)('embeddingWorker — unknown action permanentl
     const { query } = await import('../db.js');
     const { processEmbeddingJobs } = await import('../services/embeddingWorker.js');
 
-    // Insert a job with an action name that is not 'upsert' or 'delete'
+    // Insert a job with an action name that is not 'upsert' or 'delete'.
+    // id and created_at are NOT NULL without defaults — must be supplied.
     const { rows } = await query<{ id: string }>(
       `INSERT INTO embedding_jobs
-         (entity_type, entity_id, chunk_id, action, status, attempts, priority)
-       VALUES ('task', '00000000-0000-0000-0000-000000000000', NULL, 'unknown_test_action', 'pending', 0, 0)
+         (id, entity_type, entity_id, chunk_id, action, status, attempts, priority, created_at)
+       VALUES ($1, 'task', '00000000-0000-0000-0000-000000000000', NULL, 'unknown_test_action', 'pending', 0, 0, $2)
        ON CONFLICT DO NOTHING
        RETURNING id`,
+      [crypto.randomUUID(), new Date().toISOString()],
     );
 
     if (!rows.length) {
@@ -59,9 +61,12 @@ describe.skipIf(SKIP_INTEGRATION)('embeddingWorker — unknown action permanentl
     }
     jobId = rows[0].id;
 
-    // Drive 4 cycles — MAX_ATTEMPTS is 3, so job transitions pending→processing→failed
+    // Drive 4 cycles — MAX_ATTEMPTS is 3, so job transitions pending→processing→failed.
+    // Failed attempts set next_attempt_at (exponential backoff by design); clear it
+    // between cycles so the retry is immediately eligible in this test.
     for (let i = 0; i < 4; i++) {
       await processEmbeddingJobs(10);
+      await query('UPDATE embedding_jobs SET next_attempt_at=NULL WHERE id=$1', [jobId]);
     }
 
     const { rows: jobs } = await query<{ status: string; error: string }>(

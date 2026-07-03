@@ -1,16 +1,15 @@
 import type { DBTask, DBTaskNote, TaskKind } from '../schema';
 import type { GoalTaskMetrics } from '../../utils/goalTaskMetrics';
+import { apiFetch, apiPost, apiPatch, apiDelete, ApiError } from '../../utils/apiFetch';
 
 const API = '/api';
 
 export async function syncGoalMetricsFromTasks(goalId: string): Promise<GoalTaskMetrics> {
-  const r = await fetch(`${API}/goals/${goalId}/sync-metrics`, { method: 'POST' });
-  return r.json();
+  return apiPost<GoalTaskMetrics>(`${API}/goals/${goalId}/sync-metrics`, {});
 }
 
 export async function getTasksByGoal(goalId: string): Promise<DBTask[]> {
-  const r = await fetch(`${API}/tasks?goal_id=${goalId}`);
-  return r.json();
+  return apiFetch<DBTask[]>(`${API}/tasks?goal_id=${goalId}`);
 }
 
 export async function getTasksByGoalAndKind(goalId: string, kind: TaskKind): Promise<DBTask[]> {
@@ -19,30 +18,26 @@ export async function getTasksByGoalAndKind(goalId: string, kind: TaskKind): Pro
 }
 
 export async function getSubtasks(parentTaskId: string): Promise<DBTask[]> {
-  const r = await fetch(`${API}/tasks?parent_task_id=${parentTaskId}`);
-  return r.json();
+  return apiFetch<DBTask[]>(`${API}/tasks?parent_task_id=${parentTaskId}`);
 }
 
 export async function getTaskById(taskId: string): Promise<DBTask | undefined> {
-  const r = await fetch(`${API}/tasks/${taskId}`);
-  if (r.status === 404) return undefined;
-  return r.json();
+  try {
+    return await apiFetch<DBTask>(`${API}/tasks/${taskId}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return undefined;
+    throw err;
+  }
 }
 
 export async function getTaskNotesForTask(taskId: string): Promise<DBTaskNote[]> {
-  const r = await fetch(`${API}/tasks/${taskId}/notes`);
-  return r.json();
+  return apiFetch<DBTaskNote[]>(`${API}/tasks/${taskId}/notes`);
 }
 
 export async function createTask(
   data: Omit<DBTask, 'id' | 'created_at' | 'updated_at'>
 ): Promise<string> {
-  const r = await fetch(`${API}/tasks`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  const { id } = await r.json();
+  const { id } = await apiPost<{ id: string }>(`${API}/tasks`, data);
   return id;
 }
 
@@ -54,54 +49,39 @@ export async function createSubtask(
 }
 
 export async function toggleTask(taskId: string): Promise<{ completed: boolean; metrics?: GoalTaskMetrics }> {
-  const r = await fetch(`${API}/tasks/${taskId}/toggle`, { method: 'POST' });
-  return r.json();
+  return apiPost<{ completed: boolean; metrics?: GoalTaskMetrics }>(`${API}/tasks/${taskId}/toggle`, {});
 }
 
 export async function completeTask(taskId: string, completionNote: string): Promise<{ metrics?: GoalTaskMetrics }> {
-  const r = await fetch(`${API}/tasks/${taskId}/complete`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ completion_note: completionNote }),
-  });
-  return r.json();
+  return apiPost<{ metrics?: GoalTaskMetrics }>(`${API}/tasks/${taskId}/complete`, { completion_note: completionNote });
 }
 
 export async function touchTask(taskId: string): Promise<void> {
-  await fetch(`${API}/tasks/${taskId}/touch`, { method: 'POST' });
+  await apiPost(`${API}/tasks/${taskId}/touch`, {});
 }
 
 export async function deactivateTask(taskId: string): Promise<void> {
-  await fetch(`${API}/tasks/${taskId}/deactivate`, { method: 'POST' });
+  await apiPost(`${API}/tasks/${taskId}/deactivate`, {});
 }
 
 export async function updateTask(
   taskId: string,
   updates: Partial<Omit<DBTask, 'id' | 'created_at'>>
 ): Promise<void> {
-  await fetch(`${API}/tasks/${taskId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updates),
-  });
+  await apiPatch(`${API}/tasks/${taskId}`, updates);
 }
 
 export async function deleteTask(taskId: string): Promise<void> {
-  await fetch(`${API}/tasks/${taskId}`, { method: 'DELETE' });
+  await apiDelete(`${API}/tasks/${taskId}`);
 }
 
 export async function addTaskNote(taskId: string, content: string): Promise<string> {
-  const r = await fetch(`${API}/tasks/${taskId}/notes`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  const { id } = await r.json();
+  const { id } = await apiPost<{ id: string }>(`${API}/tasks/${taskId}/notes`, { content });
   return id;
 }
 
 export async function deleteTaskNote(noteId: string): Promise<void> {
-  await fetch(`${API}/tasks/notes/${noteId}`, { method: 'DELETE' });
+  await apiDelete(`${API}/tasks/notes/${noteId}`);
 }
 
 export async function recalcGoalProgress(

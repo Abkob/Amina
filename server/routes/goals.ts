@@ -30,6 +30,37 @@ router.get('/', async (req, res) => {
   res.json(rows);
 });
 
+// GET /api/goals/health — aggregate task health for all goals in one query (eliminates N+1)
+// Registered BEFORE '/:id' — otherwise Express matches 'health' as a goal id and 404s.
+router.get('/health', async (_req, res) => {
+  const { rows } = await query<{
+    goal_id: string;
+    total: string;
+    completed: string;
+    overdue: string;
+    in_progress: string;
+    estimated_minutes_total: string;
+    actual_minutes_total: string;
+    earliest_due: string | null;
+    latest_due: string | null;
+  }>(`
+    SELECT
+      goal_id,
+      COUNT(*)::int                                          AS total,
+      SUM(CASE WHEN completed THEN 1 ELSE 0 END)::int       AS completed,
+      SUM(CASE WHEN NOT completed AND due_date < CURRENT_DATE::text THEN 1 ELSE 0 END)::int AS overdue,
+      SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END)::int AS in_progress,
+      COALESCE(SUM(CASE WHEN NOT completed THEN estimated_minutes ELSE 0 END), 0)::int AS estimated_minutes_total,
+      COALESCE(SUM(actual_minutes), 0)::int                 AS actual_minutes_total,
+      MIN(CASE WHEN NOT completed THEN due_date END)        AS earliest_due,
+      MAX(CASE WHEN NOT completed THEN due_date END)        AS latest_due
+    FROM tasks
+    WHERE goal_id IS NOT NULL
+    GROUP BY goal_id
+  `);
+  res.json(rows);
+});
+
 // GET /api/goals/:id
 router.get('/:id', async (req, res) => {
   const { rows } = await query('SELECT * FROM goals WHERE id = $1', [req.params.id]);
@@ -66,36 +97,6 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/sync-metrics', async (req, res) => {
   const metrics = await syncGoalMetrics(req.params.id);
   res.json(metrics);
-});
-
-// GET /api/goals/health — aggregate task health for all goals in one query (eliminates N+1)
-router.get('/health', async (_req, res) => {
-  const { rows } = await query<{
-    goal_id: string;
-    total: string;
-    completed: string;
-    overdue: string;
-    in_progress: string;
-    estimated_minutes_total: string;
-    actual_minutes_total: string;
-    earliest_due: string | null;
-    latest_due: string | null;
-  }>(`
-    SELECT
-      goal_id,
-      COUNT(*)::int                                          AS total,
-      SUM(CASE WHEN completed THEN 1 ELSE 0 END)::int       AS completed,
-      SUM(CASE WHEN NOT completed AND due_date < CURRENT_DATE::text THEN 1 ELSE 0 END)::int AS overdue,
-      SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END)::int AS in_progress,
-      COALESCE(SUM(CASE WHEN NOT completed THEN estimated_minutes ELSE 0 END), 0)::int AS estimated_minutes_total,
-      COALESCE(SUM(actual_minutes), 0)::int                 AS actual_minutes_total,
-      MIN(CASE WHEN NOT completed THEN due_date END)        AS earliest_due,
-      MAX(CASE WHEN NOT completed THEN due_date END)        AS latest_due
-    FROM tasks
-    WHERE goal_id IS NOT NULL
-    GROUP BY goal_id
-  `);
-  res.json(rows);
 });
 
 export { router as goalsRouter };

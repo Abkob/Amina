@@ -4,7 +4,7 @@ import { embedQuery, EMBED_DIMENSION, EMBED_MODEL } from '../embeddingProvider.j
 
 const router = Router();
 
-const ALLOWED_TYPES = new Set(['goal', 'task', 'resource', 'note', 'journal_entry', 'meeting', 'milestone']);
+const ALLOWED_TYPES = new Set(['goal', 'task', 'resource', 'note', 'journal_entry', 'meeting', 'milestone', 'resource_chunk']);
 
 interface SearchHit {
   entity_type: string;
@@ -61,6 +61,25 @@ async function hydrate(entityType: string, entityId: string): Promise<{ title: s
     const ms = rows[0] as Record<string, unknown>;
     return { title: String(ms.title ?? ''), snippet: ms.description ? String(ms.description).slice(0, 200) : null, extra: { due_date: ms.due_date, goal_id: ms.goal_id } };
   }
+  if (entityType === 'resource_chunk') {
+    // entityId is the chunk id; surface the parent resource with a page citation
+    const { rows } = await query(
+      `SELECT rc.content, rc.page_start, rc.page_end, rc.resource_id, r.title AS resource_title, r.url
+       FROM resource_chunks rc LEFT JOIN resources r ON r.id = rc.resource_id
+       WHERE rc.id=$1`,
+      [entityId],
+    );
+    if (!rows.length) return null;
+    const c = rows[0] as Record<string, unknown>;
+    const pages = c.page_start != null
+      ? ` (p. ${c.page_start}${c.page_end && c.page_end !== c.page_start ? `–${c.page_end}` : ''})`
+      : '';
+    return {
+      title: `${c.resource_title ?? 'Document'}${pages}`,
+      snippet: c.content ? String(c.content).slice(0, 200) : null,
+      extra: { url: c.url, resource_id: c.resource_id, page_start: c.page_start, page_end: c.page_end },
+    };
+  }
   return null;
 }
 
@@ -76,6 +95,7 @@ async function keywordSearch(q: string, types: string[], limit: number): Promise
     { type: 'journal_entry', sql: `SELECT id, entry_date::TEXT as title, LEFT(summary,200) as snippet, NULL as status, NULL as url, NULL as due_date, NULL as goal_id FROM journal_entries WHERE summary ILIKE $1 LIMIT $2` },
     { type: 'meeting', sql: `SELECT id, title, LEFT(summary,200) as snippet, NULL as status, NULL as url, NULL as due_date, NULL as goal_id FROM meetings WHERE title ILIKE $1 OR summary ILIKE $1 LIMIT $2` },
     { type: 'milestone', sql: `SELECT id, title, description as snippet, NULL as status, NULL as url, due_date, goal_id FROM goal_milestones WHERE title ILIKE $1 OR description ILIKE $1 LIMIT $2` },
+    { type: 'resource_chunk', sql: `SELECT rc.id, r.title || COALESCE(' (p. ' || rc.page_start || ')', '') as title, LEFT(rc.content,200) as snippet, NULL as status, r.url, NULL as due_date, NULL as goal_id FROM resource_chunks rc LEFT JOIN resources r ON r.id = rc.resource_id WHERE rc.content ILIKE $1 LIMIT $2` },
   ];
 
   const perType = Math.ceil(limit / types.length);

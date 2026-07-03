@@ -73,13 +73,18 @@ describe.skipIf(SKIP_INTEGRATION)('Journal ingestion — validation (integration
     expect(res.ok).toBe(false);
   });
 
-  it('rejects entry with missing entry_date', async () => {
+  it('defaults entry_date to today when omitted (production contract)', async () => {
     const res = await fetch(`${baseUrl}/api/journal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw_text: 'some text' }),
+      body: JSON.stringify({ raw_text: '__test_default_date__' }),
     });
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { id: string };
+    const check = await fetch(`${baseUrl}/api/journal/${body.id}`);
+    const entry = await check.json() as { entry_date: string };
+    expect(entry.entry_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    await fetch(`${baseUrl}/api/journal/${body.id}`, { method: 'DELETE' });
   });
 
   it('returns 404 for unknown entry id', async () => {

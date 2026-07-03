@@ -215,9 +215,11 @@ router.post('/upload', (req, res, next) => {
   const base = path.basename(file.originalname, path.extname(file.originalname));
   const url  = `/api/resources/serve/${file.filename}`;
   const type = typeFromFilename(file.originalname);
+  // file_path is required by deletion and data-health orphan detection —
+  // without it uploaded files become orphans the moment the row is deleted.
   await query(
-    'INSERT INTO resources (id,title,url,type,info,created_at) VALUES ($1,$2,$3,$4,$5,$6)',
-    [id, base, url, type, `Uploaded ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, now],
+    'INSERT INTO resources (id,title,url,type,info,file_path,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+    [id, base, url, type, `Uploaded ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, file.path, now],
   );
   res.json({ id });
   generateEntitySummary('resource', id).catch(err => console.error('[summary] resource upload:', err));
@@ -225,6 +227,52 @@ router.post('/upload', (req, res, next) => {
   // Chunk text/PDF files for semantic search
   processResourceChunks(id, file.path, file.mimetype)
     .catch(err => console.error('[chunk-pipeline] upload:', err));
+});
+
+// POST /api/resources/:id/rechunk — re-run text extraction + chunking for an
+// uploaded file (e.g. after a parser fix). Requires a stored or recoverable file.
+router.post('/:id/rechunk', async (req, res) => {
+  const { rows } = await query('SELECT id, file_path, url FROM resources WHERE id=$1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'not found' });
+  const r = rows[0] as { id: string; file_path: string | null; url: string | null };
+
+  // Legacy uploads predate file_path persistence — recover the path from the serve URL.
+  let filePath = r.file_path;
+  if (!filePath && r.url?.startsWith('/api/resources/serve/')) {
+    const safeName = (r.url.split('/').pop() ?? '').replace(/[^a-zA-Z0-9.\-_]/g, '');
+    const resolved = path.resolve(path.join(UPLOADS_DIR, safeName));
+    if (resolved.startsWith(path.resolve(UPLOADS_DIR) + path.sep) && fs.existsSync(resolved)) {
+      filePath = resolved;
+      // Backfill the recovered path so deletion and data-health can see it
+      await query('UPDATE resources SET file_path=$1 WHERE id=$2', [filePath, r.id]);
+    }
+  }
+  if (!filePath || !fs.existsSync(filePath)) {
+    return res.status(409).json({ error: 'No file on disk for this resource — re-upload it to enable chunking' });
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const mime = ext === '.pdf' ? 'application/pdf' : 'text/plain';
+  const result = await processResourceChunks(r.id, filePath, mime);
+  if (!result) {
+    return res.status(422).json({ error: 'Extraction produced no chunks (parse failure or empty document); previous chunks were preserved' });
+  }
+  res.json({ ok: true, ...result });
+});
+
+// GET /api/resources/:id/chunks — chunk inspection (Testing workbench + citation viewer)
+router.get('/:id/chunks', async (req, res) => {
+  const { rows } = await query(
+    `SELECT rc.id, rc.chunk_index, rc.page_start, rc.page_end, rc.chunk_metadata,
+            LENGTH(rc.content) AS content_chars, LEFT(rc.content, 240) AS content_preview,
+            (e.id IS NOT NULL) AS has_embedding, COALESCE(e.is_stale, false) AS embedding_stale
+     FROM resource_chunks rc
+     LEFT JOIN embeddings e ON e.entity_type='resource_chunk' AND e.entity_id=rc.id AND e.embedding_3072 IS NOT NULL
+     WHERE rc.resource_id=$1
+     ORDER BY rc.chunk_index ASC`,
+    [req.params.id],
+  );
+  res.json(rows);
 });
 
 // GET /api/resources/serve/:filename
@@ -288,6 +336,11 @@ router.post('/', async (req, res) => {
   res.json({ id });
   generateEntitySummary('resource', id).catch(err => console.error('[summary] resource create:', err));
   queueEmbeddingUpsert('resource', id).catch(err => console.error('[embedding] resource create:', err));
+  if (b.tags_json) {
+    import('../services/topicTagSync.js')
+      .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('resource', id, parseTags(b.tags_json), 'manual'))
+      .catch(err => console.warn('[resources] tag→topic sync:', err));
+  }
 });
 
 // PATCH /api/resources/:id
@@ -320,6 +373,13 @@ router.patch('/:id', async (req, res) => {
   generateEntitySummary('resource', req.params.id).catch(err => console.error('[summary] resource update:', err));
   markEmbeddingStale('resource', req.params.id).catch(() => {});
   queueEmbeddingUpsert('resource', req.params.id).catch(err => console.error('[embedding] resource update:', err));
+  // Choice A — tags ARE topics: a user-typed tag matching a topic name/alias
+  // joins that topic with full authority.
+  if (tags_json !== undefined) {
+    import('../services/topicTagSync.js')
+      .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('resource', req.params.id, parseTags(tags_json), 'manual'))
+      .catch(err => console.warn('[resources] tag→topic sync:', err));
+  }
 });
 
 // DELETE /api/resources/:id

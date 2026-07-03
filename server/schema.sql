@@ -363,10 +363,8 @@ CREATE TABLE IF NOT EXISTS ai_action_proposals (
   applied_at       TEXT,
   idempotency_key  TEXT
 );
--- Dedup: at most one pending proposal per (action_type, idempotency_key) pair
-CREATE UNIQUE INDEX IF NOT EXISTS idx_proposals_idem ON ai_action_proposals (action_type, idempotency_key)
-  WHERE status = 'pending' AND idempotency_key IS NOT NULL;
-ALTER TABLE ai_action_proposals ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+-- Dedup index for (action_type, idempotency_key) is created by M-013 below,
+-- AFTER the column is guaranteed to exist on legacy databases.
 
 -- ─── Entity summaries (AI-readable summaries, cached per entity) ──────────────
 CREATE TABLE IF NOT EXISTS entity_summaries (
@@ -680,6 +678,125 @@ BEGIN
   END IF;
 END $$;
 
+-- M-017: journal_entries — AI-extracted tags live in their own column so
+-- ingestion never overwrites the user's manual tags_json.
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS ai_tags_json TEXT NOT NULL DEFAULT '[]';
+
+-- M-018: Semantic topics, memberships, and explainable suggestions (Epics 41/44/48/49).
+-- Manual assertions are authoritative: source='manual' rows are never touched by
+-- AI candidate generation; AI output enters as status='suggested' and becomes
+-- canonical only on explicit acceptance.
+CREATE TABLE IF NOT EXISTS topics (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  description    TEXT,
+  color          TEXT,
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','merged')),
+  merged_into_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+  created_by     TEXT NOT NULL DEFAULT 'manual' CHECK (created_by IN ('manual','ai')),
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_name_active ON topics (LOWER(name)) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS topic_aliases (
+  id         TEXT PRIMARY KEY,
+  topic_id   TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  alias      TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'manual' CHECK (created_by IN ('manual','ai')),
+  created_at TEXT NOT NULL,
+  UNIQUE (topic_id, alias)
+);
+
+CREATE TABLE IF NOT EXISTS suggestion_runs (
+  id            TEXT PRIMARY KEY,
+  kind          TEXT NOT NULL DEFAULT 'cluster_candidates',
+  model         TEXT,
+  embedding_model TEXT,
+  params_json   TEXT NOT NULL DEFAULT '{}',
+  stats_json    TEXT NOT NULL DEFAULT '{}',
+  status        TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','done','failed')),
+  error         TEXT,
+  started_at    TEXT NOT NULL,
+  finished_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS topic_memberships (
+  id             TEXT PRIMARY KEY,
+  topic_id       TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+  entity_type    TEXT NOT NULL CHECK (entity_type IN ('goal','task','milestone','resource','meeting','journal_entry','note')),
+  entity_id      TEXT NOT NULL,
+  source         TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','imported','ai_suggested','ai_accepted')),
+  status         TEXT NOT NULL DEFAULT 'accepted' CHECK (status IN ('suggested','accepted','rejected','superseded')),
+  confidence     REAL NOT NULL DEFAULT 1.0,
+  -- Explainability: evidence_json holds the signals that produced this row
+  -- (cosine scores, graph paths, alias matches, co-citations), reason_codes
+  -- is a compact machine-readable list ('embedding_similarity','graph_neighbor',...)
+  evidence_json  TEXT NOT NULL DEFAULT '{}',
+  reason_codes   TEXT NOT NULL DEFAULT '[]',
+  suggestion_run_id TEXT REFERENCES suggestion_runs(id) ON DELETE SET NULL,
+  decided_at     TEXT,
+  decided_by     TEXT CHECK (decided_by IN ('user','policy') OR decided_by IS NULL),
+  row_version    INTEGER NOT NULL DEFAULT 1,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  UNIQUE (topic_id, entity_type, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_topic_memberships_entity ON topic_memberships(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_topic_memberships_status ON topic_memberships(status) WHERE status = 'suggested';
+
+-- M-019: chat_messages carry structured metadata (actions with proposal ids,
+-- feasibility, citations) so reloading a conversation restores its cards.
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS metadata_json TEXT;
+
+-- M-020: journal entries created from a Capture note remember their source so
+-- re-logging the same note UPDATES the entry (and re-ingests) instead of
+-- creating a duplicate.
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS source_note_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_source_note
+  ON journal_entries (source_note_id) WHERE source_note_id IS NOT NULL;
+
+-- M-021: Real date-based planning (replaces vague Q1/Q2-style deadlines).
+-- Semantics: start_date = may begin; target_date = would like to finish;
+-- hard_deadline = must be done; scheduling_enabled = Amina may place it on the
+-- calendar (only ever acts when a date AND a duration exist).
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS start_date TEXT;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_date TEXT;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS hard_deadline TEXT;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS deadline_type TEXT CHECK (deadline_type IN ('soft','hard','estimated') OR deadline_type IS NULL);
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS deadline_confidence TEXT CHECK (deadline_confidence IN ('low','medium','high') OR deadline_confidence IS NULL);
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS scheduling_enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS estimated_minutes INTEGER;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS plan_status TEXT NOT NULL DEFAULT 'in_progress'
+  CHECK (plan_status IN ('not_started','planned','in_progress','paused','blocked','completed'));
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_date TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS hard_deadline TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deadline_type TEXT CHECK (deadline_type IN ('soft','hard','estimated') OR deadline_type IS NULL);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deadline_confidence TEXT CHECK (deadline_confidence IN ('low','medium','high') OR deadline_confidence IS NULL);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduling_enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS flexibility TEXT CHECK (flexibility IN ('flexible','fixed','urgent') OR flexibility IS NULL);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS can_split BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS min_session_minutes INTEGER;
+
+ALTER TABLE goal_milestones ADD COLUMN IF NOT EXISTS start_date TEXT;
+ALTER TABLE goal_milestones ADD COLUMN IF NOT EXISTS hard_deadline TEXT;
+ALTER TABLE goal_milestones ADD COLUMN IF NOT EXISTS scheduling_enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE goal_milestones ADD COLUMN IF NOT EXISTS plan_status TEXT NOT NULL DEFAULT 'planned'
+  CHECK (plan_status IN ('not_started','planned','in_progress','paused','blocked','completed'));
+
+-- Backfill: legacy goal.deadline strings that are real ISO dates become
+-- target_date; vague ones (Q3 2024, Oct 15…) are left behind and no longer
+-- drive planning.
+UPDATE goals SET target_date = deadline
+  WHERE target_date IS NULL AND deadline ~ '^\d{4}-\d{2}-\d{2}$';
+-- Tasks' legacy due_date acts as target_date where none is set.
+UPDATE tasks SET target_date = due_date
+  WHERE target_date IS NULL AND due_date ~ '^\d{4}-\d{2}-\d{2}$';
+
+-- Journal end-of-day rollup marker (capture wall → journal book)
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS source TEXT;
+
 -- Backfill existing migrations so the registry reflects current state
 INSERT INTO schema_migrations (name) VALUES
   ('M-001-rename-payload'),
@@ -699,5 +816,10 @@ INSERT INTO schema_migrations (name) VALUES
   ('M-013a-extracted-facts-needs-review'),
   ('M-014-task-fk-constraints'),
   ('M-015-work-session-fk-constraints'),
-  ('M-016-unique-pending-embedding-job')
+  ('M-016-unique-pending-embedding-job'),
+  ('M-017-journal-ai-tags-column'),
+  ('M-018-semantic-topics'),
+  ('M-019-chat-message-metadata'),
+  ('M-020-journal-source-note'),
+  ('M-021-real-date-planning')
 ON CONFLICT (name) DO NOTHING;

@@ -1,38 +1,25 @@
 import type { DBDeadline } from '../schema';
+import { apiFetch, apiPost, apiPut, apiPatch, apiDelete } from '../../utils/apiFetch';
 
 const API = '/api/goal-deadlines';
 
 export async function getDeadlinesByGoal(goalId: string): Promise<DBDeadline[]> {
-  const r = await fetch(`${API}?goal_id=${goalId}`);
-  return r.json();
+  return apiFetch<DBDeadline[]>(`${API}?goal_id=${goalId}`);
 }
 
 export async function createDeadline(data: Omit<DBDeadline, 'id' | 'created_at'>): Promise<string> {
-  const r = await fetch(API, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  const { id } = await r.json();
+  const { id } = await apiPost<{ id: string }>(API, data);
   return id;
 }
 
 export async function updateDeadline(id: string, data: Partial<Pick<DBDeadline, 'title' | 'date' | 'color'>>): Promise<void> {
-  await fetch(`${API}/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
+  await apiPut(`${API}/${id}`, data);
 }
 
 export async function deleteDeadline(id: string): Promise<void> {
-  await fetch(`${API}/${id}`, { method: 'DELETE' });
+  await apiDelete(`${API}/${id}`);
 }
 
 export async function assignTaskToDeadline(taskId: string, deadlineId: string | null): Promise<void> {
-  await fetch(`${API}/assign`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task_id: taskId, deadline_id: deadlineId }),
-  });
+  await apiPatch(`${API}/assign`, { task_id: taskId, deadline_id: deadlineId });
 }

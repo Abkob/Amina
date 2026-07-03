@@ -7,9 +7,7 @@
  *   npx vitest run --config vitest.integration.config.ts
  */
 
-import { beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import express from 'express';
 
 // Ensure we're in test mode so db.ts uses DATABASE_URL_TEST
 process.env.NODE_ENV = 'test';
@@ -19,34 +17,28 @@ export let baseUrl = '';
 
 export const SKIP_INTEGRATION = !process.env.DATABASE_URL_TEST;
 
+let schemaApplied = false;
+
 /**
- * Start a minimal express app for integration tests.
- * Only call this in suites that need a running server.
+ * Start the EXACT production Express application (server/app.ts createApp)
+ * against the isolated test database. Background workers and listeners from
+ * server/index.ts are NOT started — tests drive the HTTP surface only.
+ * Real migrations (schema.sql) are applied once per run.
  */
 export async function startTestServer(): Promise<void> {
   if (SKIP_INTEGRATION) return;
+  if (server) return; // already running — suites may call this from nested hooks
 
-  const app = express();
-  app.use(express.json());
+  // Dynamic imports so the DB guard runs after NODE_ENV is set
+  const { initSchema } = await import('../db.js');
+  const { createApp } = await import('../app.js');
 
-  // Dynamically import routes so the DB guard runs after env is set
-  const [
-    { goalsRouter },
-    { tasksRouter },
-    { resourcesRouter },
-    { journalRouter },
-  ] = await Promise.all([
-    import('../routes/goals.js'),
-    import('../routes/tasks.js'),
-    import('../routes/resources.js'),
-    import('../routes/journal.js'),
-  ]);
+  if (!schemaApplied) {
+    await initSchema(); // idempotent — applies schema + versioned migrations
+    schemaApplied = true;
+  }
 
-  app.use('/api/goals', goalsRouter);
-  app.use('/api/tasks', tasksRouter);
-  app.use('/api/resources', resourcesRouter);
-  app.use('/api/journal', journalRouter);
-
+  const app = createApp();
   await new Promise<void>(resolve => {
     server = createServer(app).listen(0, '127.0.0.1', resolve);
   });

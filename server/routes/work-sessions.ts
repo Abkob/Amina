@@ -119,7 +119,16 @@ router.post('/', async (req, res) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [id, task_id ?? null, resource_id ?? null, goal_id ?? null, journal_entry_id ?? null, started_at ?? now, ended_at ?? null, minutes ?? null, notes ?? '', source ?? 'manual', now],
   );
-  if (task_id) await recalcActualMinutes(task_id as string);
+  if (task_id) {
+    await recalcActualMinutes(task_id as string);
+    // Status truth: logging real work moves a dormant task to in_progress
+    // (never touches paused — the user chose that — nor blocked/done).
+    await query(
+      `UPDATE tasks SET status='in_progress', updated_at=$1
+       WHERE id=$2 AND status IN ('todo','not_started','planned')`,
+      [now, task_id],
+    );
+  }
   res.json({ id });
 });
 

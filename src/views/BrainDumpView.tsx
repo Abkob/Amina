@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
-import { Plus, Trash2, Sparkles, CheckCircle2, FileText, X } from 'lucide-react';
+import { Plus, Trash2, Sparkles, CheckCircle2, FileText, X, ScrollText } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { ClassificationPopup } from '../modals/ClassificationPopup';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
 import { useNotes } from '../api/hooks';
-import { apiFetch } from '../utils/apiFetch';
+import { apiFetch, apiPost } from '../utils/apiFetch';
 import { updateNoteContent, deleteNote, applyNoteSuggestedAction, ignoreNoteSuggestedAction } from '../db/queries/notes';
 import { createTask } from '../db/queries/tasks';
 import { parseExtractedTasks, parseRelevantDocs } from '../db/schema';
@@ -118,6 +118,34 @@ function NoteEditor() {
     triggerToast('Suggested action archived.', 'info');
   };
 
+  // Bridge to the journal pipeline: a thought becomes a real journal entry,
+  // which flows through AI extraction → entity links → embedding → suggestions.
+  const [logging, setLogging] = useState(false);
+  const handleLogAsJournal = async () => {
+    if (!activeNote) return;
+    const text = editor?.getText().trim() || activeNote.content?.replace(/<[^>]+>/g, ' ').trim();
+    if (!text) { triggerToast('Nothing to log — the note is empty.', 'error'); return; }
+    setLogging(true);
+    try {
+      // source_note_id makes re-logging idempotent: same note → same entry
+      const r = await apiPost<{ deduped?: boolean; updated?: boolean }>('/api/journal', {
+        raw_text: text, source_note_id: activeNote.id,
+      });
+      triggerToast(
+        r.deduped
+          ? 'Already logged — the journal entry is up to date with this note.'
+          : r.updated
+            ? 'Journal entry updated from this note — re-running AI extraction.'
+            : 'Logged as a journal entry — AI extraction is running. See the Journal tab.',
+        'success',
+      );
+    } catch (e) {
+      triggerToast((e as Error).message, 'error');
+    } finally {
+      setLogging(false);
+    }
+  };
+
   if (!activeNote) return null;
 
   return (
@@ -130,9 +158,20 @@ function NoteEditor() {
           <h2 className="font-headline text-xl font-bold text-black mt-1.5">{activeNote.title}</h2>
           <p className="font-mono text-[10px] text-gray-400 mt-1">{activeNote.date_str}</p>
         </div>
-        <button onClick={handleDelete} className="p-1.5 hover:bg-red-50 hover:text-red-500 rounded text-gray-400 transition-colors">
-          <Trash2 size={14} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handleLogAsJournal}
+            disabled={logging}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider text-[#4648d4] bg-[#EEF2FF] hover:bg-[#c0c1ff]/30 border border-[#c0c1ff]/50 transition-colors disabled:opacity-50"
+            title="Send this thought through the journal pipeline: AI extraction, entity links, embeddings, and topic suggestions"
+          >
+            <ScrollText size={11} />
+            {logging ? 'Logging…' : 'Log as journal'}
+          </button>
+          <button onClick={handleDelete} className="p-1.5 hover:bg-red-50 hover:text-red-500 rounded text-gray-400 transition-colors">
+            <Trash2 size={14} />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col relative">

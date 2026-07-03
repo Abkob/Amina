@@ -4,8 +4,11 @@ import { apiFetch, apiPost, apiDelete } from '../utils/apiFetch';
 
 // Static data: don't poll — use mutation-driven invalidation instead.
 // Journal/proposal/schedule-preview use explicit intervals since they change server-side.
-const STALE_SHORT = 30_000;  // 30s — task/goal data, invalidated on mutation
+const STALE_SHORT = 10_000;  // 10s — task/goal data; mutations invalidate explicitly, this is only the safety net
 const STALE_STATIC = 120_000; // 2min — prefs, events, meetings
+// Lists use `placeholderData: []`, NEVER `initialData: []` — initialData counts
+// as real fresh data, which suppressed the first fetch until staleTime expired
+// and made pages appear empty at startup, filling in "randomly" later.
 
 // ── Goals ─────────────────────────────────────────────────────────────────────
 
@@ -14,7 +17,18 @@ export function useGoals() {
     queryKey: ['goals'],
     queryFn: () => apiFetch<DBGoal[]>('/api/goals'),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
+  });
+}
+
+/** ALL goals including archived — /api/goals excludes archived by default,
+ *  which made the dashboard's Archived tab permanently empty. */
+export function useAllGoals() {
+  return useQuery<DBGoal[]>({
+    queryKey: ['goals', { archived: true }],
+    queryFn: () => apiFetch<DBGoal[]>('/api/goals?archived=true'),
+    staleTime: STALE_SHORT,
+    placeholderData: [],
   });
 }
 
@@ -38,7 +52,7 @@ export function useAllTasks() {
     queryKey: ['tasks'],
     queryFn: () => apiFetch<DBTask[]>('/api/tasks'),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -48,7 +62,7 @@ export function useGoalTasks(goalId: string | null) {
     queryFn: () => apiFetch<DBTask[]>(`/api/tasks?goal_id=${goalId}`),
     enabled: Boolean(goalId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -73,7 +87,7 @@ export function useTaskNotes(taskId: string | null) {
     queryFn: () => apiFetch<DBTaskNote[]>(`/api/tasks/${taskId}/notes`),
     enabled: Boolean(taskId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -92,7 +106,7 @@ export function useNoteFiles(noteId: string | null) {
     },
     enabled: Boolean(noteId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -103,7 +117,7 @@ export function useNotes() {
     queryKey: ['notes'],
     queryFn: () => apiFetch<DBNote[]>('/api/notes'),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -114,7 +128,7 @@ export function useEvents() {
     queryKey: ['events'],
     queryFn: () => apiFetch<DBEvent[]>('/api/events'),
     staleTime: STALE_STATIC,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -125,7 +139,7 @@ export function useAllResources() {
     queryKey: ['resources'],
     queryFn: () => apiFetch<DBResource[]>('/api/resources'),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -135,7 +149,7 @@ export function useGoalResources(goalId: string | null) {
     queryFn: () => apiFetch<DBResource[]>(`/api/resources?goal_id=${goalId}`),
     enabled: Boolean(goalId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -145,7 +159,7 @@ export function useTaskResources(taskId: string | null) {
     queryFn: () => apiFetch<DBResource[]>(`/api/resources?task_id=${taskId}`),
     enabled: Boolean(taskId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -168,7 +182,7 @@ export function useGoalsHealth() {
     queryKey: ['goals-health'],
     queryFn: () => apiFetch<GoalHealthRow[]>('/api/goals/health'),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -180,7 +194,7 @@ export function useGoalDeadlines(goalId: string | null) {
     queryFn: () => apiFetch<DBDeadline[]>(`/api/goal-deadlines?goal_id=${goalId}`),
     enabled: Boolean(goalId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -192,7 +206,7 @@ export function useGoalMeetings(goalId: string | null) {
     queryFn: () => apiFetch<DBMeeting[]>(`/api/meetings?goal_id=${goalId}`),
     enabled: Boolean(goalId),
     staleTime: STALE_STATIC,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -201,7 +215,7 @@ export function useAllMeetings() {
     queryKey: ['meetings'],
     queryFn: () => apiFetch<DBMeeting[]>('/api/meetings'),
     staleTime: STALE_STATIC,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -213,7 +227,7 @@ export function useGoalMilestones(goalId: string | null) {
     queryFn: () => apiFetch<DBMilestone[]>(`/api/milestones?goal_id=${goalId}`),
     enabled: Boolean(goalId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -235,7 +249,7 @@ export function useTaskWorkSessions(taskId: string | null) {
     queryFn: () => apiFetch<DBWorkSession[]>(`/api/work-sessions?task_id=${taskId}`),
     enabled: Boolean(taskId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -280,6 +294,8 @@ export interface DBJournalLink {
   target_title: string | null;
   relationship: string;
   confidence: number;
+  /** 'manual' links are authoritative and survive re-ingestion; 'ai' links are replaced. */
+  created_by: 'manual' | 'ai';
 }
 
 export interface DBExtractedFact {
@@ -306,7 +322,7 @@ export function useJournalEntries() {
       const hasInFlight = data?.some(e => !TERMINAL_STATUSES.has(e.ingestion_status));
       return hasInFlight ? 5_000 : false;
     },
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -342,7 +358,7 @@ export function useJournalLinks(entryId: string | null) {
       if (entry && TERMINAL_STATUSES.has(entry.ingestion_status)) return false;
       return 5_000;
     },
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -370,7 +386,7 @@ export function useAIProposals() {
       const data = query.state.data as DBProposal[] | undefined;
       return data?.some(p => p.status === 'pending') ? 5_000 : false;
     },
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -445,7 +461,7 @@ export function useScheduleOverrides(from?: string, to?: string) {
     queryKey: ['schedule-overrides', from, to],
     queryFn: () => apiFetch<DBScheduleOverride[]>(`/api/schedule-prefs/overrides${params}`),
     staleTime: STALE_STATIC,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -505,7 +521,7 @@ export function useEventTaskLinks(params: { event_id?: string; task_id?: string 
     queryFn: () => apiFetch<DBEventTaskLinkFull[]>(`/api/event-task-links${qs}`),
     enabled: Boolean(qs),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -554,7 +570,7 @@ export function useEntityAliases(filters?: { entity_type?: string; entity_id?: s
     queryKey: ['entity-aliases', filters],
     queryFn: () => apiFetch<DBEntityAlias[]>(`/api/entity-aliases${qs ? `?${qs}` : ''}`),
     staleTime: STALE_STATIC,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -694,7 +710,7 @@ export function useChatSessions() {
     queryKey: ['chat-sessions'],
     queryFn: () => apiFetch<ChatSession[]>('/api/ai/sessions'),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 
@@ -704,7 +720,7 @@ export function useChatSessionMessages(sessionId: string | null) {
     queryFn: () => apiFetch<ChatMessage[]>(`/api/ai/sessions/${sessionId}/messages`),
     enabled: Boolean(sessionId),
     staleTime: STALE_SHORT,
-    initialData: [],
+    placeholderData: [],
   });
 }
 

@@ -15,6 +15,8 @@ import { useNow } from '../utils/useNow';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
+import { EntityTopicChips } from '../components/EntityTopicChips';
+import { GoalPlanningPanel } from '../components/GoalPlanningPanel';
 import { TaskGraphView } from '../components/TaskGraphView';
 import { ActualTimeModal } from '../components/ActualTimeModal';
 import { ActualTimeChip } from '../components/ActualTimeChip';
@@ -904,6 +906,7 @@ function GoalMilestonesSection({
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState({ title: '', due_date: '', color: MILESTONE_COLORS[0] });
   const [saving, setSaving] = useState(false);
+  const { showConfirm: showConfirmStore } = useAppStore();
 
   if (!milestones.length && !addOpen) {
     return (
@@ -956,6 +959,13 @@ function GoalMilestonesSection({
 
   const unassignedTasks = tasks.filter(t => !t.milestone_id && !t.parent_task_id && !t.completed);
 
+  const handleDeleteTask = (t: DBTask) => {
+    showConfirmStore(`Delete task "${t.title}"? This cannot be undone.`, async () => {
+      await deleteTask(t.id);
+      onInvalidateTasks();
+    });
+  };
+
   return (
     <section>
       <h2 className="font-headline text-sm font-bold text-gray-900 flex items-center gap-2 mb-3">
@@ -965,6 +975,50 @@ function GoalMilestonesSection({
           {milestones.filter(m => m.completed).length}/{milestones.length}
         </span>
       </h2>
+
+      {/* ── Unassigned tasks: milestone-less work gets a real home ── */}
+      {unassignedTasks.length > 0 && (
+        <div className="rounded-xl border border-dashed border-amber-300/70 bg-amber-50/40 p-3 mb-3">
+          <p className="text-[11px] font-bold text-amber-800 mb-0.5">
+            Unassigned tasks ({unassignedTasks.length})
+          </p>
+          <p className="text-[10px] text-amber-700/80 mb-2">
+            In this goal but not under any milestone. Assign them below, or delete what you don’t need.
+          </p>
+          <div className="space-y-1">
+            {unassignedTasks.map(t => (
+              <div key={t.id} className="group flex items-center gap-2 bg-white border border-gray-150 rounded-lg px-2.5 py-1.5">
+                <span className="text-gray-400 font-mono text-[10px] shrink-0">{t.kind === 'critical_path' ? '◆' : t.kind === 'ai_generated' ? '✦' : '○'}</span>
+                <span className="flex-1 text-xs text-gray-800 truncate">{t.title}</span>
+                {t.estimated_minutes
+                  ? <span className="shrink-0 text-[9px] font-mono text-gray-400">{t.estimated_minutes}m</span>
+                  : <span className="shrink-0 text-[9px] font-mono text-amber-600" title="No time estimate — the scheduler can't plan this task">no est.</span>}
+                {t.due_date && <span className="shrink-0 text-[9px] font-mono text-gray-400">{t.due_date}</span>}
+                {milestones.filter(m => !m.completed).length > 0 && (
+                  <select
+                    onChange={e => { if (e.target.value) { handleAssignTask(t.id, e.target.value); e.target.value = ''; } }}
+                    defaultValue=""
+                    className="shrink-0 text-[9px] font-mono bg-white border border-gray-200 rounded px-1 py-0.5 text-gray-500 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Assign to a milestone"
+                  >
+                    <option value="">→ milestone…</option>
+                    {milestones.filter(m => !m.completed).map(m => (
+                      <option key={m.id} value={m.id}>{m.title.slice(0, 30)}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() => handleDeleteTask(t)}
+                  className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"
+                  title="Delete task"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2">
         {milestones.map(m => {
@@ -2048,7 +2102,7 @@ export function GoalDetail() {
   const startGoalTitleEdit = () => { setGoalTitleVal(goal.title); setEditingGoalTitle(true); };
   const saveGoalTitle = async () => {
     const t = goalTitleVal.trim();
-    if (t && t !== goal.title) await updateGoal(goal.id, { title: t });
+    if (t && t !== goal.title) { await updateGoal(goal.id, { title: t }); invalidate.goals(); }
     setEditingGoalTitle(false);
   };
 
@@ -2197,12 +2251,14 @@ export function GoalDetail() {
 
   const handleRestoreGoal = async () => {
     await restoreGoal(goal.id);
+    invalidate.goals();
     triggerToast('Goal restored with progress intact.', 'success');
   };
 
   const handleArchiveGoal = () => {
     showConfirm(`Archive goal "${goal.title}"? Your tasks, resources, and progress will be saved.`, async () => {
       await archiveGoal(goal.id);
+      invalidate.goals();
       triggerToast('Goal archived. Progress saved.', 'info');
     });
   };
@@ -2301,6 +2357,11 @@ export function GoalDetail() {
               )}
             </span>
           </p>
+
+          {/* Topic memberships — the semantic clusters this goal belongs to */}
+          <div className="mt-2.5">
+            <EntityTopicChips entityType="goal" entityId={goal.id} />
+          </div>
         </div>
 
         <div className="flex items-center gap-4 bg-white rounded-xl p-4 border border-gray-100 shadow-ambient shrink-0">
@@ -2316,11 +2377,7 @@ export function GoalDetail() {
               <span title={finishEstimate.title}>{finishEstimate.label}</span>
             </div>
             <div className="mt-2">
-              <DeadlinePill
-                value={goal.deadline}
-                label="goal deadline"
-                onSave={async (date) => updateGoal(goal.id, { deadline: date })}
-              />
+              <GoalPlanningPanel goal={goal} onChanged={() => invalidate.goals()} />
             </div>
             <button
               onClick={goal.archived_at ? handleRestoreGoal : handleArchiveGoal}

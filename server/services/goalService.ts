@@ -21,11 +21,22 @@ export interface UpdateGoalInput {
   overdue?: boolean;
   activity_level?: number;
   archived_at?: string | null;
+  // M-021 real date planning
+  start_date?: string | null;
+  target_date?: string | null;
+  hard_deadline?: string | null;
+  deadline_type?: string | null;
+  deadline_confidence?: string | null;
+  scheduling_enabled?: boolean;
+  estimated_minutes?: number | null;
+  plan_status?: string;
 }
 
 const GOAL_UPDATE_FIELDS = new Set([
   'title', 'description', 'category', 'status', 'progress',
   'deadline', 'overdue', 'activity_level', 'archived_at',
+  'start_date', 'target_date', 'hard_deadline', 'deadline_type',
+  'deadline_confidence', 'scheduling_enabled', 'estimated_minutes', 'plan_status',
 ]);
 
 export async function createGoal(input: CreateGoalInput): Promise<string> {
@@ -58,6 +69,13 @@ export async function createGoal(input: CreateGoalInput): Promise<string> {
 
 export async function updateGoal(id: string, input: UpdateGoalInput): Promise<void> {
   if ('deadline' in input) requireISODate(input.deadline, 'deadline');
+  if ('start_date' in input) requireISODate(input.start_date, 'start_date');
+  if ('target_date' in input) requireISODate(input.target_date, 'target_date');
+  if ('hard_deadline' in input) requireISODate(input.hard_deadline, 'hard_deadline');
+  if (input.plan_status !== undefined &&
+      !['not_started', 'planned', 'in_progress', 'paused', 'blocked', 'completed'].includes(input.plan_status)) {
+    throw Object.assign(new Error('invalid plan_status'), { status: 400 });
+  }
   const { rows } = await query('SELECT id FROM goals WHERE id=$1', [id]);
   if (!rows.length) throw Object.assign(new Error('Not found'), { status: 404 });
   const now = new Date().toISOString();

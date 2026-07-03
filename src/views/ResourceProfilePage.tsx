@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Trash2 } from 'lucide-react';
 import {
-  getResource, updateResource,
+  getResource, updateResource, deleteResource,
   getResourceLogs, addResourceLog, deleteResourceLog,
   getResourceReferences, getResourceStats, getResourceGraph,
 } from '../db/queries/resources';
 import { useAppStore } from '../store/useAppStore';
+import { useInvalidate } from '../api/hooks';
 import type { DBResource, ResourceLog, ResourceStats } from '../db/schema';
 import type { ResourceReference, ResourceGraphData } from '../db/queries/resources';
 
@@ -18,11 +19,14 @@ import { ResourceInsightsPinned }  from '../components/resource-profile/Resource
 import { ResourceTimeline }        from '../components/resource-profile/ResourceTimeline';
 import { ResourceLogComposer }     from '../components/resource-profile/ResourceLogComposer';
 import { CoCitationPanel }         from '../components/resource-profile/CoCitationPanel';
+import { SemanticIndexPanel }      from '../components/resource-profile/SemanticIndexPanel';
+import { EntityTopicChips }        from '../components/EntityTopicChips';
 import { GoalCoveragePanel }       from '../components/resource-profile/GoalCoveragePanel';
 import { ReferencedTasksPanel }    from '../components/resource-profile/ReferencedTasksPanel';
 
 export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
   const { setFocusedResourceId, navigateToGoal, showConfirm, triggerToast } = useAppStore();
+  const invalidate = useInvalidate();
   // Navigate to a task: switch to Goals tab then focus that task
   const { setCurrentTab, setSelectedGoalId, setFocusedTaskId } = useAppStore();
 
@@ -110,7 +114,7 @@ export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
 
   return (
     <div data-testid="resource-profile-page" className="min-h-full bg-[#f8f9fa] animate-fade-in">
-      {/* Back button */}
+      {/* Back + delete */}
       <div className="flex items-center gap-2 px-8 pt-5 pb-2">
         <button
           onClick={() => setFocusedResourceId(null)}
@@ -120,6 +124,24 @@ export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
         >
           <ChevronLeft size={13} />
           Back to library
+        </button>
+        <button
+          onClick={() => showConfirm(
+            `Delete "${resource?.title ?? 'this resource'}"? Its file, chunks, and embeddings are removed. Tasks/goals that referenced it are untouched.`,
+            async () => {
+              await deleteResource(resourceId);
+              // Without invalidation the library list stays cached and the
+              // deleted resource "reappears" until a manual refresh.
+              invalidate.resources();
+              triggerToast('Resource deleted.', 'info');
+              setFocusedResourceId(null);
+            },
+          )}
+          className="ml-auto inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest
+            text-gray-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 size={12} />
+          Delete resource
         </button>
       </div>
 
@@ -136,6 +158,13 @@ export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
           tags={tags}
           onChange={saveTags}
         />
+      )}
+
+      {/* Topic memberships — same clusters the AI suggests against */}
+      {resource && (
+        <div className="px-8 pb-2">
+          <EntityTopicChips entityType="resource" entityId={resourceId} />
+        </div>
       )}
 
       {/* Stats bar */}
@@ -187,6 +216,10 @@ export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
 
           {/* Right: panels */}
           <div className="space-y-6">
+            <SemanticIndexPanel
+              resourceId={resourceId}
+              hasFile={Boolean(resource?.file_path) || Boolean(resource?.url?.startsWith('/api/resources/serve/'))}
+            />
             <CoCitationPanel
               graphData={graphData}
               onResourceClick={handleResourceClick}

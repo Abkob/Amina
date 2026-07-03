@@ -13,9 +13,13 @@ const TASK_UPDATE_FIELDS = new Set([
   'tags_json', 'due_date', 'start_date', 'estimated_duration', 'estimated_minutes',
   'weight_percent', 'completed', 'position',
   'last_activity_at', 'completion_note',
+  // M-021 real date planning
+  'target_date', 'hard_deadline', 'deadline_type', 'deadline_confidence',
+  'scheduling_enabled', 'flexibility', 'can_split', 'min_session_minutes',
 ]);
 
-const VALID_TASK_STATUSES = new Set(['todo', 'in_progress', 'done', 'inactive', 'blocked']);
+// 'todo' is the legacy synonym of 'not_started'; both accepted.
+const VALID_TASK_STATUSES = new Set(['todo', 'not_started', 'planned', 'in_progress', 'paused', 'done', 'inactive', 'blocked']);
 const VALID_TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
 
 // GET /api/tasks?goal_id=...&parent_task_id=...&limit=N&offset=N
@@ -128,6 +132,11 @@ router.post('/', async (req, res) => {
   res.json({ id });
   generateEntitySummary('task', id).catch(err => console.error('[summary] task create:', err));
   queueEmbeddingUpsert('task', id).catch(err => console.error('[embedding] task create:', err));
+  if (b.tags_json) {
+    import('../services/topicTagSync.js')
+      .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('task', id, parseTags(b.tags_json), 'manual'))
+      .catch(err => console.warn('[tasks] tag→topic sync:', err));
+  }
 });
 
 // PATCH /api/tasks/:id
@@ -195,6 +204,12 @@ router.patch('/:id', async (req, res) => {
   generateEntitySummary('task', taskId).catch(err => console.error('[summary] task update:', err));
   markEmbeddingStale('task', taskId).catch(() => {});
   queueEmbeddingUpsert('task', taskId).catch(err => console.error('[embedding] task update:', err));
+  // Choice A — tags ARE topics: user-typed tags join matching topics.
+  if ('tags_json' in body) {
+    import('../services/topicTagSync.js')
+      .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('task', taskId, parseTags(body.tags_json), 'manual'))
+      .catch(err => console.warn('[tasks] tag→topic sync:', err));
+  }
 });
 
 // POST /api/tasks/:id/toggle

@@ -15,3 +15,7 @@ coverage/
 # Uploaded files
 server/uploads/
 .env
+
+# Playwright
+test-results/
+playwright-report/

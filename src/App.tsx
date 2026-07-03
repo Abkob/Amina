@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
-import { apiFetch } from './utils/apiFetch';
+import { apiFetch, setMutationListener } from './utils/apiFetch';
 
 // Layout
 import { Sidebar }   from './components/Sidebar';
@@ -11,7 +11,7 @@ import { MobileNav } from './components/MobileNav';
 import { Toast }     from './components/Toast';
 
 // Views
-import { BrainDumpView }    from './views/BrainDumpView';
+import { CaptureView }      from './views/CaptureView';
 import { GoalsDashboard }   from './views/GoalsDashboard';
 import { GoalDetail }       from './views/GoalDetail';
 import { TaskFocusView }    from './views/TaskFocusView';
@@ -19,8 +19,10 @@ import { ResourcesView }    from './views/ResourcesView';
 import { GanttView }        from './views/GanttView';
 import { SettingsView }     from './views/SettingsView';
 import { CopilotView }      from './views/CopilotView';
-import { JournalView }      from './views/JournalView';
 import { GraphView }        from './views/GraphView';
+import { TopicsView }       from './views/TopicsView';
+import { ScheduleView }     from './views/ScheduleView';
+import { TestingView }      from './views/TestingView';
 
 // Modals
 import { NewGoalWizard }    from './modals/NewGoalWizard';
@@ -37,6 +39,43 @@ const queryClient = new QueryClient({
       retry: 1,
     },
   },
+});
+
+// ── Global mutation → cache-invalidation map ──────────────────────────────────
+// Every successful non-GET apiFetch invalidates the query keys its endpoint
+// affects. Individual components used to (inconsistently) invalidate by hand;
+// missing one meant stale UI until a manual refresh. This is the safety net
+// that makes every write visible immediately, on every page.
+const URL_INVALIDATION: Array<[RegExp, string[]]> = [
+  [/^\/api\/tasks/,             ['tasks', 'goal-tasks', 'goals', 'goals-health', 'schedule-preview', 'data-readiness', 'task-notes', 'graph', 'entity-topics', 'topics']],
+  [/^\/api\/goals/,             ['goals', 'goals-health', 'tasks', 'schedule-preview', 'data-readiness', 'graph']],
+  [/^\/api\/milestones/,        ['milestones', 'tasks', 'goals', 'graph']],
+  [/^\/api\/goal-deadlines/,    ['deadlines', 'goals', 'schedule-preview']],
+  [/^\/api\/journal/,           ['journal', 'journal-links', 'work-sessions', 'proposals', 'ai-proposals', 'graph', 'data-readiness', 'entity-topics', 'topics', 'topic-suggestions']],
+  [/^\/api\/notes/,             ['notes']],
+  [/^\/api\/resources/,         ['resources', 'resource-chunks', 'graph', 'data-readiness', 'entity-topics', 'topics']],
+  [/^\/api\/meetings/,          ['meetings', 'schedule-preview']],
+  [/^\/api\/events/,            ['events']],
+  [/^\/api\/edges/,             ['graph', 'resources', 'tasks']],
+  [/^\/api\/topics/,            ['topics', 'topic-suggestions', 'topic-members', 'entity-topics', 'graph-topic-members']],
+  [/^\/api\/ai\/proposals/,     ['proposals', 'ai-proposals', 'tasks', 'goals', 'goals-health', 'milestones', 'schedule-preview', 'graph']],
+  [/^\/api\/ai\/schedule/,      ['proposals', 'ai-proposals', 'tasks', 'schedule-preview']],
+  [/^\/api\/ai\/sessions/,      ['chat-sessions', 'proposals', 'ai-proposals']],
+  [/^\/api\/work-sessions/,     ['work-sessions', 'work-session-stats', 'tasks']],
+  [/^\/api\/schedule-prefs/,    ['schedule-prefs', 'schedule-overrides', 'schedule-preview']],
+  [/^\/api\/task-note-files/,   ['note-files']],
+  [/^\/api\/event-task-links/,  ['event-task-links', 'events']],
+  [/^\/api\/entity-aliases/,    ['entity-aliases']],
+];
+
+setMutationListener((_method, url) => {
+  const path = url.split('?')[0];
+  for (const [re, keys] of URL_INVALIDATION) {
+    if (re.test(path)) {
+      for (const key of keys) queryClient.invalidateQueries({ queryKey: [key] });
+      return;
+    }
+  }
 });
 
 function AppInner() {
@@ -68,25 +107,40 @@ function AppInner() {
 
   const renderContent = () => {
     if (currentTab === 'Copilot')   return <CopilotView />;
-    if (currentTab === 'Brain Dump') return <BrainDumpView />;
+    if (currentTab === 'Brain Dump') return <CaptureView />;
     if (currentTab === 'Goals') {
       if (!selectedGoalId) return <GoalsDashboard />;
       return focusedTaskId ? <TaskFocusView /> : <GoalDetail />;
     }
-    if (currentTab === 'Journal')   return <JournalView />;
+    if (currentTab === 'Journal')   return <CaptureView />;
     if (currentTab === 'Graph')     return <GraphView />;
+    if (currentTab === 'Topics')    return <TopicsView />;
+    if (currentTab === 'Schedule')  return <ScheduleView />;
+    if (currentTab === 'Testing')   return <TestingView />;
     if (currentTab === 'Resources') return <ResourcesView />;
     if (currentTab === 'Gantt')     return <GanttView />;
     if (currentTab === 'Settings')  return <SettingsView />;
     return null;
   };
 
+  // Full-bleed tabs own their entire viewport below the header: no page
+  // padding, no outer scroll — otherwise they become a scrollable "page
+  // inside a page" with a dead white gutter underneath.
+  const FULL_BLEED: ReadonlySet<string> = new Set(['Copilot', 'Graph']);
+  const isFullBleed = FULL_BLEED.has(currentTab);
+
   return (
     <div className="bg-canvas-bg text-on-surface font-sans antialiased min-h-screen flex selection:bg-[#EEF2FF] selection:text-black">
       <Toast />
       <Sidebar />
       <Header />
-      <main className="flex-1 w-full md:pl-[260px] pt-4 md:pt-[76px] pb-24 md:pb-8 min-h-screen overflow-x-hidden">
+      <main
+        className={`flex-1 w-full md:pl-[260px] overflow-x-hidden ${
+          isFullBleed
+            ? 'pt-16 md:pt-16 h-screen overflow-y-hidden'
+            : 'pt-4 md:pt-[76px] pb-24 md:pb-8 min-h-screen'
+        }`}
+      >
         <AnimatePresence mode="wait">
           <motion.div
             key={currentTab + (selectedGoalId ?? '') + (focusedTaskId ?? '')}

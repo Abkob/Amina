@@ -1,8 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import { query } from '../db.js';
-import { queueEmbeddingUpsert, queueEmbeddingDelete } from './embeddingLifecycle.js';
+import { query, transaction } from '../db.js';
 
 const CHUNK_MAX_CHARS = 2000;
 const SUPPORTED_TEXT_EXTS = new Set(['.txt', '.md', '.csv']);
@@ -21,9 +20,18 @@ export function sanitizeChunkContent(text: string): string {
 
 // ─── Text extraction ──────────────────────────────────────────────────────────
 
+interface PageOffset {
+  num: number;        // 1-based page number
+  start: number;      // char offset of page start in the joined text
+  end: number;        // char offset of page end (exclusive)
+}
+
 interface ExtractedText {
   text: string;
   totalPages: number | null;
+  // Exact page boundaries in `text` (PDFs only) — lets chunks carry precise
+  // page citations instead of proportional approximations.
+  pageOffsets: PageOffset[] | null;
 }
 
 async function extractText(filePath: string, mimeType: string): Promise<ExtractedText | null> {
@@ -31,11 +39,25 @@ async function extractText(filePath: string, mimeType: string): Promise<Extracte
 
   if (mimeType === 'application/pdf' || ext === '.pdf') {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const pdfParse = ((await import('pdf-parse')) as any).default ?? (await import('pdf-parse'));
+      // pdf-parse v2 exports the PDFParse class (there is no default-function
+      // export like v1 — calling the module as a function throws).
+      const { PDFParse } = await import('pdf-parse');
       const buffer = await fs.readFile(filePath);
-      const data = await pdfParse(buffer);
-      return { text: data.text as string, totalPages: (data.numpages as number) ?? null };
+      const parser = new PDFParse({ data: new Uint8Array(buffer) });
+      try {
+        const result = await parser.getText();
+        const pageOffsets: PageOffset[] = [];
+        let joined = '';
+        for (const page of result.pages) {
+          const start = joined.length;
+          joined += page.text;
+          pageOffsets.push({ num: page.num, start, end: joined.length });
+          joined += '\n\n';
+        }
+        return { text: joined, totalPages: result.total ?? result.pages.length, pageOffsets };
+      } finally {
+        await parser.destroy().catch(() => {});
+      }
     } catch (err) {
       console.error('[chunk-pipeline] PDF parse error:', err);
       return null;
@@ -44,7 +66,7 @@ async function extractText(filePath: string, mimeType: string): Promise<Extracte
 
   if (SUPPORTED_TEXT_EXTS.has(ext) || mimeType.startsWith('text/')) {
     const text = await fs.readFile(filePath, 'utf8');
-    return { text, totalPages: null };
+    return { text, totalPages: null, pageOffsets: null };
   }
 
   return null;
@@ -102,71 +124,134 @@ function splitIntoChunks(text: string): Chunk[] {
   return chunks.filter(c => c.content.length > 20);
 }
 
+// Map a chunk's character range to page numbers. Prefers exact page offsets
+// (pdf-parse v2 gives per-page text); falls back to proportional estimate.
+function pageRangeFor(
+  chunk: Chunk,
+  totalChars: number,
+  totalPages: number | null,
+  pageOffsets: PageOffset[] | null,
+): { pageStart: number | null; pageEnd: number | null } {
+  if (pageOffsets?.length) {
+    let pageStart: number | null = null;
+    let pageEnd: number | null = null;
+    for (const p of pageOffsets) {
+      if (p.end > chunk.charStart && p.start < chunk.charEnd) {
+        if (pageStart === null) pageStart = p.num;
+        pageEnd = p.num;
+      }
+    }
+    return { pageStart, pageEnd };
+  }
+  if (totalPages) {
+    return {
+      pageStart: Math.max(1, Math.ceil((chunk.charStart / totalChars) * totalPages)),
+      pageEnd: Math.min(totalPages, Math.ceil((chunk.charEnd / totalChars) * totalPages)),
+    };
+  }
+  return { pageStart: null, pageEnd: null };
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
+/**
+ * Replaces the chunk set for a resource with a freshly extracted generation.
+ *
+ * Guarantees:
+ * - Extraction/parse failure leaves the previous good generation untouched.
+ * - The swap (delete old rows, insert new rows, enqueue embedding jobs) is a
+ *   single transaction — readers never observe a half-replaced chunk set.
+ * - Unchanged chunks (same index + content hash) keep their row id and their
+ *   existing embedding; no needless re-embedding.
+ */
 export async function processResourceChunks(
   resourceId: string,
   filePath: string,
   mimeType: string,
-): Promise<void> {
+): Promise<{ chunks: number; reused: number } | null> {
   const extracted = await extractText(filePath, mimeType);
-  if (!extracted) return;
+  if (!extracted) return null; // parse failed — keep previous generation
 
   const rawChunks = splitIntoChunks(extracted.text);
-  if (!rawChunks.length) return;
+  if (!rawChunks.length) return null; // nothing extractable — keep previous generation
 
   const totalChars = extracted.text.length || 1;
-  const totalPages = extracted.totalPages;
   const now = new Date().toISOString();
 
   const { rows: existing } = await query(
     'SELECT id, chunk_index, content_hash FROM resource_chunks WHERE resource_id=$1 ORDER BY chunk_index ASC',
     [resourceId],
   ) as { rows: { id: string; chunk_index: number; content_hash: string }[] };
-
   const existingByIndex = new Map(existing.map(r => [r.chunk_index, r]));
 
+  // Build the new generation up-front so the transaction only does writes.
+  const newGeneration: Array<{
+    id: string; index: number; content: string; hash: string;
+    pageStart: number | null; pageEnd: number | null; metadata: string; reused: boolean;
+  }> = [];
   for (let i = 0; i < rawChunks.length; i++) {
     const raw = rawChunks[i];
     const content = sanitizeChunkContent(raw.content);
     if (!content) continue;
-
     const hash = crypto.createHash('sha256').update(content).digest('hex');
-    const existingChunk = existingByIndex.get(i);
-    if (existingChunk?.content_hash === hash) continue;
-
-    const chunkId = existingChunk?.id ?? crypto.randomUUID();
-
-    // Approximate page numbers from character offset
-    const pageStart = totalPages
-      ? Math.max(1, Math.ceil((raw.charStart / totalChars) * totalPages))
-      : null;
-    const pageEnd = totalPages
-      ? Math.min(totalPages, Math.ceil((raw.charEnd / totalChars) * totalPages))
-      : null;
-
-    const metadata = JSON.stringify({
-      char_start: raw.charStart,
-      char_end: raw.charEnd,
-      ...(totalPages ? { approx_page_start: pageStart, approx_page_end: pageEnd, total_pages: totalPages } : {}),
+    const prior = existingByIndex.get(i);
+    const reused = prior?.content_hash === hash;
+    const { pageStart, pageEnd } = pageRangeFor(raw, totalChars, extracted.totalPages, extracted.pageOffsets);
+    newGeneration.push({
+      id: reused ? prior!.id : (prior?.id ?? crypto.randomUUID()),
+      index: i,
+      content,
+      hash,
+      pageStart,
+      pageEnd,
+      metadata: JSON.stringify({
+        char_start: raw.charStart,
+        char_end: raw.charEnd,
+        ...(extracted.totalPages ? {
+          page_start: pageStart, page_end: pageEnd, total_pages: extracted.totalPages,
+          page_mapping: extracted.pageOffsets ? 'exact' : 'approximate',
+        } : {}),
+      }),
+      reused,
     });
-
-    await query(
-      `INSERT INTO resource_chunks
-         (id, resource_id, chunk_index, content, content_hash, page_start, page_end, chunk_metadata, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (id) DO UPDATE
-         SET content=$4, content_hash=$5, page_start=$6, page_end=$7, chunk_metadata=$8`,
-      [chunkId, resourceId, i, content, hash, pageStart, pageEnd, metadata, now],
-    );
-
-    await queueEmbeddingUpsert('resource_chunk', resourceId, chunkId);
   }
+  if (!newGeneration.length) return null;
 
-  // Delete stale chunks beyond new length
-  const staleChunks = existing.filter(r => r.chunk_index >= rawChunks.length);
-  for (const stale of staleChunks) {
-    await query('DELETE FROM resource_chunks WHERE id=$1', [stale.id]);
-    await queueEmbeddingDelete('resource_chunk', resourceId, stale.id);
-  }
+  const keptIndexes = new Set(newGeneration.map(c => c.index));
+  const staleRows = existing.filter(r => !keptIndexes.has(r.chunk_index));
+
+  await transaction(async (client) => {
+    for (const chunk of newGeneration) {
+      await client.query(
+        `INSERT INTO resource_chunks
+           (id, resource_id, chunk_index, content, content_hash, page_start, page_end, chunk_metadata, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (id) DO UPDATE
+           SET content=$4, content_hash=$5, page_start=$6, page_end=$7, chunk_metadata=$8`,
+        [chunk.id, resourceId, chunk.index, chunk.content, chunk.hash, chunk.pageStart, chunk.pageEnd, chunk.metadata, now],
+      );
+      if (!chunk.reused) {
+        await client.query(
+          `INSERT INTO embedding_jobs (id, entity_type, entity_id, chunk_id, action, priority, status, attempts, created_at)
+           VALUES ($1, 'resource_chunk', $2, $3, 'upsert', 3, 'pending', 0, $4)
+           ON CONFLICT DO NOTHING`,
+          [crypto.randomUUID(), resourceId, chunk.id, now],
+        );
+      }
+    }
+    for (const stale of staleRows) {
+      await client.query('DELETE FROM resource_chunks WHERE id=$1', [stale.id]);
+      await client.query(
+        `INSERT INTO embedding_jobs (id, entity_type, entity_id, chunk_id, action, priority, status, attempts, created_at)
+         VALUES ($1, 'resource_chunk', $2, $3, 'delete', 3, 'pending', 0, $4)
+         ON CONFLICT DO NOTHING`,
+        [crypto.randomUUID(), resourceId, stale.id, now],
+      );
+    }
+  });
+
+  return {
+    chunks: newGeneration.length,
+    reused: newGeneration.filter(c => c.reused).length,
+  };
 }

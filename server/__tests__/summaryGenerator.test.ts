@@ -36,9 +36,10 @@ describe.skipIf(SKIP_INTEGRATION)('summaryGenerator — deterministic summaries 
   });
 
   it('summary trigger endpoint returns 200 (via goal update)', async () => {
-    // Updating a goal title triggers summary regeneration on the server
+    // Updating a goal title triggers summary regeneration on the server.
+    // Production contract is PATCH (the frontend's updateGoal uses PATCH; PUT is not registered).
     const res = await fetch(`${baseUrl}/api/goals/${goalId}`, {
-      method: 'PUT',
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: '__test_summary_goal_updated__', description: 'Updated for summary test' }),
     });

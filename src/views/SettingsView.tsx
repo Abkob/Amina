@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Calendar, AlertTriangle, CheckCircle, Info, Database, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useSchedulePrefs, useScheduleOverrides, useUpsertScheduleOverride, useDeleteScheduleOverride, useEntityAliases, useDeleteEntityAlias, useDataReadiness } from '../api/hooks';
+import { apiFetch, apiPut } from '../utils/apiFetch';
 
 interface ProviderSummary {
   mode: 'local' | 'hybrid' | 'cloud';
@@ -25,7 +27,7 @@ interface HealthData {
 function useHealth() {
   const [health, setHealth] = useState<HealthData | null>(null);
   useEffect(() => {
-    fetch('/api/health').then(r => r.json()).then(setHealth).catch(() => {});
+    apiFetch<HealthData>('/api/health').then(setHealth).catch(() => {});
   }, []);
   return health;
 }
@@ -33,6 +35,170 @@ function useHealth() {
 const ENTITY_TYPE_LABELS: Record<string, string> = {
   goal: 'Goal', task: 'Task', meeting: 'Meeting', resource: 'Resource', milestone: 'Milestone', note: 'Note',
 };
+
+// ── AI preferences adjuster ───────────────────────────────────────────────────
+// Describe your week in plain language → the model proposes prefs changes and
+// day overrides → shown as a DIFF → nothing saves until you hit Apply.
+
+interface PrefsSuggestion {
+  reply: string;
+  current: Record<string, unknown>;
+  updates: Partial<{
+    work_days: number[];
+    daily_capacity_minutes: number;
+    buffer_ratio: number;
+    work_start: number;
+    work_end: number;
+  }>;
+  day_overrides: Array<{ date: string; available_minutes: number; note?: string }>;
+}
+
+const PREF_LABELS: Record<string, string> = {
+  work_days: 'Work days',
+  daily_capacity_minutes: 'Daily capacity (min)',
+  buffer_ratio: 'Buffer',
+  work_start: 'Start time',
+  work_end: 'End time',
+};
+
+const DAY_SHORT = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const fmtPrefVal = (k: string, v: unknown): string => {
+  if (v === undefined || v === null) return '—';
+  if (k === 'work_days') {
+    const arr = Array.isArray(v) ? v : (() => { try { return JSON.parse(String(v)); } catch { return []; } })();
+    return (arr as number[]).map(d => DAY_SHORT[d] ?? d).join(' ');
+  }
+  if (k === 'buffer_ratio') return `${Math.round(Number(v) * 100)}%`;
+  return String(v);
+};
+
+function PrefsAIAdjuster({ onApplied }: { onApplied: () => void }) {
+  const { triggerToast } = useAppStore();
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sugg, setSugg] = useState<PrefsSuggestion | null>(null);
+  const upsertOverride = useUpsertScheduleOverride();
+
+  const ask = async () => {
+    setBusy(true);
+    setSugg(null);
+    try {
+      const r = await apiFetch<PrefsSuggestion>('/api/ai/prefs/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      });
+      setSugg(r);
+      if (!Object.keys(r.updates).length && !r.day_overrides.length) {
+        triggerToast('No changes proposed — your preferences already match that.', 'info');
+      }
+    } catch (e) {
+      triggerToast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!sugg) return;
+    setBusy(true);
+    try {
+      if (Object.keys(sugg.updates).length) {
+        // Merge: only send changed fields on top of current values
+        const merged: Record<string, unknown> = {
+          work_days: sugg.updates.work_days ? JSON.stringify(sugg.updates.work_days) : sugg.current.work_days,
+          daily_capacity_minutes: sugg.updates.daily_capacity_minutes ?? sugg.current.daily_capacity_minutes,
+          buffer_ratio: sugg.updates.buffer_ratio ?? sugg.current.buffer_ratio,
+          work_start: sugg.updates.work_start ?? sugg.current.work_start,
+          work_end: sugg.updates.work_end ?? sugg.current.work_end,
+        };
+        await apiPut('/api/schedule-prefs', merged);
+      }
+      for (const o of sugg.day_overrides) {
+        await upsertOverride.mutateAsync({ date: o.date, available_minutes: o.available_minutes, note: o.note });
+      }
+      triggerToast('Preferences updated.', 'success');
+      setSugg(null);
+      setMsg('');
+      qc.invalidateQueries({ queryKey: ['schedule-prefs'] });
+      qc.invalidateQueries({ queryKey: ['schedule-preview'] });
+      qc.invalidateQueries({ queryKey: ['schedule-overrides'] });
+      onApplied();
+    } catch (e) {
+      triggerToast(`Apply failed: ${(e as Error).message}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changedKeys = sugg ? Object.keys(sugg.updates) : [];
+
+  return (
+    <div className="mb-5 rounded-xl border border-[#c0c1ff]/60 bg-[#EEF2FF]/60 p-3.5">
+      <p className="text-[11px] font-bold text-[#4648d4] mb-1">Adjust with AI</p>
+      <p className="text-[10px] text-gray-500 mb-2">
+        Describe your week — “I’m traveling Mon–Wed, only mornings” or “give me lighter Fridays” —
+        and review the proposed changes before anything saves.
+      </p>
+      <div className="flex gap-2">
+        <input
+          value={msg}
+          onChange={e => setMsg(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && msg.trim() && !busy && ask()}
+          placeholder="How is your week actually looking?"
+          className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#4648d4]"
+        />
+        <button
+          onClick={ask}
+          disabled={!msg.trim() || busy}
+          className="px-3 py-2 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
+        >
+          {busy ? <RefreshCw size={11} className="animate-spin" /> : null}
+          Suggest
+        </button>
+      </div>
+
+      {sugg && (changedKeys.length > 0 || sugg.day_overrides.length > 0) && (
+        <div className="mt-3 bg-white border border-gray-200 rounded-lg p-3">
+          {sugg.reply && <p className="text-[11px] text-gray-600 mb-2 leading-relaxed">{sugg.reply}</p>}
+          {changedKeys.length > 0 && (
+            <table className="w-full text-[11px] mb-2">
+              <tbody>
+                {changedKeys.map(k => (
+                  <tr key={k} className="border-t border-gray-50">
+                    <td className="py-1 text-gray-500">{PREF_LABELS[k] ?? k}</td>
+                    <td className="py-1 text-gray-400 line-through">{fmtPrefVal(k, sugg.current[k])}</td>
+                    <td className="py-1 font-bold text-gray-800">{fmtPrefVal(k, (sugg.updates as Record<string, unknown>)[k])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {sugg.day_overrides.length > 0 && (
+            <div className="mb-2">
+              <p className="text-[10px] font-mono text-gray-400 uppercase mb-1">One-off day changes</p>
+              {sugg.day_overrides.map(o => (
+                <p key={o.date} className="text-[11px] text-gray-600">
+                  <span className="font-mono">{o.date}</span> → <b>{o.available_minutes} min</b>
+                  {o.note ? <span className="text-gray-400"> — {o.note}</span> : null}
+                </p>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button onClick={apply} disabled={busy} className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:opacity-90 disabled:opacity-40">
+              Apply changes
+            </button>
+            <button onClick={() => setSugg(null)} className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-white text-gray-500 border border-gray-200 hover:bg-gray-50">
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function EntityAliasesSection() {
   const { data: aliases = [] } = useEntityAliases({ created_by: 'ai' });
@@ -140,21 +306,20 @@ function SchedulePrefsSection({ onSave }: { onSave: (msg: string) => void }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch('/api/schedule-prefs', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          work_days: JSON.stringify(workDays),
-          work_start: timeToDecimal(workStart),
-          work_end: timeToDecimal(workEnd),
-          daily_capacity_minutes: capacity,
-          deep_work_start: timeToDecimal(deepStart),
-          deep_work_end: timeToDecimal(deepEnd),
-          buffer_ratio: buffer / 100,
-          timezone: timezone.trim() || 'Asia/Beirut',
-        }),
+      // apiPut throws on non-2xx — a rejected save must NOT report success
+      await apiPut('/api/schedule-prefs', {
+        work_days: JSON.stringify(workDays),
+        work_start: timeToDecimal(workStart),
+        work_end: timeToDecimal(workEnd),
+        daily_capacity_minutes: capacity,
+        deep_work_start: timeToDecimal(deepStart),
+        deep_work_end: timeToDecimal(deepEnd),
+        buffer_ratio: buffer / 100,
+        timezone: timezone.trim() || 'Asia/Beirut',
       });
       onSave('Work schedule saved.');
+    } catch (e) {
+      onSave(`Save failed: ${(e as Error).message}`);
     } finally {
       setSaving(false);
     }
@@ -163,6 +328,8 @@ function SchedulePrefsSection({ onSave }: { onSave: (msg: string) => void }) {
   return (
     <div className="bg-white border border-gray-200 p-5 rounded-xl shadow-sm">
       <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black mb-4">Work Schedule</h3>
+
+      <PrefsAIAdjuster onApplied={() => { /* prefs query invalidated inside */ }} />
 
       <div className="space-y-4 text-sm">
         {/* Work days */}
@@ -406,17 +573,112 @@ function DataReadinessSection() {
 const INVENTORY_LABELS: Record<string, string> = {
   goals: 'Goals', tasks: 'Tasks', goal_milestones: 'Milestones', goal_deadlines: 'Deadlines',
   meetings: 'Meetings', events: 'Events', work_sessions: 'Work Sessions', resources: 'Resources',
-  journal_entries: 'Journal Entries', embeddings: 'Embeddings', embedding_jobs: 'Embed. Jobs',
-  entity_summaries: 'Summaries', ai_action_proposals: 'Proposals', edges: 'Graph Edges',
-  chat_sessions: 'Chat Sessions', chat_messages: 'Chat Messages',
+  resource_chunks: 'Doc Chunks', journal_entries: 'Journal Entries', embeddings: 'Embeddings',
+  embedding_jobs: 'Embed. Jobs', entity_summaries: 'Summaries', ai_action_proposals: 'Proposals',
+  edges: 'Graph Edges', chat_sessions: 'Chat Sessions', chat_messages: 'Chat Messages',
+  topics: 'Topics', topic_memberships: 'Topic Members', suggestion_runs: 'Suggestion Runs',
 };
+
+// ── Backups ───────────────────────────────────────────────────────────────────
+
+interface BackupList {
+  dir: string;
+  keep_last: number;
+  pg_dump_available: boolean;
+  backups: Array<{ name: string; bytes: number; created_at: string }>;
+}
+
+function fmtBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function BackupsSection() {
+  const { triggerToast, showConfirm } = useAppStore();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const { data } = useQuery<BackupList>({
+    queryKey: ['backups'],
+    queryFn: () => apiFetch<BackupList>('/api/backups'),
+    staleTime: 30_000,
+  });
+
+  const createNow = async () => {
+    setBusy(true);
+    try {
+      const r = await apiFetch<{ file: string; bytes: number }>('/api/backups', { method: 'POST' });
+      triggerToast(`Backup created: ${r.file} (${fmtBytes(r.bytes)})`, 'success');
+      qc.invalidateQueries({ queryKey: ['backups'] });
+    } catch (e) {
+      triggerToast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = (name: string) => {
+    showConfirm(`Delete backup ${name}? This file cannot be recovered.`, async () => {
+      await apiFetch(`/api/backups/${name}`, { method: 'DELETE' });
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      triggerToast('Backup deleted.', 'info');
+    });
+  };
+
+  return (
+    <div className="bg-white border border-gray-200 p-5 rounded-xl shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black">Database Backups</h3>
+        <button
+          onClick={createNow}
+          disabled={busy || data?.pg_dump_available === false}
+          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
+        >
+          {busy ? <RefreshCw size={11} className="animate-spin" /> : null}
+          Back up now
+        </button>
+      </div>
+      <p className="text-[11px] text-gray-400 mb-1">
+        Automatic backup runs daily (1 min after server start, then every 24h); the newest {data?.keep_last ?? 14} are kept.
+        Files live in <code className="bg-gray-100 px-1 rounded text-[10px]">{data?.dir ?? 'server/backups'}</code>.
+      </p>
+      {data?.pg_dump_available === false && (
+        <p className="text-[11px] text-red-500 mb-2">⚠ pg_dump not found — set <code className="bg-gray-100 px-1 rounded text-[10px]">PG_DUMP_PATH</code> in .env</p>
+      )}
+      <p className="text-[10px] text-gray-400 mb-3 font-mono">
+        Restore (manual, deliberate): pg_restore -d &lt;DATABASE_URL&gt; --clean --if-exists &lt;file&gt;
+      </p>
+      <div className="space-y-1 max-h-56 overflow-y-auto">
+        {(data?.backups ?? []).length === 0 && <p className="text-[11px] text-gray-300 font-mono">no backups yet</p>}
+        {(data?.backups ?? []).map(b => (
+          <div key={b.name} className="flex items-center gap-2 text-[11px] border border-gray-100 rounded-lg px-2.5 py-1.5">
+            <span className="font-mono text-gray-700 truncate flex-1">{b.name}</span>
+            <span className="text-gray-400 shrink-0">{fmtBytes(b.bytes)}</span>
+            <span className="text-gray-300 font-mono shrink-0">{new Date(b.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+            <a
+              href={`/api/backups/${b.name}/download`}
+              className="text-[#4648d4] hover:underline shrink-0"
+              title="Download this backup file"
+            >
+              download
+            </a>
+            <button onClick={() => remove(b.name)} className="text-gray-300 hover:text-red-500 shrink-0" title="Delete backup">
+              <Trash2 size={11} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function useInventory() {
   const [data, setData] = useState<{ tables: Record<string, number>; timestamp: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const refresh = () => {
     setLoading(true);
-    fetch('/api/inventory').then(r => r.json()).then(setData).catch(() => {}).finally(() => setLoading(false));
+    apiFetch<{ tables: Record<string, number>; timestamp: string }>('/api/inventory')
+      .then(setData).catch(() => {}).finally(() => setLoading(false));
   };
   useEffect(() => { refresh(); }, []);
   return { data, loading, refresh };
@@ -621,6 +883,7 @@ export function SettingsView() {
         <DataReadinessSection />
 
         {/* DB Inventory */}
+        <BackupsSection />
         <DBInventorySection />
 
         {/* Tech Stack */}

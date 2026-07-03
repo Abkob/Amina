@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($env:PGPASSWORD='pgadmin'; psql -h localhost -p 5433 -U postgres -d marina -t -A -c \"SELECT string_agg\\(table_name, ', ' ORDER BY table_name\\) FROM information_schema.tables WHERE table_schema='public'\")",
+      "PowerShell(node \"C:\\\\Users\\\\Salam\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Salam-Music-Amina\\\\fd52a049-cc93-4126-a5e5-a2d4ceda61ba\\\\scratchpad\\\\dbcheck.mjs\")",
+      "Bash(node \"C:\\\\Users\\\\Salam\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Salam-Music-Amina\\\\fd52a049-cc93-4126-a5e5-a2d4ceda61ba\\\\scratchpad\\\\dbcheck.mjs\")",
+      "PowerShell(Get-Command pg_dump -ErrorAction SilentlyContinue)",
+      "PowerShell(New-Item -ItemType Directory -Force c:\\\\Users\\\\Salam\\\\Music\\\\Amina\\\\backups | Out-Null; $ts = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'; $env:PGPASSWORD='pgadmin'; & \"C:\\\\Program Files\\\\PostgreSQL\\\\18\\\\bin\\\\pg_dump.exe\" -h localhost -p 5433 -U postgres -d marina -F c -f \"c:\\\\Users\\\\Salam\\\\Music\\\\Amina\\\\backups\\\\marina_$ts.dump\"; if \\($?\\) { Get-Item \"c:\\\\Users\\\\Salam\\\\Music\\\\Amina\\\\backups\\\\marina_$ts.dump\" | Select-Object Name, Length })",
+      "PowerShell($env:PGPASSWORD='pgadmin'; $psql = \"C:\\\\Program Files\\\\PostgreSQL\\\\18\\\\bin\\\\psql.exe\"; & $psql -h localhost -p 5433 -U postgres -d postgres -t -A -c \"SELECT 1 FROM pg_database WHERE datname='marina_test'\"; & $psql -h localhost -p 5433 -U postgres -d postgres -c \"CREATE DATABASE marina_test\"; & $psql -h localhost -p 5433 -U postgres -d marina_test -c \"CREATE EXTENSION IF NOT EXISTS vector\")",
+      "PowerShell(try { $r = Invoke-RestMethod http://127.0.0.1:3001/api/health/live -TimeoutSec 3; \"SERVER RUNNING: $\\($r.status\\)\" } catch { \"NOT RUNNING\" })",
+      "Bash(curl -s http://127.0.0.1:3001/api/health/live)",
+      "Bash(curl -s http://127.0.0.1:3001/api/health/ready)",
+      "Bash(DATABASE_URL=postgresql://postgres:pgadmin@localhost:5433/marina_test npx tsx -e ' *)",
+      "PowerShell(Set-Location c:\\\\Users\\\\Salam\\\\Music\\\\Amina; $env:DATABASE_URL='postgresql://postgres:pgadmin@localhost:5433/marina_test'; npx tsx scripts/apply-schema-check.ts; \"EXIT: $LASTEXITCODE\")",
+      "Bash(node -e ' *)",
+      "PowerShell(Set-Location c:\\\\Users\\\\Salam\\\\Music\\\\Amina; $env:DATABASE_URL='postgresql://postgres:pgadmin@localhost:5433/marina'; npx tsx scripts/apply-schema-check.ts)",
+      "Bash(curl -s http://127.0.0.1:3001/api/health)",
+      "Bash(curl -s \"http://127.0.0.1:3001/api/goals\")",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(j.models.map\\(m=>m.name+' \\('+Math.round\\(m.size/1e9\\)+'GB\\)'\\).join\\('\\\\n'\\)\\)}\\)\")",
+      "Bash(node -e \"const p=require\\('./node_modules/pdf-parse/package.json'\\);console.log\\('version:',p.version,'| main:',p.main,'| exports:',JSON.stringify\\(p.exports\\).slice\\(0,300\\)\\)\")",
+      "Bash(node -e \"const m=require\\('pdf-parse'\\);console.log\\('keys:',Object.keys\\(m\\).join\\(','\\)\\);console.log\\('typeof default:',typeof m.default\\);console.log\\('typeof module itself:',typeof m\\)\")",
+      "Bash(curl -s \"http://127.0.0.1:3001/api/resources\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const rs=JSON.parse\\(d\\);console.log\\(rs.map\\(r=>[r.id.slice\\(0,8\\),r.type,r.title,'file_path:'+\\(r.file_path?'yes':'null'\\),'url:'+\\(r.url||''\\).slice\\(0,45\\)].join\\(' | '\\)\\).join\\('\\\\n'\\)\\)}\\)\")",
+      "Bash(cp /tmp/verify_chat_resp.json C:/Users/Salam/AppData/Local/Temp/claude/c--Users-Salam-Music-Amina/fd52a049-cc93-4126-a5e5-a2d4ceda61ba/scratchpad/verify_chat_resp.json)",
+      "Bash(curl -s -m 240 -X POST -H 'Content-Type: application/json' -d '{\"message\":\"Create a task called Verify Pipeline Test under the design system goal, due 2026-07-10, estimated 60 minutes. Just create that one task.\"}' http://127.0.0.1:3001/api/ai/sessions/a75192f3-1a5f-4bc4-948d-88d0d66f7ca7/chat)",
+      "Bash(curl -s -m 60 \"http://127.0.0.1:3001/api/ai/retrieval/debug?q=design%20system\" -o /dev/null -w \"%{http_code}\\\\n\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);console.log\\('degraded:',r.vector_degraded\\);r.results.slice\\(0,6\\).forEach\\(x=>console.log\\(' ',x.score.toFixed\\(3\\),x.entity_type,'|',x.title\\)\\)}\\)\")",
+      "Bash(curl -s \"http://127.0.0.1:3001/api/search?q=UI%20widget%20style%20guide\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r.results.slice\\(0,6\\).forEach\\(x=>console.log\\(' ',x.score.toFixed\\(3\\),x.entity_type,'|',x.title\\)\\)}\\)\")",
+      "Bash(curl -s \"http://127.0.0.1:3001/api/search?q=spanish%20vocabulary\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r.results.slice\\(0,5\\).forEach\\(x=>console.log\\(' ',x.score.toFixed\\(3\\),x.entity_type,'|',x.title,'|',\\(x.snippet||''\\).slice\\(0,60\\)\\)\\)}\\)\")",
+      "PowerShell($conns = Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue; if \\($conns\\) { $conns | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -Confirm:$false; \"killed pid $_\" } } else { \"port free\" })",
+      "Bash(curl -s \"http://127.0.0.1:3001/api/search?q=semantic%20clustering%20of%20personal%20knowledge\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r.results.slice\\(0,5\\).forEach\\(x=>console.log\\(' ',x.score.toFixed\\(3\\),x.entity_type,'|',x.title,'|',\\(x.snippet||''\\).slice\\(0,70\\)\\)\\)}\\)\")",
+      "PowerShell(Set-Location c:\\\\Users\\\\Salam\\\\Music\\\\Amina; npx tsc --noEmit; \"EXIT: $LASTEXITCODE\")",
+      "Bash(curl -s -X DELETE \"http://127.0.0.1:3001/api/resources/96daccce-4e8b-4ea2-9a04-a36e087e2e0e\")",
+      "PowerShell(Set-Location c:\\\\Users\\\\Salam\\\\Music\\\\Amina; npm test -- --reporter=dot 2>&1 | Select-Object -Last 4; $env:DATABASE_URL_TEST='postgresql://postgres:pgadmin@localhost:5433/marina_test'; npm run test:integration 2>&1 | Select-String -Pattern \"Tests |Test Files\" | Select-Object -First 4)"
+    ]
+  }
+}

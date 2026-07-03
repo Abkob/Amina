@@ -54,10 +54,19 @@ export function getPool(): pg.Pool {
   return _pool;
 }
 
-// Keep named export for code that imports `pool` directly
+// Keep named export for code that imports `pool` directly.
+// Methods must run with the REAL pool as `this`, and writes must land on the
+// real pool too — otherwise internal state mutations (e.g. `this.ending = true`
+// inside pool.end()) hit the empty proxy target and end() hangs forever.
 export const pool = new Proxy({} as pg.Pool, {
   get(_target, prop) {
-    return (getPool() as unknown as Record<string | symbol, unknown>)[prop];
+    const real = getPool() as unknown as Record<string | symbol, unknown>;
+    const value = real[prop];
+    return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(real) : value;
+  },
+  set(_target, prop, value) {
+    (getPool() as unknown as Record<string | symbol, unknown>)[prop] = value;
+    return true;
   },
 });
 

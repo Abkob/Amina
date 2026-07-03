@@ -1,327 +1,440 @@
-import { useState, useEffect } from 'react';
-import { Sparkles, X, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useMemo, useState } from 'react';
+import { useQueryClient, useMutation, useQuery } from '@tanstack/react-query';
+import {
+  DndContext, PointerSensor, useSensor, useSensors,
+  useDraggable, useDroppable, DragOverlay, type DragEndEvent, type DragStartEvent,
+} from '@dnd-kit/core';
+import {
+  Sparkles, Calendar, AlertTriangle, Clock, RefreshCw, ChevronLeft, ChevronRight,
+  GripVertical, Inbox, Check, X, Eye, EyeOff,
+} from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
-import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
-import { useEvents } from '../api/hooks';
-import { rescheduleEvent, fixMyWeek as dbFixMyWeek } from '../db/queries/events';
-import { parseConnectedResource } from '../db/schema';
+import { useSchedulePreview, useAllTasks, useInvalidate, type ScheduleDay, type SchedulerResult, type ScheduleTaskInfo, type DayAssignment } from '../api/hooks';
+import { apiPost, apiPatch } from '../utils/apiFetch';
+import type { DBTask } from '../db/schema';
 
-const START_HOUR = 8;
-const HOURS = 16;
-const PX_PER_HOUR = 60;
+/**
+ * Schedule workspace: a week of droppable days. Drag any task between days
+ * (sets start_date immediately — real-time), drag from the backlog tray to
+ * schedule it, drag back to the tray to unschedule. "AI drafts" produces
+ * three alternative plans from the deterministic scheduler; previewing lays
+ * ghost chips on the days, applying writes the chosen plan in one transaction.
+ */
 
-function getWeekRange(offset: number) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const dow = today.getDay();
-  const daysFromMon = (dow + 6) % 7; // Mon=0 … Sun=6
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - daysFromMon + offset * 7);
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-  const dateCells = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    return d;
-  });
-
-  const dayLabels = dateCells.map(d =>
-    `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}`
-  );
-
-  const sunday = dateCells[6];
-  const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const weekLabel = `${fmt(monday)} – ${fmt(sunday)}`;
-
-  // todayIdx: column index of today within this week (-1 if today not in this week)
-  const todayStr = today.toDateString();
-  const todayIdx = dateCells.findIndex(d => d.toDateString() === todayStr);
-
-  return { dayLabels, todayIdx, weekLabel };
+interface DraftAssignment {
+  task_id: string;
+  title: string;
+  start_date: string;
+  current_start: string | null;
+  days: string[];
+}
+interface Draft {
+  id: string;
+  name: string;
+  description: string;
+  stats: { status: string; gap_minutes: number; tasks_scheduled: number; changes: number; busiest_day_minutes: number; days_used: number };
+  assignments: DraftAssignment[];
+  day_assignments: DayAssignment[];
 }
 
-function fmtHourLabel(hour: number) {
-  const h = Math.floor(hour);
-  const m = Math.round((hour - h) * 60);
-  const hh = h % 12 || 12;
-  const ampm = h < 12 ? 'AM' : 'PM';
-  return `${hh}:${String(m).padStart(2, '0')} ${ampm}`;
-}
-
-function fmtHour(h: number) {
-  const hh = h % 12 || 12;
-  return `${hh} ${h < 12 ? 'AM' : 'PM'}`;
-}
-
-const EVENT_STYLE: Record<string, { border: string; bg: string; bar: string }> = {
-  Focus:  { border: 'border-[#c0c1ff]',              bg: 'bg-[#e1e0ff]/30',  bar: 'bg-[#4648d4]' },
-  Review: { border: 'border-[#10B981]/30',            bg: 'bg-emerald-50/15', bar: 'bg-[#10B981]' },
-  Admin:  { border: 'border-[#F59E0B]/30',            bg: 'bg-yellow-500/5',  bar: 'bg-[#F59E0B]' },
-  Buffer: { border: 'border-gray-300 border-dashed',  bg: 'bg-white',         bar: 'bg-gray-300'  },
+const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
+  feasible:   { label: 'Feasible',   cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  tight:      { label: 'Tight',      cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  risky:      { label: 'Risky',      cls: 'bg-orange-50 text-orange-700 border-orange-200' },
+  impossible: { label: 'Impossible', cls: 'bg-red-50 text-red-700 border-red-200' },
 };
 
-// ─── AI Reasoning Drawer ──────────────────────────────────────────────────────
-function AIDrawer() {
-  const { selectedEventId, isDrawerOpen, setIsDrawerOpen, setSelectedEventId, triggerToast } = useAppStore();
+function fmtMins(mins: number): string {
+  if (Math.abs(mins) < 60) return `${mins}m`;
+  const h = Math.floor(Math.abs(mins) / 60);
+  const m = Math.abs(mins) % 60;
+  return `${mins < 0 ? '-' : ''}${h}h${m ? ` ${m}m` : ''}`;
+}
 
-  const { data: events = [] } = useEvents();
-  const event  = events.find(e => e.id === selectedEventId);
-
-  const handleReschedule = async () => {
-    if (!event) return;
-    await rescheduleEvent(event.id, event.start_hour + 1);
-    triggerToast('Block shifted down 1 hour to reserve mental buffers.', 'info');
+function dayLabel(dateStr: string): { dow: string; dom: string; isToday: boolean } {
+  const d = new Date(dateStr + 'T00:00:00');
+  const today = new Date();
+  return {
+    dow: d.toLocaleDateString('en-US', { weekday: 'short' }),
+    dom: String(d.getDate()),
+    isToday: d.toDateString() === today.toDateString(),
   };
+}
 
-  if (!isDrawerOpen || !event) {
-    return (
-      <div className="bg-[#EEF2FF] rounded-xl p-5 border border-dashed border-[#4648d4]/20 text-center text-xs">
-        <Sparkles size={24} className="text-[#4648d4] mx-auto mb-2.5 animate-pulse" />
-        <p className="font-bold text-[#4648d4] mb-1 flex items-center justify-center gap-2">
-          <span>Interactive Scheduler Guidance</span>
-          <NeedsImplementationBadge />
-        </p>
-        <p className="text-gray-600 leading-normal mb-3">
-          Tap any block in the schedule grid to activate Marina OS reasoning profiles.
-        </p>
-        <button
-          onClick={() => {
-            setSelectedEventId(events[0]?.id ?? null);
-            setIsDrawerOpen(true);
-          }}
-          className="bg-black hover:opacity-90 text-white text-[10px] uppercase font-mono py-1.5 px-3 rounded-lg"
-        >
-          Marina Analytics
-        </button>
-      </div>
-    );
-  }
+// ── Draggable task chip ───────────────────────────────────────────────────────
 
-  const badgeCls =
-    event.type === 'Focus'  ? 'bg-[#4648d4]/10 text-[#4648d4]' :
-    event.type === 'Review' ? 'bg-emerald-50 text-[#10B981]' :
-    event.type === 'Buffer' ? 'bg-gray-100 text-gray-500' :
-    'bg-[#F59E0B]/10 text-[#F59E0B]';
-
-  const connectedResource = parseConnectedResource(event.connected_resource_json);
-
+function TaskChip({ task, ghost = false }: { task: Pick<DBTask, 'id' | 'title' | 'estimated_minutes' | 'priority'>; ghost?: boolean }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id, disabled: ghost });
   return (
-    <AnimatePresence mode="wait">
-      <motion.aside
-        key={selectedEventId}
-        initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
-        transition={{ duration: 0.2 }}
-        className="bg-white/95 backdrop-blur-md rounded-xl border border-gray-200 p-5 shadow-ambient"
-      >
-        <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
-          <div className="flex items-center gap-1.5 text-[#4648d4]">
-            <Sparkles size={14} className="animate-pulse" />
-            <h3 className="font-headline text-sm font-bold text-black uppercase tracking-wide">AI Reasoning</h3>
-            <NeedsImplementationBadge />
-          </div>
-          <button onClick={() => setIsDrawerOpen(false)} className="p-1 hover:bg-gray-100 rounded text-gray-400">
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          <div className="bg-[#f8f9fa] rounded-xl p-4 border border-gray-150 shadow-sm">
-            <h4 className="font-headline text-sm font-black text-gray-900 mb-1.5">{event.title}</h4>
-            <div className="flex items-center gap-2 mb-3">
-              <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${badgeCls}`}>{event.type}</span>
-              <span className="font-mono text-[9px] text-gray-400">{event.time_str}</span>
-            </div>
-            <p className="text-xs text-gray-600 leading-relaxed mb-4">{event.description}</p>
-
-            {connectedResource && (
-              <div className="border-t border-gray-100 pt-3.5">
-                <h5 className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-1.5 font-bold">Connected Resource</h5>
-                <div className="flex items-center gap-2.5 p-2 rounded-lg bg-white border border-gray-150 hover:bg-gray-50 cursor-pointer">
-                  <FileText size={14} className="text-gray-400" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs text-black font-bold truncate leading-tight">{connectedResource.title}</p>
-                    <p className="text-[9px] font-mono text-gray-400 mt-0.5">{connectedResource.source}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-2.5">
-            <button
-              onClick={() => { triggerToast('Proposed slot validated and saved.', 'success'); setIsDrawerOpen(false); }}
-              className="flex-1 py-2 bg-black text-white rounded-lg text-xs font-mono uppercase font-bold hover:opacity-95 active:scale-95 transition-all shadow-sm"
-            >
-              Accept Slot
-            </button>
-            <button
-              onClick={handleReschedule}
-              className="flex-1 py-2 border border-gray-200 text-black bg-white rounded-lg text-xs font-mono uppercase hover:bg-gray-50 active:scale-95 transition-all"
-            >
-              Reschedule
-            </button>
-          </div>
-        </div>
-      </motion.aside>
-    </AnimatePresence>
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={`flex items-center gap-1 text-[10px] rounded px-1.5 py-1 mb-1 border select-none
+        ${ghost
+          ? 'bg-indigo-50/60 text-indigo-400 border-dashed border-indigo-300'
+          : 'bg-[#EEF2FF] text-[#4648d4] border-[#c0c1ff]/40 cursor-grab active:cursor-grabbing hover:brightness-95'}
+        ${isDragging ? 'opacity-30' : ''}`}
+      title={ghost ? `${task.title} (draft preview)` : `${task.title} — drag to another day, or to the backlog to unschedule`}
+    >
+      {!ghost && <GripVertical size={9} className="shrink-0 opacity-50" />}
+      <span className="truncate flex-1">{task.title}</span>
+      {task.estimated_minutes ? <span className="shrink-0 opacity-60">{fmtMins(task.estimated_minutes)}</span> : null}
+    </div>
   );
 }
 
-// ─── Schedule View ────────────────────────────────────────────────────────────
-export function ScheduleView() {
-  const { selectedEventId, setSelectedEventId, setIsDrawerOpen, isOptimizing, setIsOptimizing, triggerToast } = useAppStore();
-  const { data: events = [] } = useEvents();
+// ── Droppable day cell ────────────────────────────────────────────────────────
 
-  const [weekOffset, setWeekOffset] = useState(0);
-  const { dayLabels, todayIdx, weekLabel } = getWeekRange(weekOffset);
-
-  const [currentHour, setCurrentHour] = useState(() => {
-    const now = new Date();
-    return now.getHours() + now.getMinutes() / 60;
-  });
-
-  useEffect(() => {
-    const tick = () => {
-      const now = new Date();
-      setCurrentHour(now.getHours() + now.getMinutes() / 60);
-    };
-    const id = setInterval(tick, 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  // Time indicator only meaningful on the current week
-  const showTimeIndicator = weekOffset === 0 && currentHour >= START_HOUR && currentHour < START_HOUR + HOURS;
-
-  const handleFixMyWeek = async () => {
-    setIsOptimizing(true);
-    triggerToast('AI analysis active. Resolving structural conflicts...', 'info');
-    setTimeout(async () => {
-      await dbFixMyWeek();
-      setIsOptimizing(false);
-      triggerToast('Weekly plan recalibrated! Focus parameters stabilized.', 'success');
-    }, 1800);
-  };
+function DayCell({ day, startTasks, assignment, ghostIds, taskLookup }: {
+  day: ScheduleDay;
+  startTasks: DBTask[];
+  assignment: DayAssignment | undefined;
+  ghostIds: string[];
+  taskLookup: Record<string, ScheduleTaskInfo>;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `day:${day.date}` });
+  const { dow, dom, isToday } = dayLabel(day.date);
+  const startIds = new Set(startTasks.map(t => t.id));
+  const plannedIds = (assignment?.task_ids ?? []).filter(id => !startIds.has(id));
 
   return (
-    <div className="max-w-[1100px] mx-auto px-4 md:px-10 py-6 flex flex-col animate-fade-in">
-      <div className="flex justify-between items-end mb-6 shrink-0">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="font-headline text-2xl font-bold text-black">This Week</h2>
-            <NeedsImplementationBadge />
-          </div>
-          <p className="text-xs font-mono text-gray-400 uppercase tracking-widest mt-1">{weekLabel}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleFixMyWeek}
-            disabled={isOptimizing}
-            className="p-2 px-3 bg-[#EEF2FF] hover:bg-[#c0c1ff]/20 text-[#4648d4] border border-[#c0c1ff] rounded-lg font-sans font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-          >
-            <Sparkles size={13} className={isOptimizing ? 'animate-spin' : 'animate-pulse'} />
-            {isOptimizing ? 'Recalculating…' : 'Fix my Week'}
-            <NeedsImplementationBadge className="hidden xl:inline-flex" />
-          </button>
-          <div className="flex gap-1 border border-gray-200 rounded-lg p-0.5 bg-[#f8f9fa]">
-            <button onClick={() => setWeekOffset(o => o - 1)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Previous week">
-              <ChevronLeft size={14} />
-            </button>
-            {weekOffset !== 0 && (
-              <button onClick={() => setWeekOffset(0)} className="px-2 py-1 hover:bg-gray-100 rounded font-mono text-[9px] font-bold text-gray-500 uppercase tracking-wider" title="Go to current week">
-                Today
-              </button>
-            )}
-            <button onClick={() => setWeekOffset(o => o + 1)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Next week">
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
+    <div
+      ref={setNodeRef}
+      className={`bg-white border rounded-xl p-2.5 min-h-[150px] transition-colors
+        ${isToday ? 'border-[#4648d4] ring-1 ring-[#4648d4]/20' : 'border-gray-200'}
+        ${isOver ? 'bg-indigo-50/70 border-indigo-400' : ''}`}
+    >
+      <div className="flex items-baseline justify-between mb-2">
+        <span className={`text-[9px] font-mono uppercase tracking-widest font-bold ${isToday ? 'text-[#4648d4]' : 'text-gray-400'}`}>{dow}</span>
+        <span className={`text-sm font-headline font-bold ${isToday ? 'text-[#4648d4]' : 'text-gray-800'}`}>{dom}</span>
       </div>
+      {day.override && <p className="text-[9px] font-mono text-amber-600 mb-1">⚠ {day.override.available_minutes}m available</p>}
+      {day.meetings.map(m => (
+        <div key={m.id} className="text-[10px] bg-purple-50 text-purple-700 border border-purple-100 rounded px-1.5 py-1 mb-1 truncate" title={m.title}>
+          <Clock size={8} className="inline mr-1" />{m.title}
+        </div>
+      ))}
+      {startTasks.map(t => <TaskChip key={t.id} task={t} />)}
+      {ghostIds.map(id => (
+        <TaskChip key={`ghost-${id}`} ghost task={{ id, title: taskLookup[id]?.title ?? id, estimated_minutes: taskLookup[id]?.estimated_minutes ?? null, priority: 'medium' }} />
+      ))}
+      {plannedIds.length > 0 && ghostIds.length === 0 && (
+        <div className="mt-1">
+          {plannedIds.map(id => (
+            <div key={id} className="text-[9px] text-gray-400 truncate px-1" title={`Scheduler would work on "${taskLookup[id]?.title}" this day (not yet applied)`}>
+              → {taskLookup[id]?.title ?? id}
+            </div>
+          ))}
+        </div>
+      )}
+      {day.tasks.map(t => (
+        <div key={`due-${t.id}`} className="text-[9px] font-mono text-red-500 truncate mt-0.5" title={`Due: ${t.title}`}>
+          ⚑ due: {t.title}
+        </div>
+      ))}
+      {day.deadline_titles.map(d => (
+        <div key={d} className="text-[9px] font-mono text-orange-600 truncate" title={d}>◆ {d}</div>
+      ))}
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-8 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
-          {/* Day headers */}
-          <div className="grid grid-cols-8 border-b border-gray-150 bg-gray-50 shrink-0">
-            <div className="p-3 border-r border-gray-150/40 font-mono text-[9px] text-gray-400 uppercase tracking-wider flex items-center justify-center">GMT+3</div>
-            {dayLabels.map((day, dIdx) => {
-              const isToday = dIdx === todayIdx;
-              const [name, date] = day.split(' ');
-              return (
-                <div key={day} className={`p-2.5 border-r border-gray-150/40 flex flex-col items-center ${isToday ? 'bg-[#EEF2FF]/20' : ''}`}>
-                  <span className={`text-[10px] font-mono uppercase tracking-widest font-bold ${isToday ? 'text-[#4648d4]' : 'text-gray-400'}`}>{name}</span>
-                  {isToday ? (
-                    <span className="text-base font-bold font-headline mt-0.5 bg-[#4648d4] text-white rounded-full w-8 h-8 flex items-center justify-center shadow-sm">{date}</span>
-                  ) : (
-                    <span className="text-base font-bold font-headline mt-0.5 text-black">{date}</span>
-                  )}
-                </div>
-              );
-            })}
+// ── Backlog tray (droppable to unschedule) ────────────────────────────────────
+
+function BacklogTray({ tasks, unestimated }: { tasks: DBTask[]; unestimated: DBTask[] }) {
+  const { setNodeRef, isOver } = useDroppable({ id: 'backlog' });
+  const { navigateToGoal } = useAppStore();
+  return (
+    <div
+      ref={setNodeRef}
+      className={`bg-white border rounded-xl p-3 transition-colors ${isOver ? 'border-indigo-400 bg-indigo-50/60' : 'border-gray-200'}`}
+    >
+      <p className="text-[11px] font-bold text-gray-700 flex items-center gap-1.5 mb-1">
+        <Inbox size={12} className="text-gray-400" /> Backlog
+      </p>
+      <p className="text-[10px] text-gray-400 mb-2">Drag onto a day to schedule · drop here to unschedule.</p>
+      {tasks.length === 0 && <p className="text-[10px] text-gray-300 font-mono">nothing waiting</p>}
+      <div className="max-h-48 overflow-y-auto pr-0.5">
+        {tasks.map(t => <TaskChip key={t.id} task={t} />)}
+      </div>
+      {unestimated.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-dashed border-amber-200">
+          <p className="text-[9px] font-mono text-amber-600 mb-1">{unestimated.length} need a time estimate before scheduling:</p>
+          <div className="max-h-32 overflow-y-auto pr-0.5">
+            {unestimated.slice(0, 12).map(t => (
+              <button
+                key={t.id}
+                onClick={() => t.goal_id && navigateToGoal(t.goal_id)}
+                className="w-full text-left text-[10px] text-amber-700/80 truncate px-1.5 py-0.5 rounded hover:bg-amber-50"
+                title="Open its goal to add an estimate"
+              >
+                {t.title}
+              </button>
+            ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
-          {/* Scrollable hour grid */}
-          <div className="overflow-y-auto max-h-[480px] relative">
-            <div className="relative" style={{ height: `${HOURS * PX_PER_HOUR}px` }}>
-              {Array.from({ length: HOURS }).map((_, i) => (
-                <div
-                  key={i}
-                  className="absolute left-0 right-0 border-t border-gray-100 flex items-center pointer-events-none"
-                  style={{ top: `${i * PX_PER_HOUR}px`, height: `${PX_PER_HOUR}px` }}
-                >
-                  <span className="w-[62px] text-right pr-2 font-mono text-[9px] text-gray-400 shrink-0">{fmtHour(START_HOUR + i)}</span>
-                </div>
-              ))}
+// ── Drafts panel ──────────────────────────────────────────────────────────────
 
-              {/* Current time indicator */}
-              {showTimeIndicator && (
-                <div className="absolute left-0 right-0 z-10 flex items-center pointer-events-none" style={{ top: `${(currentHour - START_HOUR) * PX_PER_HOUR}px` }}>
-                  <div className="w-[62px] text-right pr-2.5 font-mono text-[9px] text-[#4648d4] font-bold shrink-0">{fmtHourLabel(currentHour)}</div>
-                  <div className="flex-1 border-t-2 border-[#4648d4] relative">
-                    <div className="absolute -left-1 -top-[5px] w-2.5 h-2.5 rounded-full bg-[#4648d4]" />
-                  </div>
-                </div>
-              )}
+function DraftsPanel({ preview, onPreview, onApplied }: {
+  preview: Draft | null;
+  onPreview: (d: Draft | null) => void;
+  onApplied: () => void;
+}) {
+  const { triggerToast } = useAppStore();
+  const [drafts, setDrafts] = useState<Draft[] | null>(null);
 
-              {/* Event blocks */}
-              <div className="absolute inset-0 pointer-events-none z-20" style={{ left: '62px' }}>
-                <div className="grid grid-cols-7 h-full">
-                  {Array.from({ length: 7 }).map((_, colIdx) => (
-                    <div key={colIdx} className="relative border-r border-gray-100/60 h-full">
-                      {events
-                        .filter(e => e.day_index === colIdx)
-                        .map(evt => {
-                          const style = EVENT_STYLE[evt.type] ?? EVENT_STYLE.Focus;
-                          const isSelected = evt.id === selectedEventId;
-                          const top    = (evt.start_hour - START_HOUR) * PX_PER_HOUR;
-                          const height = evt.duration_hours * PX_PER_HOUR;
-                          return (
-                            <div
-                              key={evt.id}
-                              onClick={(e) => { e.stopPropagation(); setSelectedEventId(evt.id); setIsDrawerOpen(true); }}
-                              className={`absolute left-1 right-1 rounded-lg border p-2 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col pointer-events-auto ${style.border} ${style.bg} ${isSelected ? 'ring-2 ring-black bg-white' : ''}`}
-                              style={{ top, height }}
-                            >
-                              <div className={`absolute left-0 top-0 bottom-0 w-1 ${style.bar}`} />
-                              <div className="pl-1.5 flex flex-col min-h-0 h-full">
-                                <span className="font-mono text-[8px] uppercase tracking-wider bg-gray-100 font-bold px-1 rounded mb-0.5 w-max">{evt.type}</span>
-                                <h3 className="text-[11px] font-bold text-gray-900 truncate tracking-tight">{evt.title}</h3>
-                                <p className="font-mono text-[8px] text-gray-400 truncate mt-0.5">{evt.time_str}</p>
-                              </div>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  ))}
-                </div>
+  const generate = useMutation({
+    mutationFn: () => apiPost<{ drafts: Draft[] }>('/api/ai/schedule/drafts', { horizon_days: 14 }),
+    onSuccess: r => {
+      setDrafts(r.drafts);
+      onPreview(null);
+      if (r.drafts.every(d => d.assignments.length === 0)) {
+        triggerToast('No schedulable changes — tasks may need estimates, or already match every plan.', 'info');
+      }
+    },
+    onError: (e: Error) => triggerToast(e.message, 'error'),
+  });
+
+  const apply = useMutation({
+    mutationFn: (d: Draft) => apiPost<{ updated: number }>('/api/ai/schedule/drafts/apply', {
+      assignments: d.assignments.map(a => ({ task_id: a.task_id, start_date: a.start_date })),
+    }),
+    onSuccess: (r, d) => {
+      triggerToast(`"${d.name}" applied — ${r.updated} task${r.updated !== 1 ? 's' : ''} scheduled.`, 'success');
+      setDrafts(null);
+      onPreview(null);
+      onApplied();
+    },
+    onError: (e: Error) => triggerToast(e.message, 'error'),
+  });
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-3">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[11px] font-bold text-gray-700 flex items-center gap-1.5">
+          <Sparkles size={12} className="text-[#4648d4]" /> AI drafts
+        </p>
+        <button
+          onClick={() => generate.mutate()}
+          disabled={generate.isPending}
+          className="text-[10px] font-mono uppercase text-[#4648d4] hover:underline disabled:opacity-40 flex items-center gap-1"
+        >
+          {generate.isPending ? <RefreshCw size={10} className="animate-spin" /> : null}
+          {drafts ? 'Regenerate' : 'Generate 3 plans'}
+        </button>
+      </div>
+      <p className="text-[10px] text-gray-400 mb-2">
+        Three ways to lay out the same work. Preview paints it on the days; nothing changes until you use one.
+      </p>
+      {!drafts && !generate.isPending && (
+        <p className="text-[10px] text-gray-300 font-mono">no drafts yet</p>
+      )}
+      <div className="space-y-2">
+        {(drafts ?? []).map(d => {
+          const isPreviewing = preview?.id === d.id;
+          const s = STATUS_STYLE[d.stats.status] ?? STATUS_STYLE.feasible;
+          return (
+            <div key={d.id} className={`border rounded-lg p-2.5 ${isPreviewing ? 'border-indigo-400 ring-1 ring-indigo-300/50 bg-indigo-50/40' : 'border-gray-150'}`}>
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] font-bold text-gray-800">{d.name}</span>
+                <span className={`text-[8px] font-mono uppercase px-1.5 py-0.5 rounded-full border ${s.cls}`}>{s.label}</span>
               </div>
+              <p className="text-[10px] text-gray-500 mt-0.5 leading-snug">{d.description}</p>
+              <p className="text-[9px] font-mono text-gray-400 mt-1">
+                {d.stats.changes} change{d.stats.changes !== 1 ? 's' : ''} · busiest day {fmtMins(d.stats.busiest_day_minutes)} · {d.stats.days_used} day{d.stats.days_used !== 1 ? 's' : ''}
+              </p>
+              <div className="flex gap-2 mt-1.5">
+                <button
+                  onClick={() => onPreview(isPreviewing ? null : d)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold border ${isPreviewing ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                >
+                  {isPreviewing ? <EyeOff size={10} /> : <Eye size={10} />}
+                  {isPreviewing ? 'Hide preview' : 'Preview'}
+                </button>
+                <button
+                  onClick={() => apply.mutate(d)}
+                  disabled={apply.isPending || d.assignments.length === 0}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40"
+                >
+                  <Check size={10} /> Use this plan
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Main view ─────────────────────────────────────────────────────────────────
+
+export function ScheduleView() {
+  const { triggerToast } = useAppStore();
+  const qc = useQueryClient();
+  const invalidate = useInvalidate();
+  const { data: previewData, isLoading } = useSchedulePreview();
+  const { data: allTasks = [] } = useAllTasks();
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [draftPreview, setDraftPreview] = useState<Draft | null>(null);
+  const [dragTask, setDragTask] = useState<DBTask | null>(null);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  const days: ScheduleDay[] = previewData?.days ?? [];
+  const scheduler = previewData?.scheduler_result;
+  const taskLookup = previewData?.task_lookup ?? {};
+  const weekDays = days.slice(weekOffset * 7, weekOffset * 7 + 7);
+  const assignmentsByDate = new Map<string, DayAssignment>((scheduler?.day_assignments ?? []).map(a => [a.date, a]));
+
+  const active = useMemo(() => allTasks.filter(t => !t.completed && !t.parent_task_id), [allTasks]);
+  const startsByDate = useMemo(() => {
+    const m = new Map<string, DBTask[]>();
+    for (const t of active) {
+      if (!t.start_date) continue;
+      if (!m.has(t.start_date)) m.set(t.start_date, []);
+      m.get(t.start_date)!.push(t);
+    }
+    return m;
+  }, [active]);
+  const backlog = useMemo(() => active.filter(t => !t.start_date && (t.estimated_minutes ?? 0) > 0), [active]);
+  const unestimated = useMemo(() => active.filter(t => !(t.estimated_minutes! > 0)), [active]);
+
+  // Ghost chips per day while previewing a draft
+  const ghostsByDate = useMemo(() => {
+    const m = new Map<string, string[]>();
+    if (!draftPreview) return m;
+    for (const a of draftPreview.assignments) {
+      if (!m.has(a.start_date)) m.set(a.start_date, []);
+      m.get(a.start_date)!.push(a.task_id);
+    }
+    return m;
+  }, [draftPreview]);
+
+  const move = useMutation({
+    mutationFn: ({ taskId, date }: { taskId: string; date: string | null }) =>
+      apiPatch(`/api/tasks/${taskId}`, { start_date: date }),
+    onSuccess: (_r, { date }) => {
+      invalidate.allTasks();
+      invalidate.schedulePreview();
+      triggerToast(date ? `Scheduled for ${date}.` : 'Moved back to backlog.', 'success');
+    },
+    onError: (e: Error) => triggerToast(e.message, 'error'),
+  });
+
+  const onDragStart = (e: DragStartEvent) => {
+    setDragTask(active.find(t => t.id === e.active.id) ?? null);
+  };
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragTask(null);
+    const overId = e.over?.id as string | undefined;
+    if (!overId) return;
+    const taskId = String(e.active.id);
+    const task = active.find(t => t.id === taskId);
+    if (!task) return;
+    if (overId === 'backlog') {
+      if (task.start_date) move.mutate({ taskId, date: null });
+    } else if (overId.startsWith('day:')) {
+      const date = overId.slice(4);
+      if (task.start_date !== date) move.mutate({ taskId, date });
+    }
+  };
+
+  const statusInfo = scheduler ? (STATUS_STYLE[scheduler.status] ?? STATUS_STYLE.feasible) : null;
+
+  return (
+    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <div className="max-w-[1150px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
+        <div className="flex justify-between items-end mb-5">
+          <div>
+            <h2 className="font-headline text-2xl font-bold text-black flex items-center gap-2">
+              <Calendar size={20} /> Schedule
+            </h2>
+            <p className="text-xs font-mono text-gray-400 uppercase tracking-widest mt-1">
+              Drag tasks between days · changes save instantly
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {statusInfo && scheduler && (
+              <span className={`text-[10px] font-mono uppercase font-bold px-2.5 py-1 rounded-full border ${statusInfo.cls}`}>
+                {statusInfo.label}
+                {scheduler.gap_minutes !== 0 && ` · ${scheduler.gap_minutes > 0 ? '+' : ''}${fmtMins(scheduler.gap_minutes)}`}
+              </span>
+            )}
+            {(scheduler?.unestimated_task_ids.length ?? 0) > 0 && (
+              <span className="text-[10px] font-mono px-2.5 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200 flex items-center gap-1">
+                <AlertTriangle size={10} /> {scheduler!.unestimated_task_ids.length} unestimated
+              </span>
+            )}
+            <div className="flex gap-1 border border-gray-200 rounded-lg p-0.5 bg-[#f8f9fa]">
+              <button onClick={() => setWeekOffset(o => Math.max(0, o - 1))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Previous week">
+                <ChevronLeft size={14} />
+              </button>
+              {weekOffset !== 0 && (
+                <button onClick={() => setWeekOffset(0)} className="px-2 py-1 hover:bg-gray-100 rounded font-mono text-[9px] font-bold text-gray-500 uppercase tracking-wider">
+                  Now
+                </button>
+              )}
+              <button onClick={() => setWeekOffset(o => Math.min(4, o + 1))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Next week">
+                <ChevronRight size={14} />
+              </button>
             </div>
           </div>
         </div>
 
-        <div className="lg:col-span-4">
-          <AIDrawer />
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Week grid */}
+          <div className="lg:col-span-8">
+            {isLoading && <p className="text-xs text-gray-400 font-mono">Loading schedule…</p>}
+            {!isLoading && (
+              <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+                {weekDays.map(day => (
+                  <DayCell
+                    key={day.date}
+                    day={day}
+                    startTasks={startsByDate.get(day.date) ?? []}
+                    assignment={assignmentsByDate.get(day.date)}
+                    ghostIds={ghostsByDate.get(day.date) ?? []}
+                    taskLookup={taskLookup}
+                  />
+                ))}
+              </div>
+            )}
+            {draftPreview && (
+              <p className="text-[10px] font-mono text-indigo-500 mt-2">
+                Previewing “{draftPreview.name}” — dashed chips show where work would start. Use the plan or hide the preview.
+              </p>
+            )}
+          </div>
+
+          {/* Right rail: backlog + drafts */}
+          <div className="lg:col-span-4 space-y-4">
+            <BacklogTray tasks={backlog} unestimated={unestimated} />
+            <DraftsPanel
+              preview={draftPreview}
+              onPreview={setDraftPreview}
+              onApplied={() => { invalidate.allTasks(); invalidate.schedulePreview(); qc.invalidateQueries({ queryKey: ['goals'] }); }}
+            />
+          </div>
         </div>
       </div>
-    </div>
+
+      <DragOverlay dropAnimation={null}>
+        {dragTask && (
+          <div className="flex items-center gap-1 text-[10px] rounded px-1.5 py-1 border bg-[#EEF2FF] text-[#4648d4] border-[#4648d4] shadow-lg">
+            <GripVertical size={9} className="opacity-50" />
+            <span className="truncate max-w-[140px]">{dragTask.title}</span>
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
   );
 }

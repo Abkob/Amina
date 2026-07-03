@@ -1,18 +1,18 @@
 import type { DBTaskNoteFile } from '../schema';
+import { apiFetch, apiDelete } from '../../utils/apiFetch';
 
 const API = '/api/task-note-files';
 
 export async function addNoteFile(noteId: string, file: File): Promise<string> {
   const form = new FormData();
   form.append('files', file);
-  const r = await fetch(`${API}/${noteId}`, { method: 'POST', body: form });
-  const { ids } = await r.json();
+  // multipart upload — must not set Content-Type manually (browser sets boundary)
+  const { ids } = await apiFetch<{ ids: string[] }>(`${API}/${noteId}`, { method: 'POST', body: form });
   return ids[0];
 }
 
 export async function getNoteFilesForNote(noteId: string): Promise<DBTaskNoteFile[]> {
-  const r = await fetch(`${API}/${noteId}`);
-  const rows = await r.json() as Array<Omit<DBTaskNoteFile, 'blob'> & { file_path?: string }>;
+  const rows = await apiFetch<Array<Omit<DBTaskNoteFile, 'blob'> & { file_path?: string }>>(`${API}/${noteId}`);
   // Return with a synthetic blob placeholder — actual data streamed via file_url
   return rows.map(row => ({
     ...row,
@@ -22,7 +22,7 @@ export async function getNoteFilesForNote(noteId: string): Promise<DBTaskNoteFil
 }
 
 export async function deleteNoteFile(fileId: string): Promise<void> {
-  await fetch(`${API}/file/${fileId}`, { method: 'DELETE' });
+  await apiDelete(`${API}/file/${fileId}`);
 }
 
 export async function deleteNoteFilesForNotes(_noteIds: string[]): Promise<void> {

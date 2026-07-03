@@ -10,5 +10,9 @@ export default defineConfig({
     environment: 'node',
     include: ['server/__tests__/**/*.test.ts'],
     testTimeout: 30_000,
+    // All files share one test database. Running them in parallel makes
+    // concurrent initSchema DDL race and lets suites see each other's rows —
+    // serialize for deterministic results.
+    fileParallelism: false,
   },
 });

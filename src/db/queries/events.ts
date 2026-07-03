@@ -1,4 +1,5 @@
 import type { DBEvent } from '../schema';
+import { apiFetch, apiPost, apiPatch, apiDelete } from '../../utils/apiFetch';
 
 const API = '/api';
 
@@ -11,7 +12,7 @@ function fmtHour(h: number): string {
 }
 
 export async function getEvents(): Promise<DBEvent[]> {
-  return fetch(`${API}/events`).then(r => r.json());
+  return apiFetch<DBEvent[]>(`${API}/events`);
 }
 
 export async function createEvent(
@@ -19,51 +20,21 @@ export async function createEvent(
   _goalId?: string,
   _taskId?: string
 ): Promise<string> {
-  const r = await fetch(`${API}/events`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  const { id } = await r.json();
+  const { id } = await apiPost<{ id: string }>(`${API}/events`, data);
   return id;
 }
 
 export async function rescheduleEvent(eventId: string, newStartHour: number): Promise<void> {
-  const events: DBEvent[] = await fetch(`${API}/events`).then(r => r.json());
+  const events = await getEvents();
   const event = events.find(e => e.id === eventId);
   if (!event) return;
   const endHour = newStartHour + event.duration_hours;
-  await fetch(`${API}/events/${eventId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      start_hour: newStartHour,
-      time_str: `${fmtHour(newStartHour)} - ${fmtHour(endHour)}`,
-    }),
+  await apiPatch(`${API}/events/${eventId}`, {
+    start_hour: newStartHour,
+    time_str: `${fmtHour(newStartHour)} - ${fmtHour(endHour)}`,
   });
 }
 
 export async function deleteEvent(eventId: string): Promise<void> {
-  await fetch(`${API}/events/${eventId}`, { method: 'DELETE' });
-}
-
-export async function fixMyWeek(): Promise<void> {
-  await rescheduleEvent('evt-3', 11.5);
-  await fetch(`${API}/events/evt-3`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      time_str: '11:30 AM - 1:00 PM',
-      description: 'AI OPTIMIZED: Shifted 30 mins to guarantee cognitive recovery from morning sprint.',
-    }),
-  });
-  await rescheduleEvent('evt-6', 14.0);
-  await fetch(`${API}/events/evt-6`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      time_str: '2:00 PM - 3:00 PM',
-      description: 'AI OPTIMIZED: Arranged after administrative task closure to safeguard focus limits.',
-    }),
-  });
+  await apiDelete(`${API}/events/${eventId}`);
 }

@@ -1,27 +1,25 @@
 import type { DBGoal } from '../schema';
+import { apiFetch, apiPost, apiPatch, apiDelete, ApiError } from '../../utils/apiFetch';
 
 const API = '/api';
 
 export async function getGoals(): Promise<DBGoal[]> {
-  const r = await fetch(`${API}/goals`);
-  return r.json();
+  return apiFetch<DBGoal[]>(`${API}/goals`);
 }
 
 export async function getGoalById(goalId: string): Promise<DBGoal | undefined> {
-  const r = await fetch(`${API}/goals/${goalId}`);
-  if (r.status === 404) return undefined;
-  return r.json();
+  try {
+    return await apiFetch<DBGoal>(`${API}/goals/${goalId}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return undefined;
+    throw err;
+  }
 }
 
 export async function createGoal(
   data: Omit<DBGoal, 'id' | 'created_at' | 'updated_at' | 'archived_at'> & { archived_at?: string | null }
 ): Promise<string> {
-  const r = await fetch(`${API}/goals`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  const { id } = await r.json();
+  const { id } = await apiPost<{ id: string }>(`${API}/goals`, data);
   return id;
 }
 
@@ -29,15 +27,11 @@ export async function updateGoal(
   goalId: string,
   updates: Partial<Omit<DBGoal, 'id' | 'created_at'>>
 ): Promise<void> {
-  await fetch(`${API}/goals/${goalId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updates),
-  });
+  await apiPatch(`${API}/goals/${goalId}`, updates);
 }
 
 export async function deleteGoal(goalId: string): Promise<void> {
-  await fetch(`${API}/goals/${goalId}`, { method: 'DELETE' });
+  await apiDelete(`${API}/goals/${goalId}`);
 }
 
 export async function updateGoalProgress(goalId: string, progress: number): Promise<void> {

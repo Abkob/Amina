@@ -3,7 +3,7 @@ import { Target, Calendar, Archive, RotateCcw, CheckSquare, Square, Plus, AlertC
 import { motion } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { ProgressRing } from '../components/ProgressRing';
-import { useGoals, useAllTasks } from '../api/hooks';
+import { useGoals, useAllGoals, useAllTasks, useInvalidate } from '../api/hooks';
 import { archiveGoal, restoreGoal, deleteGoal } from '../db/queries/goals';
 import { toggleTask } from '../db/queries/tasks';
 import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFinishEstimate';
@@ -54,16 +54,20 @@ function GoalCard({
   tab: 'Active' | 'Completed' | 'Archived';
 }) {
   const { setSelectedGoalId, triggerToast, showConfirm } = useAppStore();
+  const invalidate = useInvalidate();
   const isArchived = Boolean(goal.archived_at);
   const status = computeGoalStatus(goal, tasks);
   const timeStats = computeGoalTimeStats(tasks);
   const finishProjection = projectedFinishDate(timeStats);
 
+  // Every mutation invalidates immediately — without this the 10s stale window
+  // made archive/restore/delete look like they "need a refresh" to take effect.
   const handleArchiveToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isArchived) {
       showConfirm(`Restore goal "${goal.title}"?`, async () => {
         await restoreGoal(goal.id);
+        invalidate.goals();
         triggerToast('Goal restored with progress intact.', 'success');
       });
       return;
@@ -71,6 +75,7 @@ function GoalCard({
 
     showConfirm(`Archive goal "${goal.title}"? Your tasks, resources, and progress will be saved.`, async () => {
       await archiveGoal(goal.id);
+      invalidate.goals();
       triggerToast('Goal archived. Progress saved.', 'info');
     });
   };
@@ -79,6 +84,8 @@ function GoalCard({
     e.stopPropagation();
     if (!nextAction) return;
     await toggleTask(nextAction.id);
+    invalidate.allTasks();
+    invalidate.goals();
   };
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -87,6 +94,8 @@ function GoalCard({
       `Permanently delete "${goal.title}"? This removes all tasks, notes, and resources linked to it. This cannot be undone.`,
       async () => {
         await deleteGoal(goal.id);
+        invalidate.goals();
+        invalidate.allTasks();
         triggerToast('Goal permanently deleted.', 'info');
       }
     );
@@ -212,7 +221,11 @@ function GoalCard({
 export function GoalsDashboard() {
   const { goalsFilter, setGoalsFilter, searchQuery, openNewGoalModal } = useAppStore();
 
-  const { data: goals = [] } = useGoals();
+  // useGoals() returns ACTIVE goals only (server-side filter). The Archived
+  // tab needs the full set — without useAllGoals it was permanently empty.
+  const { data: activeGoals = [] } = useGoals();
+  const { data: allGoals = [] } = useAllGoals();
+  const goals = goalsFilter === 'Archived' ? allGoals : activeGoals;
   const { data: allTasks = [] } = useAllTasks();
 
   const nextActions = allTasks.filter(t => t.kind === 'next_action');
@@ -225,7 +238,7 @@ export function GoalsDashboard() {
   }, {});
 
   const visibleGoals = goals.filter((g) => !g.archived_at);
-  const archivedGoals = goals.filter((g) => Boolean(g.archived_at));
+  const archivedGoals = allGoals.filter((g) => Boolean(g.archived_at));
 
   const filtered = goals.filter((g) => {
     const q = searchQuery.toLowerCase();

@@ -22,6 +22,10 @@ export interface EntityCard {
   goal_id?: string | null;
   milestone_id?: string | null;
   similarity?: number;
+  /** Accepted topic names this entity belongs to — manual/accepted signals, not raw similarity. */
+  topics?: string[];
+  /** Which retrieval lanes surfaced this card: 'sql' | 'graph' | 'vector' | 'topic'. */
+  matched_via?: string[];
 }
 
 export interface RetrievalResult {
@@ -295,31 +299,116 @@ async function enrichCards(cards: EntityCard[]): Promise<EntityCard[]> {
   }));
 }
 
+// ─── Topic retrieval lane ─────────────────────────────────────────────────────
+// When the user's query names a topic (by name or alias), that topic's ACCEPTED
+// members are strong candidates: they carry manual/accepted authority, which
+// outranks raw embedding similarity.
+
+async function topicRetrieval(queryText: string): Promise<EntityCard[]> {
+  try {
+    const q = queryText.toLowerCase();
+    const { rows: topicRows } = await query<{ id: string; name: string }>(
+      `SELECT DISTINCT tp.id, tp.name
+       FROM topics tp
+       LEFT JOIN topic_aliases ta ON ta.topic_id = tp.id
+       WHERE tp.status = 'active'
+         AND ($1 LIKE '%' || LOWER(tp.name) || '%' OR ($1 LIKE '%' || ta.alias || '%' AND LENGTH(ta.alias) >= 3))`,
+      [q],
+    );
+    if (!topicRows.length) return [];
+    const { rows: members } = await query<{ entity_type: string; entity_id: string; topic_name: string }>(
+      `SELECT tm.entity_type, tm.entity_id, tp.name AS topic_name
+       FROM topic_memberships tm
+       JOIN topics tp ON tp.id = tm.topic_id
+       WHERE tm.topic_id = ANY($1) AND tm.status = 'accepted'
+       ORDER BY (tm.source = 'manual') DESC, tm.confidence DESC
+       LIMIT 40`,
+      [topicRows.map(t => t.id)],
+    );
+    return members.map(m => ({
+      entity_type: m.entity_type,
+      entity_id: m.entity_id,
+      title: '', // hydrated later like vector-only results
+      topics: [m.topic_name],
+    }));
+  } catch {
+    // topics tables may not exist on a partially migrated DB — degrade silently
+    return [];
+  }
+}
+
+/** Attaches accepted topic names to the final card set so the model sees cluster context. */
+async function annotateTopics(cards: EntityCard[]): Promise<void> {
+  if (!cards.length) return;
+  try {
+    const keys = cards.map(c => `${c.entity_type}:${c.entity_id}`);
+    const { rows } = await query<{ entity_type: string; entity_id: string; name: string }>(
+      `SELECT tm.entity_type, tm.entity_id, tp.name
+       FROM topic_memberships tm
+       JOIN topics tp ON tp.id = tm.topic_id AND tp.status = 'active'
+       WHERE tm.status = 'accepted' AND (tm.entity_type || ':' || tm.entity_id) = ANY($1)`,
+      [keys],
+    );
+    const byKey = new Map<string, string[]>();
+    for (const r of rows) {
+      const k = `${r.entity_type}:${r.entity_id}`;
+      byKey.set(k, [...(byKey.get(k) ?? []), r.name]);
+    }
+    for (const c of cards) {
+      const names = byKey.get(`${c.entity_type}:${c.entity_id}`);
+      if (names?.length) c.topics = names;
+    }
+  } catch { /* pre-migration DB — annotations are optional */ }
+}
+
 // ─── Main export ─────────────────────────────────────────────────────────────
 
 export async function buildRetrievalContext(opts: RetrievalOptions): Promise<RetrievalResult> {
   const limit = opts.limit ?? 30;
   const entityTypes = opts.entityTypes ?? ['task', 'milestone'];
 
-  const [sqlResults, vectorResult] = await Promise.all([
+  const [sqlResults, vectorResult, topicResults] = await Promise.all([
     sqlRetrieval(opts),
     opts.query
       ? vectorRetrieval(opts.query, entityTypes, Math.ceil(limit * 0.5))
       : Promise.resolve({ cards: [], degraded: false, degraded_reason: null }),
+    opts.query ? topicRetrieval(opts.query) : Promise.resolve([]),
   ]);
 
   const vectorResults = vectorResult.cards;
   const sqlSeeds = sqlResults.map(c => c.entity_id);
   const graphResults = sqlSeeds.length ? await graphRetrieval(sqlSeeds, 1) : [];
 
-  // RRF over all three signals
-  const scores = reciprocalRankFusion([sqlResults, graphResults, vectorResults]);
+  // RRF over all signals. The topic lane appears twice: accepted/manual
+  // memberships carry more authority than any single similarity lane.
+  const scores = reciprocalRankFusion([sqlResults, graphResults, vectorResults, topicResults, topicResults]);
+
+  // Lane provenance: record which lanes surfaced each entity so downstream
+  // consumers (chat citations) can explain WHY something was in context.
+  const lanesByKey = new Map<string, Set<string>>();
+  const laneLists: Array<[string, EntityCard[]]> = [
+    ['sql', sqlResults], ['graph', graphResults], ['vector', vectorResults], ['topic', topicResults],
+  ];
+  for (const [lane, list] of laneLists) {
+    for (const c of list) {
+      const key = `${c.entity_type}:${c.entity_id}`;
+      if (!lanesByKey.has(key)) lanesByKey.set(key, new Set());
+      lanesByKey.get(key)!.add(lane);
+    }
+  }
 
   // Build deduped candidate list keyed by entity_type:entity_id
   const allById = new Map<string, EntityCard>();
-  for (const c of [...sqlResults, ...graphResults, ...vectorResults]) {
+  for (const c of [...sqlResults, ...graphResults, ...vectorResults, ...topicResults]) {
     const key = `${c.entity_type}:${c.entity_id}`;
     if (!allById.has(key)) allById.set(key, c);
+    // similarity lives on the vector-lane card; carry it onto the kept card
+    if (c.similarity !== undefined && allById.get(key)!.similarity === undefined) {
+      allById.get(key)!.similarity = c.similarity;
+    }
+  }
+  for (const [key, card] of allById) {
+    card.matched_via = [...(lanesByKey.get(key) ?? [])];
   }
 
   // Sort by RRF score, cap at limit
@@ -329,10 +418,10 @@ export async function buildRetrievalContext(opts: RetrievalOptions): Promise<Ret
     .slice(0, limit)
     .map(x => x.card);
 
-  // Hydrate any vector-only results that have no title (vector retrieval returns title:'')
-  const untitled = sorted.filter(c => !c.title && c.entity_type === 'task');
-  if (untitled.length) {
-    const ids = untitled.map(c => c.entity_id);
+  // Hydrate any vector/topic-lane results that have no title (those lanes return title:'')
+  const untitledTasks = sorted.filter(c => !c.title && c.entity_type === 'task');
+  if (untitledTasks.length) {
+    const ids = untitledTasks.map(c => c.entity_id);
     const { rows: hydrated } = await query<{ id: string; title: string; status: string; priority: string }>(
       `SELECT id, title, status, priority FROM tasks WHERE id = ANY($1)`,
       [ids],
@@ -349,6 +438,25 @@ export async function buildRetrievalContext(opts: RetrievalOptions): Promise<Ret
       }
     }
   }
+  // Non-task types from the topic lane: hydrate titles from their own tables
+  const TITLE_TABLES: Record<string, { table: string; col: string }> = {
+    goal: { table: 'goals', col: 'title' },
+    milestone: { table: 'goal_milestones', col: 'title' },
+    resource: { table: 'resources', col: 'title' },
+    meeting: { table: 'meetings', col: 'title' },
+    note: { table: 'notes', col: 'title' },
+    journal_entry: { table: 'journal_entries', col: 'entry_date' },
+  };
+  for (const [etype, spec] of Object.entries(TITLE_TABLES)) {
+    const untitled = sorted.filter(c => !c.title && c.entity_type === etype);
+    if (!untitled.length) continue;
+    const { rows: hydrated } = await query<{ id: string; title: string }>(
+      `SELECT id, ${spec.col} AS title FROM ${spec.table} WHERE id = ANY($1)`,
+      [untitled.map(c => c.entity_id)],
+    );
+    const hmap = new Map(hydrated.map(r => [r.id, r.title]));
+    for (const card of untitled) card.title = hmap.get(card.entity_id) ?? card.title;
+  }
 
   // Budget trim: keep cards until total planning_summary chars exceed 20,000.
   // Always include at least 1 card regardless of summary length.
@@ -363,6 +471,7 @@ export async function buildRetrievalContext(opts: RetrievalOptions): Promise<Ret
   }
 
   const enriched = await enrichCards(budgeted);
+  await annotateTopics(enriched);
   return {
     cards: enriched,
     vector_degraded: vectorResult.degraded,

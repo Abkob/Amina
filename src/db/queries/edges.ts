@@ -1,43 +1,39 @@
 import type { DBEdge, NodeType, EdgeRelationship } from '../schema';
+import { apiFetch, apiPost, apiDelete } from '../../utils/apiFetch';
 
 const API = '/api';
 
 export async function addEdge(
   data: Omit<DBEdge, 'id' | 'created_at'>
 ): Promise<string> {
-  const r = await fetch(`${API}/edges`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  const { id } = await r.json();
+  const { id } = await apiPost<{ id: string }>(`${API}/edges`, data);
   return id;
 }
 
 export async function removeEdge(sourceId: string, targetId: string): Promise<void> {
-  const edges: DBEdge[] = await fetch(`${API}/edges?source_id=${sourceId}`).then(r => r.json());
+  const edges = await apiFetch<DBEdge[]>(`${API}/edges?source_id=${sourceId}`);
   const match = edges.find(e => e.target_id === targetId);
-  if (match) await fetch(`${API}/edges/${match.id}`, { method: 'DELETE' });
+  if (match) await apiDelete(`${API}/edges/${match.id}`);
 }
 
 export async function removeAllEdgesForNode(nodeId: string): Promise<void> {
-  const [out, inc]: [DBEdge[], DBEdge[]] = await Promise.all([
-    fetch(`${API}/edges?source_id=${nodeId}`).then(r => r.json()),
-    fetch(`${API}/edges?target_id=${nodeId}`).then(r => r.json()),
+  const [out, inc] = await Promise.all([
+    apiFetch<DBEdge[]>(`${API}/edges?source_id=${nodeId}`),
+    apiFetch<DBEdge[]>(`${API}/edges?target_id=${nodeId}`),
   ]);
-  await Promise.all([...out, ...inc].map(e => fetch(`${API}/edges/${e.id}`, { method: 'DELETE' })));
+  await Promise.all([...out, ...inc].map(e => apiDelete(`${API}/edges/${e.id}`)));
 }
 
 export async function getOutgoingEdges(nodeId: string): Promise<DBEdge[]> {
-  return fetch(`${API}/edges?source_id=${nodeId}`).then(r => r.json());
+  return apiFetch<DBEdge[]>(`${API}/edges?source_id=${nodeId}`);
 }
 
 export async function getIncomingEdges(nodeId: string): Promise<DBEdge[]> {
-  return fetch(`${API}/edges?target_id=${nodeId}`).then(r => r.json());
+  return apiFetch<DBEdge[]>(`${API}/edges?target_id=${nodeId}`);
 }
 
 export async function getEdgesByRelationship(_rel: EdgeRelationship): Promise<DBEdge[]> {
-  return fetch(`${API}/edges`).then(r => r.json());
+  return apiFetch<DBEdge[]>(`${API}/edges`);
 }
 
 export async function getNeighborIds(

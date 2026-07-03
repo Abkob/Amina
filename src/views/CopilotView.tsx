@@ -1,18 +1,39 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, Zap, RefreshCw, CheckCircle, X, AlertTriangle, ChevronRight, ChevronDown, Diamond, Calendar, ChevronLeft, MessageSquare, Plus } from 'lucide-react';
+import { Send, Zap, RefreshCw, CheckCircle, X, AlertTriangle, ChevronRight, ChevronDown, Diamond, Calendar, ChevronLeft, MessageSquare, Plus, Paperclip, PanelLeft } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSchedulePreview, useGoals, useInvalidate, useChatSessions, useCreateChatSession, useDeleteChatSession, useSendSessionMessage, type ScheduleDay, type SchedulerResult, type ScheduleTaskInfo, type DayAssignment } from '../api/hooks';
 import { apiFetch, apiPost } from '../utils/apiFetch';
+import { useAppStore } from '../store/useAppStore';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface CopilotAction {
   id: string;
-  type: 'create_task' | 'create_goal' | 'update_task' | 'update_goal';
+  type: 'create_task' | 'create_goal' | 'update_task' | 'update_goal' | 'create_milestone' | 'attach_resource';
   description: string;
   params: Record<string, unknown>;
   status: 'pending' | 'confirmed' | 'skipped' | 'applying' | 'done' | 'error';
+  /** Durable proposal backing this card — apply/skip go through the proposal API. */
+  proposal_id?: string;
+  /** Set when the server rejected this model action during validation. */
+  rejected_reason?: string;
 }
+
+/** Map a durable proposal status onto the card status used by the UI. */
+function statusFromProposal(proposalStatus: string | undefined): CopilotAction['status'] {
+  switch (proposalStatus) {
+    case 'applied':  return 'done';
+    case 'rejected': return 'skipped';
+    case 'pending':  return 'pending';
+    default:         return 'error'; // proposal missing/expired
+  }
+}
+
+/** Query keys affected by applying a task/goal/milestone proposal. */
+const PROPOSAL_AFFECTED_KEYS = [
+  'goals', 'goals-health', 'goal-tasks', 'tasks', 'milestones',
+  'proposals', 'ai-proposals', 'schedule-preview', 'data-readiness', 'org-inbox',
+] as const;
 
 interface FeasibilityIssue {
   goal_id: string;
@@ -27,12 +48,22 @@ interface FeasibilityResult {
   issues?: FeasibilityIssue[];
 }
 
+interface ChatCitation {
+  entity_type: string;
+  entity_id: string;
+  title: string;
+  matched_via: string[];
+  similarity?: number;
+  topics?: string[];
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   actions?: CopilotAction[];
   feasibility?: FeasibilityResult;
+  citations?: ChatCitation[];
   timestamp: Date;
   error?: string;
 }
@@ -233,7 +264,52 @@ function MessageBubble({ msg, onConfirmAction, onSkipAction }: {
             ))}
           </div>
         ) : null}
+        {msg.citations?.length ? <CitationRow citations={msg.citations} /> : null}
       </div>
+    </div>
+  );
+}
+
+// ── Citations ─────────────────────────────────────────────────────────────────
+// Every assistant answer discloses exactly what was in the model's context and
+// why each source was retrieved (lane provenance + similarity + topics).
+
+const LANE_LABEL: Record<string, string> = {
+  sql: 'planning window',
+  vector: 'semantic match',
+  graph: 'graph link',
+  topic: 'topic member',
+  recency: 'recent journal',
+};
+
+function CitationRow({ citations }: { citations: ChatCitation[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="text-[10px] font-mono text-gray-500 hover:text-gray-300 flex items-center gap-1"
+      >
+        {open ? <ChevronDown size={9} /> : <ChevronRight size={9} />}
+        Sources: {citations.length} item{citations.length !== 1 ? 's' : ''} in context
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-1 max-h-48 overflow-y-auto pr-1">
+          {citations.map((c, i) => (
+            <div key={`${c.entity_type}-${c.entity_id}-${i}`} className="flex items-center gap-2 text-[10px] bg-white/4 border border-white/6 rounded-lg px-2 py-1">
+              <span className="font-mono uppercase text-gray-500 shrink-0">{c.entity_type.replace('_', ' ')}</span>
+              <span className="text-gray-300 truncate flex-1">{c.title}</span>
+              <span className="font-mono text-gray-600 shrink-0">
+                {c.matched_via.map(v => LANE_LABEL[v] ?? v).join(' · ')}
+                {c.similarity !== undefined && ` (${(c.similarity * 100).toFixed(0)}%)`}
+              </span>
+              {c.topics?.length ? (
+                <span className="font-mono text-indigo-400 shrink-0" title={`Topics: ${c.topics.join(', ')}`}>#{c.topics[0]}</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -400,6 +476,31 @@ function SchedulePreviewPanel() {
     invalidate.goals();
   };
 
+  const { triggerToast } = useAppStore();
+  const [planning, setPlanning] = useState(false);
+  // On-demand scheduler run: proposals land on their target days below and the
+  // 5s schedule-preview poll keeps the panel live as they're accepted/rejected.
+  const planWeek = async () => {
+    setPlanning(true);
+    try {
+      const r = await apiPost<{ proposals_created: number; scheduler_result: { unestimated_task_ids: string[] } }>(
+        '/api/ai/schedule/propose', { horizon_days: 7 },
+      );
+      invalidate.schedulePreview();
+      if (r.proposals_created > 0) {
+        triggerToast(`Scheduler proposed ${r.proposals_created} start date${r.proposals_created > 1 ? 's' : ''} — confirm them on their days below.`, 'success');
+      } else if (r.scheduler_result.unestimated_task_ids.length) {
+        triggerToast(`Nothing to schedule: ${r.scheduler_result.unestimated_task_ids.length} tasks need estimates first (see Schedule tab).`, 'info');
+      } else {
+        triggerToast('Schedule already matches the plan — no changes proposed.', 'info');
+      }
+    } catch (e) {
+      triggerToast((e as Error).message, 'error');
+    } finally {
+      setPlanning(false);
+    }
+  };
+
   const rejectProposal = async (id: string) => {
     await apiFetch(`/api/ai/proposals/${id}/reject`, { method: 'POST' });
     invalidate.schedulePreview();
@@ -434,6 +535,22 @@ function SchedulePreviewPanel() {
             {badge.label}
           </span>
         )}
+        {(schedulerResult?.unestimated_task_ids.length ?? 0) > 0 && (
+          <span
+            className="text-[9px] font-mono px-1.5 py-0.5 rounded border bg-amber-500/10 text-amber-400 border-amber-500/30"
+            title={`${schedulerResult!.unestimated_task_ids.length} tasks have no time estimate and can't be scheduled — see the Schedule tab to fix`}
+          >
+            {schedulerResult!.unestimated_task_ids.length} unest.
+          </span>
+        )}
+        <button
+          onClick={planWeek}
+          disabled={planning}
+          className="text-indigo-400 hover:text-indigo-300 disabled:opacity-40 transition-colors"
+          title="Run the deterministic scheduler now — proposed start dates appear on their days below; nothing applies until you confirm each one"
+        >
+          {planning ? <RefreshCw size={13} className="animate-spin" /> : <Zap size={13} />}
+        </button>
         <select
           value={goalFilter}
           onChange={e => setGoalFilter(e.target.value)}
@@ -513,15 +630,24 @@ function SchedulePreviewPanel() {
                   </>
                 )}
 
-                {day.proposals.map((p: ScheduleDay['proposals'][0]) => (
-                  <div key={p.id} className="flex items-center gap-1.5 border border-dashed border-amber-400/40 rounded-md px-1.5 py-0.5 animate-pulse">
-                    <span className="text-[10px] font-mono text-amber-300 truncate flex-1">
-                      ✦ {(p.params.title as string | undefined)?.slice(0, 22) ?? p.action_type}
-                    </span>
-                    <button onClick={() => applyProposal(p.id)} className="text-green-400 hover:text-green-300 shrink-0" title="Confirm">✓</button>
-                    <button onClick={() => rejectProposal(p.id)} className="text-gray-600 hover:text-red-400 shrink-0" title="Skip">✕</button>
-                  </div>
-                ))}
+                {day.proposals.map((p: ScheduleDay['proposals'][0]) => {
+                  // Scheduler proposals carry task_id + start_date, not a title —
+                  // resolve the real task name so the card isn't a bare "update_task".
+                  const taskId = p.params.task_id as string | undefined;
+                  const label = (p.params.title as string | undefined)
+                    ?? (taskId ? taskLookup[taskId]?.title : undefined)
+                    ?? p.action_type;
+                  const move = p.params.start_date ? `start ${String(p.params.start_date).slice(5)}` : null;
+                  return (
+                    <div key={p.id} className="flex items-center gap-1.5 border border-dashed border-amber-400/40 rounded-md px-1.5 py-0.5">
+                      <span className="text-[10px] font-mono text-amber-300 truncate flex-1" title={p.explanation ?? label}>
+                        ✦ {label.slice(0, 22)}{move ? ` → ${move}` : ''}
+                      </span>
+                      <button onClick={() => applyProposal(p.id)} className="text-green-400 hover:text-green-300 shrink-0" title="Confirm — writes the change">✓</button>
+                      <button onClick={() => rejectProposal(p.id)} className="text-gray-600 hover:text-red-400 shrink-0" title="Reject — persists, won't reappear">✕</button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -593,9 +719,34 @@ export function CopilotView() {
   const [apiKeyMissing,   setApiKeyMissing]   = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [showHistory,     setShowHistory]     = useState(false);
+  const [railOpen,        setRailOpen]        = useState(false);
+  const [attachment, setAttachment] = useState<{ id: string; title: string; indexing: boolean } | null>(null);
+  const [uploading,  setUploading]  = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
+  const fileRef   = useRef<HTMLInputElement>(null);
   const qc        = useQueryClient();
+  const { triggerToast } = useAppStore();
+
+  // Attach = real library upload (chunked + embedded like any resource); the
+  // resource_id is then stated in the next message so the model can propose
+  // attach_resource actions against it.
+  const uploadAttachment = async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { id } = await apiFetch<{ id: string }>('/api/resources/upload', { method: 'POST', body: fd });
+      setAttachment({ id, title: file.name, indexing: true });
+      qc.invalidateQueries({ queryKey: ['resources'] });
+      triggerToast(`"${file.name}" added to your Resource Library. Tell the copilot where to file it.`, 'success');
+      setTimeout(() => setAttachment(a => a && a.id === id ? { ...a, indexing: false } : a), 20_000);
+    } catch (e) {
+      triggerToast(`Upload failed: ${(e as Error).message}`, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const createSession = useCreateChatSession();
   const sendSessionMsg = useSendSessionMessage();
@@ -606,11 +757,26 @@ export function CopilotView() {
 
   const loadSession = useCallback(async (sessionId: string) => {
     try {
-      const msgs = await apiFetch<{ id: string; role: 'user' | 'assistant'; content: string; created_at: string }[]>(
-        `/api/ai/sessions/${sessionId}/messages`,
-      );
+      interface StoredAction extends Omit<CopilotAction, 'status'> { proposal_status?: string }
+      const msgs = await apiFetch<{
+        id: string; role: 'user' | 'assistant'; content: string; created_at: string;
+        metadata?: { actions?: StoredAction[]; feasibility?: FeasibilityResult | null; citations?: ChatCitation[] } | null;
+      }[]>(`/api/ai/sessions/${sessionId}/messages`);
       setActiveSessionId(sessionId);
-      setMessages(msgs.map(m => ({ id: m.id, role: m.role, content: m.content, timestamp: new Date(m.created_at) })));
+      // Restore action cards from persisted metadata; card status reflects the
+      // CURRENT durable proposal state, so applied/skipped survive reloads.
+      setMessages(msgs.map(m => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        actions: m.metadata?.actions?.map(a => ({
+          ...a,
+          status: a.rejected_reason ? 'error' as const : statusFromProposal(a.proposal_status),
+        })),
+        feasibility: m.metadata?.feasibility ?? undefined,
+        citations: m.metadata?.citations ?? undefined,
+        timestamp: new Date(m.created_at),
+      })));
       setShowHistory(false);
     } catch { /* ignore */ }
   }, []);
@@ -624,7 +790,13 @@ export function CopilotView() {
   const send = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;
     setInput('');
-    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text.trim(), timestamp: new Date() };
+    // A pending attachment rides along as an explicit reference the model can
+    // act on (attach_resource) — stated in-message, never smuggled invisibly.
+    const outgoing = attachment
+      ? `${text.trim()}\n\n[Attached file "${attachment.title}" is already in my Resource Library with resource_id: ${attachment.id}]`
+      : text.trim();
+    if (attachment) setAttachment(null);
+    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: outgoing, timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
     const assistantId = crypto.randomUUID();
@@ -639,11 +811,11 @@ export function CopilotView() {
         setActiveSessionId(sessionId);
       }
 
-      const data = await apiPost<{ reply?: string; actions?: Omit<CopilotAction, 'status'>[]; feasibility?: FeasibilityResult; error?: string }>(
-        `/api/ai/sessions/${sessionId}/chat`, { message: text.trim() },
+      const data = await apiPost<{ reply?: string; actions?: Omit<CopilotAction, 'status'>[]; feasibility?: FeasibilityResult; citations?: ChatCitation[]; error?: string }>(
+        `/api/ai/sessions/${sessionId}/chat`, { message: outgoing },
       );
       const actions: CopilotAction[] = (data.actions ?? []).map(a => ({ ...a, status: 'pending' as const }));
-      setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: data.reply ?? '', actions, feasibility: data.feasibility, timestamp: new Date() }]);
+      setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: data.reply ?? '', actions, feasibility: data.feasibility, citations: data.citations, timestamp: new Date() }]);
       qc.invalidateQueries({ queryKey: ['proposals'] });
     } catch (err) {
       const isOffline = err instanceof Error && err.message.includes('Failed to fetch');
@@ -657,50 +829,67 @@ export function CopilotView() {
       setIsLoading(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [messages, isLoading, activeSessionId, createSession, sendSessionMsg, qc]);
+  }, [messages, isLoading, activeSessionId, createSession, sendSessionMsg, qc, attachment]);
 
   const handleConfirmAction = useCallback(async (msgId: string, actionId: string) => {
-    setMessages(prev => prev.map(m => m.id !== msgId ? m : { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status: 'applying' as const } : a) }));
     const action = messages.find(m => m.id === msgId)?.actions?.find(a => a.id === actionId);
-    if (!action) return;
+    if (!action?.proposal_id) {
+      // No durable proposal behind this card (validation-rejected or legacy) — surface honestly.
+      setMessages(prev => prev.map(m => m.id !== msgId ? m : { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status: 'error' as const } : a) }));
+      return;
+    }
+    setMessages(prev => prev.map(m => m.id !== msgId ? m : { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status: 'applying' as const } : a) }));
     try {
-      await apiPost('/api/ai/apply', { type: action.type, params: action.params });
+      // Durable path: transactional, row-locked, double-apply safe.
+      await apiPost(`/api/ai/proposals/${action.proposal_id}/apply`, {});
       setMessages(prev => prev.map(m => m.id !== msgId ? m : { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status: 'done' as const } : a) }));
-      qc.invalidateQueries();
+      for (const key of PROPOSAL_AFFECTED_KEYS) qc.invalidateQueries({ queryKey: [key] });
     } catch {
       setMessages(prev => prev.map(m => m.id !== msgId ? m : { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status: 'error' as const } : a) }));
     }
   }, [messages, qc]);
 
-  const handleSkipAction = useCallback((msgId: string, actionId: string) => {
+  const handleSkipAction = useCallback(async (msgId: string, actionId: string) => {
+    const action = messages.find(m => m.id === msgId)?.actions?.find(a => a.id === actionId);
+    // Skip must persist: reject the durable proposal so it disappears from the
+    // proposals panel and stays skipped after a reload.
+    if (action?.proposal_id) {
+      try {
+        await apiPost(`/api/ai/proposals/${action.proposal_id}/reject`, {});
+        qc.invalidateQueries({ queryKey: ['proposals'] });
+        qc.invalidateQueries({ queryKey: ['ai-proposals'] });
+        qc.invalidateQueries({ queryKey: ['schedule-preview'] });
+      } catch { /* already decided elsewhere — still mark locally */ }
+    }
     setMessages(prev => prev.map(m => m.id !== msgId ? m : { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status: 'skipped' as const } : a) }));
-  }, []);
+  }, [messages, qc]);
 
   const isEmpty = messages.length === 0;
 
   return (
-    /* Full height minus the header (76px desktop, 16px+96px mobile) */
-    <div className="flex h-[calc(100vh-112px)] md:h-[calc(100vh-76px)] overflow-hidden bg-[#0e0e1c]">
+    <div className="flex h-full overflow-hidden bg-[#0e0e1c]">
 
-      {/* ── Left: Goal Health or Session History ── */}
-      <aside className="w-56 md:w-64 shrink-0 border-r border-white/6 bg-[#0b0b18] flex flex-col overflow-hidden">
-        {showHistory ? (
-          <SessionSidebar
-            activeSessionId={activeSessionId}
-            onSelect={loadSession}
-            onNew={startNewConversation}
-          />
-        ) : (
-          <GoalHealthPanel
-            onGoalClick={title =>
-              send(`Tell me about the schedule for "${title}" — is it feasible and what should I prioritize?`)
-            }
-          />
-        )}
-      </aside>
+      {/* ── Left rail: hidden by default — chat is the page, not a page-in-a-page ── */}
+      {railOpen && (
+        <aside className="w-56 md:w-64 shrink-0 border-r border-white/6 bg-[#0b0b18] flex flex-col overflow-hidden">
+          {showHistory ? (
+            <SessionSidebar
+              activeSessionId={activeSessionId}
+              onSelect={loadSession}
+              onNew={startNewConversation}
+            />
+          ) : (
+            <GoalHealthPanel
+              onGoalClick={title =>
+                send(`Tell me about the schedule for "${title}" — is it feasible and what should I prioritize?`)
+              }
+            />
+          )}
+        </aside>
+      )}
 
-      {/* ── Center: Chat ── */}
-      <div className="flex-1 flex flex-col overflow-hidden max-w-[520px]">
+      {/* ── Center: Chat (fills remaining width) ── */}
+      <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* Top bar */}
         <div className="shrink-0 flex items-center gap-3 px-5 h-14 border-b border-white/6">
@@ -713,8 +902,15 @@ export function CopilotView() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button
-              onClick={() => setShowHistory(x => !x)}
-              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${showHistory ? 'bg-indigo-500/20 text-indigo-400' : 'bg-white/6 text-gray-500 hover:text-gray-300'}`}
+              onClick={() => { if (railOpen && !showHistory) setRailOpen(false); else { setRailOpen(true); setShowHistory(false); } }}
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${railOpen && !showHistory ? 'bg-indigo-500/20 text-indigo-400' : 'bg-white/6 text-gray-500 hover:text-gray-300'}`}
+              title="Goal health panel"
+            >
+              <PanelLeft size={12} />
+            </button>
+            <button
+              onClick={() => { if (railOpen && showHistory) { setRailOpen(false); setShowHistory(false); } else { setRailOpen(true); setShowHistory(true); } }}
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${railOpen && showHistory ? 'bg-indigo-500/20 text-indigo-400' : 'bg-white/6 text-gray-500 hover:text-gray-300'}`}
               title="Conversation history"
             >
               <MessageSquare size={12} />
@@ -800,7 +996,32 @@ export function CopilotView() {
 
         {/* Input bar */}
         <div className="shrink-0 border-t border-white/6 px-4 py-3">
+          {attachment && (
+            <div className="flex items-center gap-2 mb-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/25 rounded-xl">
+              <Paperclip size={11} className="text-emerald-400 shrink-0" />
+              <span className="text-[11px] text-emerald-300 truncate flex-1">
+                {attachment.title} — uploaded to your library{attachment.indexing ? ', indexing…' : ' and indexed'}
+              </span>
+              <span className="text-[10px] font-mono text-gray-500">will be referenced in your next message</span>
+              <button onClick={() => setAttachment(null)} className="text-gray-500 hover:text-red-400"><X size={11} /></button>
+            </div>
+          )}
           <div className="flex items-end gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-2 focus-within:border-indigo-500/40 transition-colors">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.txt,.md,.csv,.png,.jpg,.jpeg,.gif,.webp"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadAttachment(f); e.target.value = ''; }}
+            />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading || isLoading}
+              className="w-8 h-8 shrink-0 rounded-xl text-gray-500 hover:text-indigo-300 hover:bg-white/5 disabled:opacity-30 flex items-center justify-center transition-colors"
+              title="Attach a file — it's added to your Resource Library, chunked for search, and the copilot can file it under a goal/task/milestone if you ask"
+            >
+              {uploading ? <RefreshCw size={14} className="animate-spin" /> : <Paperclip size={14} />}
+            </button>
             <textarea
               ref={inputRef}
               value={input}

@@ -332,6 +332,29 @@ router.post('/backfill', rateLimit(3, 60_000, 'embeddings-backfill'), async (_re
   res.json({ queued });
 });
 
+// GET /api/embeddings/status/:entityType/:entityId — per-entity embedding
+// inspection for the Testing workbench: is there a vector, is it stale, what
+// text was embedded, and what jobs are outstanding.
+router.get('/status/:entityType/:entityId', async (req, res) => {
+  const { entityType, entityId } = req.params;
+  const [{ rows: embRows }, { rows: jobRows }] = await Promise.all([
+    query(
+      `SELECT embedding_scope, embedding_model, embedding_dimension, is_stale, updated_at,
+              (embedding_3072 IS NOT NULL) AS has_vector,
+              LEFT(embedding_text, 400) AS embedded_text_preview
+       FROM embeddings WHERE entity_type=$1 AND entity_id=$2`,
+      [entityType, entityId],
+    ),
+    query(
+      `SELECT status, action, attempts, error, created_at, processed_at
+       FROM embedding_jobs WHERE entity_type=$1 AND (entity_id=$2 OR chunk_id=$2)
+       ORDER BY created_at DESC LIMIT 5`,
+      [entityType, entityId],
+    ),
+  ]);
+  res.json({ embeddings: embRows, recent_jobs: jobRows });
+});
+
 // GET /api/embeddings/stats
 router.get('/stats', async (_req, res) => {
   const [

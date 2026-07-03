@@ -18,6 +18,8 @@ export type EdgeRelationship =
   | 'linked_to';     // generic bidirectional
 
 // ─── Goals ──────────────────────────────────────────────────────────────────
+export type PlanStatus = 'not_started' | 'planned' | 'in_progress' | 'paused' | 'blocked' | 'completed';
+
 export interface DBGoal {
   id: string;
   title: string;
@@ -25,16 +27,26 @@ export interface DBGoal {
   category: string;
   status: 'Safe' | 'Watch' | 'Risky';
   progress: number;                    // 0–100
-  deadline: string | null;             // YYYY-MM-DD ISO date, or null
+  deadline: string | null;             // LEGACY (may hold vague strings) — use target_date
   overdue: boolean;
   activity_level: number;              // 1–5
   archived_at: string | null;          // null = visible, ISO date = archived
   created_at: string;
   updated_at: string;
+  // M-021 real date planning
+  start_date?: string | null;          // when work may begin
+  target_date?: string | null;         // when the user would like to finish
+  hard_deadline?: string | null;       // when it MUST be done
+  deadline_type?: 'soft' | 'hard' | 'estimated' | null;
+  deadline_confidence?: 'low' | 'medium' | 'high' | null;
+  scheduling_enabled?: boolean;        // may Amina place this on the calendar
+  estimated_minutes?: number | null;
+  plan_status?: PlanStatus;
 }
 
 // ─── Tasks (with subtask hierarchy) ─────────────────────────────────────────
-export type TaskStatus = 'todo' | 'in_progress' | 'inactive' | 'done' | 'blocked';
+// 'todo' is the legacy synonym of 'not_started'.
+export type TaskStatus = 'todo' | 'not_started' | 'planned' | 'in_progress' | 'paused' | 'inactive' | 'done' | 'blocked';
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type TaskKind = 'next_action' | 'critical_path' | 'ai_generated' | 'manual';
 export type CriticalPathStatus = 'Completed' | 'In Progress' | 'Future';
@@ -64,6 +76,15 @@ export interface DBTask {
   milestone_id?: string | null;
   created_at: string;
   updated_at: string;
+  // M-021 real date planning
+  target_date?: string | null;
+  hard_deadline?: string | null;
+  deadline_type?: 'soft' | 'hard' | 'estimated' | null;
+  deadline_confidence?: 'low' | 'medium' | 'high' | null;
+  scheduling_enabled?: boolean;
+  flexibility?: 'flexible' | 'fixed' | 'urgent' | null;
+  can_split?: boolean;
+  min_session_minutes?: number | null;
 }
 
 // ─── Goal Deadlines ──────────────────────────────────────────────────────────
@@ -315,7 +336,8 @@ export interface DBJournalEntry {
   summary: string | null;
   mood: string | null;             // positive|neutral|negative|stressed|energized|tired
   energy_level: number | null;     // 1–10
-  tags_json: string;               // JSON: string[]
+  tags_json: string;               // JSON: string[] — MANUAL tags, never overwritten by AI
+  ai_tags_json?: string;           // JSON: string[] — AI-extracted tags (M-017), kept separate
   ingestion_status: IngestionStatus;
   ingestion_attempts: number;
   ingestion_error: string | null;

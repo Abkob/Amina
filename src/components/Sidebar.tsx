@@ -1,20 +1,23 @@
-import { BookOpen, Target, FolderOpen, Settings as SettingsIcon, HelpCircle, Plus, BarChart2, Zap, ScrollText, Share2 } from 'lucide-react';
+import { BookOpen, Target, FolderOpen, Settings as SettingsIcon, HelpCircle, Plus, BarChart2, Zap, ScrollText, Share2, Tags, CalendarDays, FlaskConical } from 'lucide-react';
 import { useAppStore, type Tab } from '../store/useAppStore';
-import { NeedsImplementationBadge } from './NeedsImplementationBadge';
 
 const NAV: { id: Tab; label: string; Icon: React.ElementType; highlight?: boolean }[] = [
   { id: 'Copilot',    label: 'Copilot',    Icon: Zap,          highlight: true },
-  { id: 'Brain Dump', label: 'Brain Dump', Icon: BookOpen },
+  // Brain Dump + Journal are merged into one Capture destination (CaptureView
+  // segmented switch); both Tab ids still work for deep links.
+  { id: 'Brain Dump', label: 'Capture',    Icon: BookOpen },
   { id: 'Goals',      label: 'Goals',      Icon: Target },
-  { id: 'Journal',    label: 'Journal',    Icon: ScrollText },
   { id: 'Resources',  label: 'Resources',  Icon: FolderOpen },
   { id: 'Gantt',      label: 'Gantt',      Icon: BarChart2 },
   { id: 'Graph',      label: 'Graph',      Icon: Share2 },
+  { id: 'Topics',     label: 'Topics',     Icon: Tags },
+  { id: 'Schedule',   label: 'Schedule',   Icon: CalendarDays },
   { id: 'Settings',   label: 'Settings',   Icon: SettingsIcon },
+  { id: 'Testing',    label: 'Testing',    Icon: FlaskConical },
 ];
 
 export function Sidebar() {
-  const { currentTab, setCurrentTab, setFocusedResourceId, openNewGoalModal, openNewNoteModal, triggerToast } = useAppStore();
+  const { currentTab, setCurrentTab, setFocusedResourceId, openNewGoalModal, openNewNoteModal } = useAppStore();
 
   const handleNew = () => {
     if (currentTab === 'Goals') openNewGoalModal();
@@ -65,12 +68,12 @@ export function Sidebar() {
 
       <div className="flex flex-col gap-1 mt-auto pt-4 border-t border-gray-800">
         <button
-          onClick={() => triggerToast('Marina Copilot diagnostic reporting initialized.', 'info')}
+          onClick={() => setCurrentTab('Testing')}
           className="flex items-center gap-3 px-3 py-2 text-xs font-mono text-gray-400 hover:text-white transition-colors"
+          title="Open the Testing workbench — live system status and pipeline diagnostics"
         >
           <HelpCircle size={15} />
-          <span>Help</span>
-          <NeedsImplementationBadge className="ml-auto" />
+          <span>Diagnostics</span>
         </button>
         <div className="flex items-center gap-2.5 px-3 py-2.5 mt-2 bg-gray-900/50 rounded-lg">
           <div className="w-7 h-7 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0">

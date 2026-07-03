@@ -73,6 +73,53 @@ router.get('/', async (req, res) => {
   res.json(rows);
 });
 
+// GET /api/journal/day-stats?date=YYYY-MM-DD — the daily "book dashboard":
+// what the day produced across the whole system. Registered before '/:id'.
+router.get('/day-stats', async (req, res) => {
+  const date = String(req.query.date ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
+
+  const [entries, captures, links, sessions, newTasks, newResources, pendingProps] = await Promise.all([
+    query<{ n: string; unlinked: string; missing_summary: string }>(
+      `SELECT COUNT(*)::int n,
+              COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM journal_links jl WHERE jl.journal_entry_id = j.id))::int unlinked,
+              COUNT(*) FILTER (WHERE summary IS NULL)::int missing_summary
+       FROM journal_entries j WHERE entry_date = $1`, [date]),
+    query<{ n: string }>(`SELECT COUNT(*)::int n FROM notes WHERE LEFT(created_at, 10) = $1`, [date]),
+    query<{ target_type: string; title: string }>(
+      `SELECT DISTINCT jl.target_type, COALESCE(g.title, t.title, r.title, gm.title) AS title
+       FROM journal_links jl
+       JOIN journal_entries j ON j.id = jl.journal_entry_id AND j.entry_date = $1
+       LEFT JOIN goals g  ON jl.target_type='goal' AND jl.target_id=g.id
+       LEFT JOIN tasks t  ON jl.target_type='task' AND jl.target_id=t.id
+       LEFT JOIN resources r ON jl.target_type='resource' AND jl.target_id=r.id
+       LEFT JOIN goal_milestones gm ON jl.target_type='milestone' AND jl.target_id=gm.id`, [date]),
+    query<{ n: string; mins: string }>(
+      `SELECT COUNT(DISTINCT ws.task_id)::int n, COALESCE(SUM(ws.minutes),0)::int mins
+       FROM work_sessions ws WHERE LEFT(ws.started_at, 10) = $1 AND ws.task_id IS NOT NULL`, [date]),
+    query<{ n: string }>(`SELECT COUNT(*)::int n FROM tasks WHERE LEFT(created_at, 10) = $1`, [date]),
+    query<{ n: string }>(`SELECT COUNT(*)::int n FROM resources WHERE LEFT(created_at, 10) = $1`, [date]),
+    query<{ n: string }>(
+      `SELECT COUNT(*)::int n FROM ai_action_proposals p
+       JOIN journal_entries j ON p.source_type='journal_entry' AND p.source_id=j.id
+       WHERE j.entry_date = $1 AND p.status='pending'`, [date]),
+  ]);
+
+  res.json({
+    date,
+    entries: Number(entries.rows[0]?.n ?? 0),
+    captures: Number(captures.rows[0]?.n ?? 0),
+    unlinked_entries: Number(entries.rows[0]?.unlinked ?? 0),
+    entries_missing_summary: Number(entries.rows[0]?.missing_summary ?? 0),
+    touched: links.rows,
+    tasks_progressed: Number(sessions.rows[0]?.n ?? 0),
+    minutes_logged: Number(sessions.rows[0]?.mins ?? 0),
+    tasks_created: Number(newTasks.rows[0]?.n ?? 0),
+    resources_added: Number(newResources.rows[0]?.n ?? 0),
+    pending_candidates: Number(pendingProps.rows[0]?.n ?? 0),
+  });
+});
+
 // GET /api/journal/:id
 router.get('/:id', async (req, res) => {
   const { rows } = await query('SELECT * FROM journal_entries WHERE id=$1', [req.params.id]);
@@ -81,30 +128,49 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/journal
+// Optional source_note_id ties the entry to a Capture note: logging the same
+// note again UPDATES the existing entry (raw_text + re-ingestion, replacing
+// AI-derived rows while manual tags/links survive) instead of duplicating.
 router.post('/', async (req, res) => {
   const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-  const { raw_text, entry_date, mood, energy_level, tags_json } = req.body as Record<string, unknown>;
+  const { raw_text, entry_date, mood, energy_level, tags_json, source_note_id } = req.body as Record<string, unknown>;
   if (!raw_text) return res.status(400).json({ error: 'raw_text required' });
 
   const content_hash = crypto.createHash('sha256').update(raw_text as string).digest('hex');
   const dateStr = (entry_date as string) ?? localDateStr();
 
-  // Outbox pattern: journal row + embedding job in one transaction so the job
-  // is never silently lost if the server crashes between the two inserts.
-  await transaction(async (client) => {
-    await client.query(
-      `INSERT INTO journal_entries (id,entry_date,raw_text,mood,energy_level,tags_json,ingestion_status,ingestion_attempts,content_hash,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,'pending',0,$7,$8,$9)`,
-      [id, dateStr, raw_text, mood ?? null, energy_level ?? null, tags_json ?? '[]', content_hash, now, now],
+  if (typeof source_note_id === 'string' && source_note_id) {
+    const { rows: existing } = await query<{ id: string; content_hash: string }>(
+      'SELECT id, content_hash FROM journal_entries WHERE source_note_id=$1',
+      [source_note_id],
     );
-    await client.query(
-      `INSERT INTO embedding_jobs (id, entity_type, entity_id, chunk_id, action, priority, status, attempts, created_at)
-       VALUES ($1, 'journal_entry', $2, NULL, 'upsert', 8, 'pending', 0, $3)
-       ON CONFLICT DO NOTHING`,
-      [crypto.randomUUID(), id, now],
-    );
-  });
+    if (existing.length) {
+      const entry = existing[0];
+      if (entry.content_hash === content_hash) {
+        // Identical text — nothing to re-process
+        return res.json({ id: entry.id, ingestion_status: 'unchanged', deduped: true });
+      }
+      await query(
+        `UPDATE journal_entries SET raw_text=$1, content_hash=$2, ingestion_status='pending', ingestion_attempts=0, updated_at=$3 WHERE id=$4`,
+        [raw_text, content_hash, now, entry.id],
+      );
+      markEmbeddingStale('journal_entry', entry.id).catch(() => {});
+      res.json({ id: entry.id, ingestion_status: 'pending', updated: true });
+      ingestJournalEntry(entry.id).catch(err => console.error('[journal] re-ingest from note:', err));
+      return;
+    }
+  }
+
+  const id = crypto.randomUUID();
+  // No embedding job here: embedding a journal before extraction commits its
+  // summary produces a semantically empty vector (just the date). The job is
+  // enqueued inside the ingestion transaction, atomically with the summary.
+  // Durability: entries stuck in 'pending' are re-driven by the retry loop.
+  await query(
+    `INSERT INTO journal_entries (id,entry_date,raw_text,mood,energy_level,tags_json,ingestion_status,ingestion_attempts,content_hash,source_note_id,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'pending',0,$7,$8,$9,$10)`,
+    [id, dateStr, raw_text, mood ?? null, energy_level ?? null, tags_json ?? '[]', content_hash, (source_note_id as string) ?? null, now, now],
+  );
 
   res.json({ id, ingestion_status: 'pending' });
 
@@ -146,11 +212,13 @@ router.patch('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const entryId = req.params.id;
   await transaction(async (client) => {
+    // Capture linked targets BEFORE deleting links — the digest cleanup below
+    // needs them, and deleting links first would make the subquery match nothing.
+    await client.query("DELETE FROM entity_summaries WHERE summary_type='journal_digest' AND entity_id IN (SELECT DISTINCT target_id FROM journal_links WHERE journal_entry_id=$1)", [entryId]);
     // Clean all AI-derived/linked data first so nothing orphans
     await client.query('DELETE FROM journal_links WHERE journal_entry_id=$1', [entryId]);
     await client.query("DELETE FROM extracted_facts WHERE source_type='journal_entry' AND source_id=$1", [entryId]);
     await client.query('DELETE FROM work_sessions WHERE journal_entry_id=$1', [entryId]);
-    await client.query("DELETE FROM entity_summaries WHERE summary_type='journal_digest' AND entity_id IN (SELECT DISTINCT target_id FROM journal_links WHERE journal_entry_id=$1)", [entryId]);
     // Cancel pending/failed embedding jobs for this journal entry
     await client.query(
       "DELETE FROM embedding_jobs WHERE entity_type='journal_entry' AND entity_id=$1 AND status IN ('pending','failed')",
@@ -180,6 +248,62 @@ router.get('/:id/links', async (req, res) => {
     [req.params.id],
   );
   res.json(rows);
+});
+
+// ─── Manual link CRUD ────────────────────────────────────────────────────────
+// Manual links are authoritative: ingestion only ever replaces created_by='ai'
+// rows, so links created here survive extraction and re-extraction.
+
+const MANUAL_LINK_TARGETS: Record<string, string> = {
+  goal: 'goals',
+  task: 'tasks',
+  milestone: 'goal_milestones',
+  resource: 'resources',
+  meeting: 'meetings',
+};
+
+// POST /api/journal/:id/links — create a manual link to a canonical entity
+router.post('/:id/links', async (req, res) => {
+  const { target_type, target_id, relationship } = req.body as Record<string, unknown>;
+  if (typeof target_type !== 'string' || !MANUAL_LINK_TARGETS[target_type]) {
+    return res.status(400).json({ error: `target_type must be one of: ${Object.keys(MANUAL_LINK_TARGETS).join(', ')}` });
+  }
+  if (typeof target_id !== 'string' || !target_id) {
+    return res.status(400).json({ error: 'target_id required' });
+  }
+  const rel = typeof relationship === 'string' && relationship ? relationship : 'mentions';
+
+  const { rows: entryRows } = await query('SELECT id FROM journal_entries WHERE id=$1', [req.params.id]);
+  if (!entryRows.length) return res.status(404).json({ error: 'Journal entry not found' });
+
+  const { rows: targetRows } = await query(
+    `SELECT id FROM ${MANUAL_LINK_TARGETS[target_type]} WHERE id=$1`, [target_id],
+  );
+  if (!targetRows.length) return res.status(404).json({ error: `${target_type} not found` });
+
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  // If an AI link to the same target already exists, promote it to manual so
+  // it can no longer be replaced by re-ingestion.
+  const { rows: inserted } = await query(
+    `INSERT INTO journal_links (id,journal_entry_id,target_type,target_id,relationship,confidence,created_by,created_at)
+     VALUES ($1,$2,$3,$4,$5,1.0,'manual',$6)
+     ON CONFLICT (journal_entry_id, target_type, target_id)
+     DO UPDATE SET created_by='manual', confidence=1.0, relationship=EXCLUDED.relationship
+     RETURNING *`,
+    [id, req.params.id, target_type, target_id, rel, now],
+  );
+  res.status(201).json(inserted[0]);
+});
+
+// DELETE /api/journal/:id/links/:linkId — remove a link (manual or AI)
+router.delete('/:id/links/:linkId', async (req, res) => {
+  const { rowCount } = await query(
+    'DELETE FROM journal_links WHERE id=$1 AND journal_entry_id=$2',
+    [req.params.linkId, req.params.id],
+  );
+  if (!rowCount) return res.status(404).json({ error: 'Link not found' });
+  res.json({ ok: true });
 });
 
 // POST /api/journal/:id/ingest — manually re-trigger ingestion
@@ -326,11 +450,28 @@ ${entry.raw_text}
       await qry("DELETE FROM journal_links WHERE journal_entry_id=$1 AND created_by='ai'", [entryId]);
       await qry("DELETE FROM extracted_facts WHERE source_type='journal_entry' AND source_id=$1", [entryId]);
 
+      // AI tags go to ai_tags_json — the user's manual tags_json is never
+      // touched by ingestion (manual assertions are authoritative).
       await qry(
-        `UPDATE journal_entries SET summary=$1, mood=$2, energy_level=$3, tags_json=$4,
+        `UPDATE journal_entries SET summary=$1, mood=$2, energy_level=$3, ai_tags_json=$4,
          ingestion_status='processed', updated_at=$5 WHERE id=$6`,
         [parsed.summary ?? null, parsed.mood ?? null, parsed.energy_level ?? null,
          JSON.stringify(parsed.tags), now, entryId],
+      );
+
+      // Enqueue the semantic embedding atomically with the summary commit so
+      // the embedded text always includes the committed summary. The M-016
+      // partial unique index dedups concurrent pending jobs.
+      await qry(
+        `INSERT INTO embedding_jobs (id, entity_type, entity_id, chunk_id, action, priority, status, attempts, created_at)
+         VALUES ($1, 'journal_entry', $2, NULL, 'upsert', 8, 'pending', 0, $3)
+         ON CONFLICT DO NOTHING`,
+        [crypto.randomUUID(), entryId, now],
+      );
+      // Any pre-existing embedding is now stale — the worker's upsert replaces it.
+      await qry(
+        `UPDATE embeddings SET is_stale=true, updated_at=$1 WHERE entity_type='journal_entry' AND entity_id=$2`,
+        [now, entryId],
       );
 
       for (const link of parsed.links) {
@@ -374,6 +515,15 @@ ${entry.raw_text}
            entryId, (entry.entry_date as string) + 'T09:00:00', ws.minutes, ws.notes, now],
         );
         if (ws.task_id) newSessionTaskIds.add(ws.task_id);
+      }
+
+      // Logged work moves dormant tasks to in_progress (status truth rule)
+      if (newSessionTaskIds.size) {
+        await qry(
+          `UPDATE tasks SET status='in_progress', updated_at=$1
+           WHERE id = ANY($2) AND status IN ('todo','not_started','planned')`,
+          [now, [...newSessionTaskIds]],
+        );
       }
 
       // Recalculate actual_minutes for ALL affected tasks: both previously-linked
@@ -461,6 +611,80 @@ ${entry.raw_text}
     generateJournalDigestSummary(link.target_type, link.target_id)
       .catch(err => console.warn('[journal] journal_digest refresh failed:', err));
   }
+
+  // Choice A — tags ARE topics: manual tags join matching topics outright,
+  // AI-extracted tags only suggest (shared logic in topicTagSync).
+  (async () => {
+    try {
+      const { syncTagsToTopics, parseTags } = await import('../services/topicTagSync.js');
+      const { rows } = await query<{ tags_json: string }>('SELECT tags_json FROM journal_entries WHERE id=$1', [entryId]);
+      await syncTagsToTopics('journal_entry', entryId, parseTags(rows[0]?.tags_json), 'manual');
+      await syncTagsToTopics('journal_entry', entryId, parsed.tags, 'ai');
+    } catch (err) {
+      console.warn('[journal] tag→topic matching failed:', err);
+    }
+  })();
+
+  // Cluster-suggestion step of the ingestion pipeline: new journal content may
+  // surface new topic candidates. Delayed so the journal's fresh embedding
+  // (enqueued in the transaction above) has a chance to be computed first.
+  setTimeout(() => {
+    import('./topics.js')
+      .then(({ runSuggestionGeneration }) => runSuggestionGeneration(null, 'journal_ingestion'))
+      .then(r => {
+        if (r.suggestions_created > 0) {
+          log('info', 'journal-ingest', 'Post-ingestion suggestion run created candidates', {
+            entry_id: entryId, run_id: r.run_id, created: r.suggestions_created,
+          }, cid);
+        }
+      })
+      .catch(err => console.warn('[journal] post-ingestion suggestion run failed:', err));
+  }, 45_000).unref?.();
+}
+
+/**
+ * End-of-day rollup: capture-wall notes from PAST days that were never
+ * individually logged get bound into one journal entry per day (source
+ * 'capture_rollup'), which then flows through normal AI ingestion. Runs from
+ * the server interval; idempotent (skips days that already have a rollup).
+ */
+export async function rollupCaptureWalls(): Promise<number> {
+  const today = localDateStr();
+  const { rows: days } = await query<{ day: string }>(
+    `SELECT DISTINCT LEFT(n.created_at, 10) AS day
+     FROM notes n
+     WHERE LEFT(n.created_at, 10) < $1
+       AND NOT EXISTS (SELECT 1 FROM journal_entries j WHERE j.source = 'capture_rollup' AND j.entry_date = LEFT(n.created_at, 10))
+       AND NOT EXISTS (SELECT 1 FROM journal_entries j2 WHERE j2.source_note_id = n.id)
+     ORDER BY day DESC LIMIT 7`,
+  );
+  let created = 0;
+  for (const { day } of days) {
+    const { rows: notes } = await query<{ content: string; created_at: string; id: string }>(
+      `SELECT id, content, created_at FROM notes WHERE LEFT(created_at, 10) = $1 ORDER BY created_at ASC`,
+      [day],
+    );
+    // Only roll up notes not already individually journaled
+    const { rows: journaled } = await query<{ source_note_id: string }>(
+      `SELECT source_note_id FROM journal_entries WHERE source_note_id = ANY($1)`,
+      [notes.map(n => n.id)],
+    );
+    const skip = new Set(journaled.map(j => j.source_note_id));
+    const strip = (html: string) => html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+    const parts = notes.filter(n => !skip.has(n.id)).map(n => strip(n.content)).filter(Boolean);
+    if (!parts.length) continue;
+    const rawText = parts.join('\n\n---\n\n');
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    await query(
+      `INSERT INTO journal_entries (id,entry_date,raw_text,tags_json,ingestion_status,ingestion_attempts,content_hash,source,created_at,updated_at)
+       VALUES ($1,$2,$3,'[]','pending',0,$4,'capture_rollup',$5,$5)`,
+      [id, day, rawText, crypto.createHash('sha256').update(rawText).digest('hex'), now],
+    );
+    created++;
+    ingestJournalEntry(id).catch(err => console.error('[journal] rollup ingest:', err));
+  }
+  return created;
 }
 
 export { router as journalRouter };
