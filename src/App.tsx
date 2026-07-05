@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { apiFetch, setMutationListener } from './utils/apiFetch';
 
@@ -15,8 +15,8 @@ import { CaptureView }      from './views/CaptureView';
 import { GoalsDashboard }   from './views/GoalsDashboard';
 import { GoalDetail }       from './views/GoalDetail';
 import { TaskFocusView }    from './views/TaskFocusView';
+import { WorkView }         from './views/WorkView';
 import { ResourcesView }    from './views/ResourcesView';
-import { GanttView }        from './views/GanttView';
 import { SettingsView }     from './views/SettingsView';
 import { CopilotView }      from './views/CopilotView';
 import { GraphView }        from './views/GraphView';
@@ -83,7 +83,7 @@ function AppInner() {
     currentTab, selectedGoalId, focusedTaskId,
     setSelectedGoalId, setFocusedTaskId,
     newGoalModalOpen, newNoteModalOpen, newEventModalOpen, addResourceModalOpen,
-    confirmOpen,
+    confirmOpen, sidebarCollapsed,
   } = useAppStore();
 
   // Validate that persisted selectedGoalId still exists
@@ -115,10 +115,11 @@ function AppInner() {
     if (currentTab === 'Journal')   return <CaptureView />;
     if (currentTab === 'Graph')     return <GraphView />;
     if (currentTab === 'Topics')    return <TopicsView />;
+    if (currentTab === 'Work')      return <WorkView />;
     if (currentTab === 'Schedule')  return <ScheduleView />;
+    if (currentTab === 'Gantt')     return <ScheduleView initialPage="timeline" />;
     if (currentTab === 'Testing')   return <TestingView />;
     if (currentTab === 'Resources') return <ResourcesView />;
-    if (currentTab === 'Gantt')     return <GanttView />;
     if (currentTab === 'Settings')  return <SettingsView />;
     return null;
   };
@@ -135,7 +136,7 @@ function AppInner() {
       <Sidebar />
       <Header />
       <main
-        className={`flex-1 w-full md:pl-[260px] overflow-x-hidden ${
+        className={`flex-1 w-full ${sidebarCollapsed ? 'md:pl-[64px]' : 'md:pl-[260px]'} transition-[padding] duration-200 overflow-x-hidden ${
           isFullBleed
             ? 'pt-16 md:pt-16 h-screen overflow-y-hidden'
             : 'pt-4 md:pt-[76px] pb-24 md:pb-8 min-h-screen'
@@ -150,7 +151,9 @@ function AppInner() {
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className="h-full"
           >
-            {renderContent()}
+            <Suspense fallback={<div className="p-8 text-sm text-gray-400">Loading…</div>}>
+              {renderContent()}
+            </Suspense>
           </motion.div>
         </AnimatePresence>
       </main>

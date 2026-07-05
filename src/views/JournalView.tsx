@@ -333,7 +333,6 @@ export function JournalView() {
   const [range, setRange] = useState<'7d' | '30d' | 'all'>('30d');
   const [jumpDate, setJumpDate] = useState('');
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<'timeline' | 'shelf'>('timeline');
   const { data: entries, isLoading } = useJournalEntries();
   const invalidate = useInvalidate();
   const { triggerToast } = useAppStore();
@@ -378,21 +377,6 @@ export function JournalView() {
         <div>
           <h1 className="font-headline text-2xl font-bold text-white mb-1">Journal</h1>
           <p className="text-sm text-gray-500">Every day is a book. The AI extracts tasks, links, and time from every entry.</p>
-        </div>
-        <div className="flex rounded-lg border border-gray-700 bg-gray-900 p-0.5 shrink-0">
-          <button
-            onClick={() => setView('timeline')}
-            className={`px-2.5 py-1 rounded-md text-[10px] font-mono uppercase ${view === 'timeline' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
-          >
-            Timeline
-          </button>
-          <button
-            onClick={() => setView('shelf')}
-            className={`px-2.5 py-1 rounded-md text-[10px] font-mono uppercase ${view === 'shelf' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
-            title="Bookshelf — months are shelves, each day is a book; thicker book = more entries"
-          >
-            Shelf
-          </button>
         </div>
       </div>
 
@@ -507,117 +491,6 @@ export function JournalView() {
               show {hiddenCount} older entr{hiddenCount === 1 ? 'y' : 'ies'} ↓
             </button>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Bookshelf: months are shelves, days are books, thickness = entry count ──
-
-function Bookshelf({ entries, onOpenDay }: { entries: DBJournalEntry[]; onOpenDay: (day: string) => void }) {
-  const byDay = new Map<string, number>();
-  for (const e of entries) byDay.set(e.entry_date, (byDay.get(e.entry_date) ?? 0) + 1);
-  const byMonth = new Map<string, Array<{ day: string; count: number }>>();
-  for (const [day, count] of byDay) {
-    const month = day.slice(0, 7);
-    if (!byMonth.has(month)) byMonth.set(month, []);
-    byMonth.get(month)!.push({ day, count });
-  }
-  const months = [...byMonth.keys()].sort((a, b) => b.localeCompare(a));
-  const SPINES = ['#6366f1', '#8b5cf6', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#f97316'];
-  const spineOf = (day: string) => SPINES[Number(day.slice(8, 10)) % SPINES.length];
-
-  if (!months.length) {
-    return <p className="text-center text-gray-600 text-sm py-16">The shelf is empty — log a day and its book appears here.</p>;
-  }
-
-  return (
-    <div className="space-y-8" style={{ perspective: '900px' }}>
-      {months.map(month => (
-        <div key={month}>
-          <p className="text-[11px] font-mono uppercase tracking-widest text-gray-500 mb-2">
-            {new Date(month + '-15T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-          </p>
-          {/* the shelf */}
-          <div className="flex items-end gap-1.5 px-3 pt-2 pb-0 min-h-[120px] flex-wrap">
-            {byMonth.get(month)!.sort((a, b) => a.day.localeCompare(b.day)).map(({ day, count }) => (
-              <button
-                key={day}
-                onClick={() => onOpenDay(day)}
-                className="group relative rounded-t-sm transition-transform duration-200 hover:-translate-y-2 hover:rotate-0"
-                style={{
-                  width: `${Math.min(58, 18 + count * 8)}px`,
-                  height: `${96 + Math.min(24, count * 4)}px`,
-                  background: `linear-gradient(105deg, ${spineOf(day)} 88%, rgba(0,0,0,0.35) 100%)`,
-                  boxShadow: 'inset 2px 0 0 rgba(255,255,255,0.25), 2px 3px 8px rgba(0,0,0,0.45)',
-                  transform: 'rotateY(-8deg)',
-                }}
-                title={`${new Date(day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} — ${count} entr${count === 1 ? 'y' : 'ies'}. Open the book.`}
-              >
-                <span
-                  className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white/90"
-                  style={{ writingMode: 'vertical-rl' }}
-                >
-                  {new Date(day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                </span>
-                <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] font-mono text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                  {count} entr{count === 1 ? 'y' : 'ies'}
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="h-2 rounded-sm bg-gradient-to-b from-gray-700 to-gray-800 shadow-[0_4px_8px_rgba(0,0,0,0.5)]" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Daily dashboard (the first "page" of an opened book) ─────────────────────
-
-interface DayStats {
-  date: string; entries: number; captures: number; unlinked_entries: number;
-  entries_missing_summary: number; touched: Array<{ target_type: string; title: string | null }>;
-  tasks_progressed: number; minutes_logged: number; tasks_created: number;
-  resources_added: number; pending_candidates: number;
-}
-
-function DayDashboard({ date }: { date: string }) {
-  const { data: s } = useQuery<DayStats>({
-    queryKey: ['journal-day-stats', date],
-    queryFn: () => apiFetch<DayStats>(`/api/journal/day-stats?date=${date}`),
-  });
-  if (!s) return null;
-  const stat = (label: string, v: number, warn = false) => (
-    <div className="text-center px-2">
-      <p className={`text-lg font-bold ${warn && v > 0 ? 'text-amber-400' : 'text-gray-200'}`}>{v}</p>
-      <p className="text-[9px] font-mono uppercase tracking-wider text-gray-500">{label}</p>
-    </div>
-  );
-  return (
-    <div className="bg-surface border border-gray-700 rounded-xl p-4 mb-4">
-      <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-3">Day dashboard</p>
-      <div className="flex flex-wrap gap-y-3 divide-x divide-gray-800">
-        {stat('entries', s.entries)}
-        {stat('captures', s.captures)}
-        {stat('mins logged', s.minutes_logged)}
-        {stat('tasks touched', s.tasks_progressed)}
-        {stat('tasks created', s.tasks_created)}
-        {stat('resources', s.resources_added)}
-        {stat('to review', s.pending_candidates, true)}
-        {stat('unlinked', s.unlinked_entries, true)}
-      </div>
-      {s.touched.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gray-800">
-          <p className="text-[9px] font-mono uppercase tracking-wider text-gray-500 mb-1">Touched</p>
-          <div className="flex flex-wrap gap-1.5">
-            {s.touched.map((t, i) => (
-              <span key={i} className="text-[10px] font-mono bg-gray-800 text-gray-300 px-1.5 py-0.5 rounded-full">
-                <span className="text-gray-500">{t.target_type}:</span> {t.title ?? '?'}
-              </span>
-            ))}
-          </div>
         </div>
       )}
     </div>

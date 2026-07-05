@@ -59,14 +59,18 @@ export function getTaskEstimatedMinutes(task: DBTask): number | null {
 }
 
 export interface RolledUpTime {
-  /** Total minutes: own overhead + children sum (or just one, or null). */
+  /** Total minutes after child time inclusion rules are applied. */
   minutes: number | null;
   /** True when any children contributed to the total. */
   isRollup: boolean;
-  /** Own explicit time on this task — treated as overhead when children also have times. */
+  /** Own explicit time on this task. */
   ownMinutes: number | null;
   /** Raw sum of direct children's totals (null when no children have times). */
   childrenSum: number | null;
+  /** Direct child totals that are included inside this task's own estimate. */
+  includedChildrenSum?: number | null;
+  /** Direct child totals that add extra time on top of this task's own estimate. */
+  extraChildrenSum?: number | null;
 }
 
 function getLeafDescendants(taskId: string, allTasks: DBTask[]): DBTask[] {
@@ -160,12 +164,12 @@ export function getTaskTimeProgress(task: DBTask, allTasks: DBTask[]): TaskTimeP
 }
 
 /**
- * Additive overhead model:
+ * Mixed parent estimate model:
  *   - Leaf (no children): use own explicit time.
- *   - Parent with timed children but no own time: total = Σ children.
- *   - Parent with timed children AND own time: total = own + Σ children.
- *     Own time represents real work at this level (planning, coordination, etc.)
- *     that doesn't belong to any subtask.
+ *   - Parent with timed children but no own time: total = all children.
+ *   - Parent with own time: each child can either add extra time, or sit inside
+ *     the parent's rough estimate. The child's time_rollup_mode controls that
+ *     relationship to its parent.
  */
 export function getRolledUpTime(task: DBTask, allTasks: DBTask[]): RolledUpTime {
   const directChildren = allTasks.filter(t => t.parent_task_id === task.id);
@@ -175,13 +179,18 @@ export function getRolledUpTime(task: DBTask, allTasks: DBTask[]): RolledUpTime 
     return { minutes: ownMinutes, isRollup: false, ownMinutes, childrenSum: null };
   }
 
-  let sum = 0;
+  let includedSum = 0;
+  let extraSum = 0;
   let anyChildHasTime = false;
 
   for (const child of directChildren) {
     const childResult = getRolledUpTime(child, allTasks);
     if (childResult.minutes !== null) {
-      sum += childResult.minutes;
+      if (child.time_rollup_mode === 'inclusive') {
+        includedSum += childResult.minutes;
+      } else {
+        extraSum += childResult.minutes;
+      }
       anyChildHasTime = true;
     }
   }
@@ -190,8 +199,17 @@ export function getRolledUpTime(task: DBTask, allTasks: DBTask[]): RolledUpTime 
     return { minutes: ownMinutes, isRollup: false, ownMinutes, childrenSum: null };
   }
 
-  const childrenSum = sum;
-  const total = ownMinutes !== null ? ownMinutes + childrenSum : childrenSum;
+  const childrenSum = includedSum + extraSum;
+  const total = ownMinutes !== null
+    ? Math.max(ownMinutes, includedSum) + extraSum
+    : childrenSum;
 
-  return { minutes: total, isRollup: true, ownMinutes, childrenSum };
+  return {
+    minutes: total,
+    isRollup: true,
+    ownMinutes,
+    childrenSum,
+    includedChildrenSum: includedSum > 0 ? includedSum : null,
+    extraChildrenSum: extraSum > 0 ? extraSum : null,
+  };
 }

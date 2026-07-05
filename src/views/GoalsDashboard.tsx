@@ -10,6 +10,7 @@ import { getGoalFinishEstimate, type GoalFinishEstimate } from '../utils/goalFin
 import { calculateGoalTaskMetrics, computeGoalStatus, getClosestDueTask, type GoalTaskMetrics, type ClosestDue } from '../utils/goalTaskMetrics';
 import { computeGoalTimeStats, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
 import type { DBGoal, DBTask } from '../db/schema';
+import { DatabaseAtlas } from '../components/DatabaseAtlas';
 
 const STATUS_BG   = { Safe: 'bg-[#10B981]', Watch: 'bg-[#F59E0B]', Risky: 'bg-[#EF4444]' };
 const STATUS_TEXT = { Safe: 'text-[#10B981]', Watch: 'text-[#F59E0B]', Risky: 'text-[#EF4444]' };
@@ -258,7 +259,7 @@ export function GoalsDashboard() {
   const atRisk   = visibleGoals.filter((g) => computeGoalStatus(g, tasksByGoal[g.id] ?? []) === 'Risky').length;
 
   return (
-    <div className="max-w-[1000px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
+    <div className="max-w-[1480px] mx-auto px-4 md:px-10 py-6 animate-fade-in">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
           <h2 className="font-headline text-2xl font-bold text-black mb-1">Goals</h2>
@@ -330,6 +331,8 @@ export function GoalsDashboard() {
           ))}
         </div>
       )}
+
+      <DatabaseAtlas />
     </div>
   );
 }

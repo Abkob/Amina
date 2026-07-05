@@ -50,6 +50,7 @@ export type TaskStatus = 'todo' | 'not_started' | 'planned' | 'in_progress' | 'p
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type TaskKind = 'next_action' | 'critical_path' | 'ai_generated' | 'manual';
 export type CriticalPathStatus = 'Completed' | 'In Progress' | 'Future';
+export type TaskTimeRollupMode = 'additive' | 'inclusive';
 
 export interface DBTask {
   id: string;
@@ -65,6 +66,7 @@ export interface DBTask {
   due_date: string | null;             // ISO date ("YYYY-MM-DD") or datetime ("YYYY-MM-DDTHH:MM")
   estimated_duration: string | null;   // e.g. "Est. 2 hrs"
   estimated_minutes?: number | null;   // normalized time needed for scheduling
+  time_rollup_mode?: TaskTimeRollupMode; // additive = extra in parent, inclusive = inside parent estimate
   actual_minutes?: number | null;      // logged after task is completed
   weight_percent?: number | null;      // optional explicit progress weight, 0-100
   completed: boolean;

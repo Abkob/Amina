@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   start_date           TEXT,
   estimated_duration   TEXT,
   estimated_minutes    INTEGER,
+  time_rollup_mode     TEXT    NOT NULL DEFAULT 'additive' CHECK (time_rollup_mode IN ('additive','inclusive')),
   actual_minutes       INTEGER,
   weight_percent       REAL,
   completed            BOOLEAN NOT NULL DEFAULT false,
@@ -778,6 +779,8 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduling_enabled BOOLEAN NOT NULL D
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS flexibility TEXT CHECK (flexibility IN ('flexible','fixed','urgent') OR flexibility IS NULL);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS can_split BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS min_session_minutes INTEGER;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS time_rollup_mode TEXT NOT NULL DEFAULT 'additive'
+  CHECK (time_rollup_mode IN ('additive','inclusive'));
 
 ALTER TABLE goal_milestones ADD COLUMN IF NOT EXISTS start_date TEXT;
 ALTER TABLE goal_milestones ADD COLUMN IF NOT EXISTS hard_deadline TEXT;

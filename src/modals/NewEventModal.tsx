@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
 import { createEvent } from '../db/queries/events';
+import { fmtYMD, mondayOf } from '../utils/calendar';
 import type { EventType } from '../db/schema';
 
 const DAYS  = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -41,7 +42,9 @@ export function NewEventModal() {
       duration_hours: duration,
       time_str:       `${fmtTime(startHour)} - ${fmtTime(endHour)}`,
       description:    desc || 'Custom scheduled block designed to support task execution.',
-      week_start:     null,
+      // Anchor to the current week so the block lands on a real date on the
+      // Schedule calendar (null would make it repeat every week).
+      week_start:     mondayOf(fmtYMD(new Date())),
       connected_resource_json: null,
       locked: false,
       source: 'manual',

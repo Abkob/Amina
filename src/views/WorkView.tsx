@@ -1,0 +1,544 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CheckCircle2, Circle, Clock, FileText, Paperclip, Play, Plus, Search,
+  Square, Timer, Trash2, Upload, X,
+} from 'lucide-react';
+import {
+  useAllTasks, useCreateWorkSession, useDeleteWorkSession, useGoals,
+  useInvalidate, useNoteFiles, useTask, useTaskNotes, useTaskWorkSessions,
+} from '../api/hooks';
+import { EntityTopicChips } from '../components/EntityTopicChips';
+import { TaskTree } from '../components/TaskTree';
+import { FileViewerModal } from '../components/FileViewerModal';
+import { useAppStore } from '../store/useAppStore';
+import type { DBTask, DBTaskNote, DBTaskNoteFile } from '../db/schema';
+import { addTaskNote, deleteTaskNote, toggleTask, touchTask } from '../db/queries/tasks';
+import { addNoteFile, deleteNoteFile } from '../db/queries/noteFiles';
+import { formatTaskTime, getTaskEstimatedMinutes } from '../utils/taskTime';
+import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
+
+const TIMER_KEY = 'marina-work-active-timer';
+
+type ActiveTimer = {
+  taskId: string;
+  startedAt: string;
+  notes: string;
+};
+
+function formatStopwatch(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function toDateTimeLocal(value: string | Date) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function formatSessionDate(value: string) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return 'Unknown';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function FileChip({ file, onView }: { file: DBTaskNoteFile; onView: () => void }) {
+  const invalidate = useInvalidate();
+  const { triggerToast } = useAppStore();
+  const isViewable = file.mime_type.startsWith('image/') || file.mime_type === 'application/pdf';
+
+  const remove = async () => {
+    await deleteNoteFile(file.id);
+    invalidate.noteFiles(file.note_id);
+    triggerToast('File removed.', 'info');
+  };
+
+  return (
+    <span className="group/file inline-flex max-w-full items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px] shadow-sm">
+      <FileText size={11} className="shrink-0 text-gray-400" />
+      <button
+        onClick={isViewable ? onView : undefined}
+        className={`min-w-0 truncate font-medium ${isViewable ? 'text-gray-700 hover:text-[#4648d4]' : 'text-gray-500'}`}
+        title={file.name}
+      >
+        {file.name}
+      </button>
+      <button onClick={remove} className="text-gray-300 opacity-0 transition-opacity hover:text-red-400 group-hover/file:opacity-100">
+        <X size={10} />
+      </button>
+    </span>
+  );
+}
+
+function WorkNoteItem({
+  note,
+  onDelete,
+  onViewFile,
+}: {
+  note: DBTaskNote;
+  onDelete: () => void;
+  onViewFile: (file: DBTaskNoteFile) => void;
+}) {
+  const { data: files = [] } = useNoteFiles(note.id);
+
+  return (
+    <article className="group/note border-b border-gray-100 py-3 last:border-0">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <time className="font-mono text-[9px] uppercase tracking-widest text-gray-300">
+          {formatSessionDate(note.created_at)} {new Date(note.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+        </time>
+        <button onClick={onDelete} className="text-gray-200 opacity-0 transition-opacity hover:text-red-400 group-hover/note:opacity-100">
+          <Trash2 size={12} />
+        </button>
+      </div>
+      {note.content && note.content !== '-' && (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{note.content}</p>
+      )}
+      {files.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {files.map(file => (
+            <FileChip key={file.id} file={file} onView={() => onViewFile(file)} />
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function WorkView() {
+  const {
+    workTaskId,
+    setWorkTaskId,
+    triggerToast,
+    showConfirm,
+  } = useAppStore();
+  const invalidate = useInvalidate();
+  const { data: allTasks = [] } = useAllTasks();
+  const { data: goals = [] } = useGoals();
+  const { data: selectedTask } = useTask(workTaskId);
+  const { data: notes = [] } = useTaskNotes(workTaskId);
+  const { data: sessions = [] } = useTaskWorkSessions(workTaskId);
+  const createSession = useCreateWorkSession();
+  const deleteSession = useDeleteWorkSession();
+
+  const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(() => {
+    try {
+      const raw = localStorage.getItem(TIMER_KEY);
+      return raw ? JSON.parse(raw) as ActiveTimer : null;
+    } catch {
+      return null;
+    }
+  });
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [timerNotes, setTimerNotes] = useState(activeTimer?.notes ?? '');
+  const [manualMinutes, setManualMinutes] = useState('');
+  const [manualNote, setManualNote] = useState('');
+  const [manualWhen, setManualWhen] = useState(() => toDateTimeLocal(new Date()));
+  const [journalDraft, setJournalDraft] = useState('');
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [viewingFile, setViewingFile] = useState<DBTaskNoteFile | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeTimer) localStorage.setItem(TIMER_KEY, JSON.stringify(activeTimer));
+    else localStorage.removeItem(TIMER_KEY);
+  }, [activeTimer]);
+
+  useEffect(() => {
+    if (!activeTimer) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [activeTimer]);
+
+  const goalById = useMemo(() => new Map(goals.map(g => [g.id, g])), [goals]);
+  const taskOptions = useMemo(() => {
+    return [...allTasks]
+      .filter(t => t.kind !== 'critical_path')
+      .sort((a, b) => {
+        const ap = a.status === 'in_progress' ? 0 : a.completed ? 2 : 1;
+        const bp = b.status === 'in_progress' ? 0 : b.completed ? 2 : 1;
+        if (ap !== bp) return ap - bp;
+        return (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.title.localeCompare(b.title);
+      });
+  }, [allTasks]);
+
+  useEffect(() => {
+    if (workTaskId || taskOptions.length === 0) return;
+    const starter = taskOptions.find(t => t.status === 'in_progress' && !t.completed) ?? taskOptions.find(t => !t.completed);
+    if (starter) setWorkTaskId(starter.id);
+  }, [workTaskId, taskOptions, setWorkTaskId]);
+
+  const currentTask = selectedTask ?? taskOptions.find(t => t.id === workTaskId) ?? null;
+  const timerTask = activeTimer ? allTasks.find(t => t.id === activeTimer.taskId) ?? null : null;
+  const currentGoal = currentTask?.goal_id ? goalById.get(currentTask.goal_id) ?? null : null;
+  const effectiveDueDate = currentTask ? getEffectiveTaskDueDate(currentTask, allTasks) : null;
+  const inheritedDueDate = currentTask ? getInheritedTaskDueDate(currentTask, allTasks) : null;
+  const totalLogged = sessions.reduce((sum, s) => sum + (s.minutes ?? 0), 0);
+  const estimated = currentTask ? getTaskEstimatedMinutes(currentTask) : null;
+  const progress = estimated ? Math.min(100, Math.round((totalLogged / estimated) * 100)) : null;
+
+  const startTimer = async () => {
+    if (!currentTask || activeTimer) return;
+    await touchTask(currentTask.id).catch(() => {});
+    const next = { taskId: currentTask.id, startedAt: new Date().toISOString(), notes: timerNotes.trim() };
+    setActiveTimer(next);
+    setTimerNotes('');
+    triggerToast('Timer started.', 'success');
+  };
+
+  const stopTimer = async () => {
+    if (!activeTimer) return;
+    const started = new Date(activeTimer.startedAt);
+    const ended = new Date();
+    const minutes = Math.max(1, Math.round((ended.getTime() - started.getTime()) / 60_000));
+    await createSession.mutateAsync({
+      task_id: activeTimer.taskId,
+      goal_id: timerTask?.goal_id ?? null,
+      started_at: started.toISOString(),
+      ended_at: ended.toISOString(),
+      minutes,
+      notes: activeTimer.notes || undefined,
+      source: 'timer',
+    });
+    setActiveTimer(null);
+    triggerToast(`Logged ${formatTaskTime(minutes)}.`, 'success');
+  };
+
+  const logManualTime = async () => {
+    if (!currentTask) return;
+    const minutes = Number(manualMinutes);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    const started = manualWhen ? new Date(manualWhen) : new Date();
+    const ended = new Date(started.getTime() + minutes * 60_000);
+    await createSession.mutateAsync({
+      task_id: currentTask.id,
+      goal_id: currentTask.goal_id,
+      started_at: started.toISOString(),
+      ended_at: ended.toISOString(),
+      minutes,
+      notes: manualNote.trim() || undefined,
+      source: 'manual',
+    });
+    setManualMinutes('');
+    setManualNote('');
+    setManualWhen(toDateTimeLocal(new Date()));
+    triggerToast('Manual time logged.', 'success');
+  };
+
+  const addFiles = (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (list.length) setPendingFiles(prev => [...prev, ...list]);
+  };
+
+  const submitJournal = async () => {
+    if (!currentTask) return;
+    const content = journalDraft.trim();
+    if (!content && pendingFiles.length === 0) return;
+    const noteId = await addTaskNote(currentTask.id, content || '-');
+    for (const file of pendingFiles) await addNoteFile(noteId, file);
+    setJournalDraft('');
+    setPendingFiles([]);
+    invalidate.taskNotes(currentTask.id);
+    invalidate.noteFiles(noteId);
+    triggerToast('Work note saved.', 'success');
+  };
+
+  const deleteNote = (note: DBTaskNote) => {
+    showConfirm('Delete this work note?', async () => {
+      await deleteTaskNote(note.id);
+      invalidate.taskNotes(note.task_id);
+      triggerToast('Work note deleted.', 'info');
+    });
+  };
+
+  const deleteWorkSession = (id: string) => {
+    showConfirm('Delete this time log?', async () => {
+      await deleteSession.mutateAsync(id);
+      triggerToast('Time log deleted.', 'info');
+    });
+  };
+
+  const toggleDone = async () => {
+    if (!currentTask) return;
+    await toggleTask(currentTask.id);
+    invalidate.tasks(currentTask.goal_id ?? undefined);
+    triggerToast(currentTask.completed ? 'Task reopened.' : 'Task completed.', 'success');
+  };
+
+  const elapsed = activeTimer ? nowMs - new Date(activeTimer.startedAt).getTime() : 0;
+
+  return (
+    <div className="mx-auto flex max-w-[1180px] flex-col gap-5 px-4 py-6 md:px-10">
+      <header className="flex flex-col gap-3 border-b border-gray-100 pb-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="mb-1 flex items-center gap-2">
+            <Timer size={18} className="text-[#4648d4]" />
+            <h1 className="font-headline text-2xl font-black text-gray-950">Work</h1>
+          </div>
+          <p className="text-xs text-gray-400">
+            {activeTimer && timerTask ? `Recording ${timerTask.title}` : 'Pick a task and start logging.'}
+          </p>
+        </div>
+        {activeTimer && (
+          <div className="flex items-center gap-3 rounded-xl border border-[#4648d4]/20 bg-[#EEF2FF] px-4 py-3">
+            <div className="h-2.5 w-2.5 rounded-full bg-[#4648d4]" />
+            <div>
+              <p className="font-mono text-[9px] uppercase tracking-widest text-[#4648d4]">Live</p>
+              <p className="font-mono text-lg font-black tabular-nums text-gray-950">{formatStopwatch(elapsed)}</p>
+            </div>
+            <button
+              onClick={stopTimer}
+              className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-gray-950 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-gray-800"
+            >
+              <Square size={12} /> Stop
+            </button>
+          </div>
+        )}
+      </header>
+
+      <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
+        <aside className="min-w-0">
+          <div className="sticky top-20 max-h-[calc(100vh-140px)] overflow-y-auto rounded-xl border border-gray-200 bg-white p-3">
+            <TaskTree
+              tasks={allTasks}
+              goals={goals}
+              mode="select"
+              selectedTaskId={currentTask?.id ?? null}
+              onSelect={task => setWorkTaskId(task.id)}
+              searchPlaceholder="Find a task or goal…"
+            />
+          </div>
+        </aside>
+
+        <main className="min-w-0 space-y-5">
+          {!currentTask ? (
+            <div className="rounded-xl border border-dashed border-gray-200 bg-white p-10 text-center text-sm text-gray-300">
+              Choose a task to open the work surface.
+            </div>
+          ) : (
+            <>
+              <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="mb-1 font-mono text-[9px] uppercase tracking-widest text-gray-400">
+                      {currentGoal?.title ?? 'Standalone task'}
+                    </p>
+                    <div className="flex items-start gap-2">
+                      <button onClick={toggleDone} className="mt-1 text-gray-300 hover:text-emerald-500">
+                        {currentTask.completed ? <CheckCircle2 size={20} className="text-emerald-500" /> : <Circle size={20} />}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <h2 className={`font-headline text-2xl font-black leading-tight text-gray-950 ${currentTask.completed ? 'line-through opacity-50' : ''}`}>
+                          {currentTask.title}
+                        </h2>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-gray-400">
+                          <span>{currentTask.status.replace('_', ' ')}</span>
+                          {effectiveDueDate && (
+                            <span className="rounded-md bg-gray-100 px-2 py-1 text-gray-500">
+                              Due {effectiveDueDate.slice(0, 10)}{inheritedDueDate ? ' parent' : ''}
+                            </span>
+                          )}
+                          {estimated && <span>{formatTaskTime(estimated)} est</span>}
+                          <span>{formatTaskTime(totalLogged)} logged</span>
+                          {progress !== null && <span>{progress}% time</span>}
+                        </div>
+                        <div className="mt-3">
+                          <EntityTopicChips entityType="task" entityId={currentTask.id} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-2 md:w-56">
+                    {!activeTimer ? (
+                      <>
+                        <input
+                          value={timerNotes}
+                          onChange={e => setTimerNotes(e.target.value)}
+                          placeholder="Timer note"
+                          className="rounded-lg border border-gray-200 bg-[#f8f9fa] px-3 py-2 text-xs outline-none focus:border-[#4648d4] focus:bg-white"
+                        />
+                        <button
+                          onClick={startTimer}
+                          disabled={currentTask.completed}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#4648d4] px-4 py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-[#3436b0] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Play size={14} /> Start
+                        </button>
+                      </>
+                    ) : activeTimer.taskId === currentTask.id ? (
+                      <button
+                        onClick={stopTimer}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-950 px-4 py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-gray-800"
+                      >
+                        <Square size={14} /> Stop & Log
+                      </button>
+                    ) : (
+                      <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        Timer is running on another task.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="grid gap-5 xl:grid-cols-[1fr_300px]">
+                <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <FileText size={15} className="text-gray-500" />
+                      <h3 className="font-headline text-sm font-bold text-gray-900">Work Journal</h3>
+                    </div>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-50"
+                    >
+                      <Upload size={12} /> Files
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={e => {
+                        if (e.currentTarget.files) addFiles(e.currentTarget.files);
+                        e.currentTarget.value = '';
+                      }}
+                    />
+                  </div>
+                  <div
+                    className={`rounded-xl border bg-[#f8f9fa] p-3 transition-colors ${dragging ? 'border-[#4648d4] bg-[#EEF2FF]' : 'border-gray-150'}`}
+                    onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+                  >
+                    <textarea
+                      value={journalDraft}
+                      onChange={e => setJournalDraft(e.target.value)}
+                      onKeyDown={e => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submitJournal();
+                      }}
+                      placeholder="Real-time note..."
+                      className="min-h-[130px] w-full resize-y bg-transparent text-sm leading-relaxed text-gray-800 outline-none placeholder:text-gray-300"
+                    />
+                    {pendingFiles.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5 border-t border-gray-200 pt-3">
+                        {pendingFiles.map((file, index) => (
+                          <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px]">
+                            <Paperclip size={10} className="shrink-0 text-gray-400" />
+                            <span className="truncate">{file.name}</span>
+                            <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== index))} className="text-gray-300 hover:text-red-400">
+                              <X size={10} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        onClick={submitJournal}
+                        disabled={!journalDraft.trim() && pendingFiles.length === 0}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-gray-950 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Plus size={12} /> Save Note
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-5">
+                    {notes.length > 0 ? (
+                      notes.map(note => (
+                        <WorkNoteItem
+                          key={note.id}
+                          note={note}
+                          onDelete={() => deleteNote(note)}
+                          onViewFile={setViewingFile}
+                        />
+                      ))
+                    ) : (
+                      <p className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-xs text-gray-300">
+                        No work notes yet.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <aside className="space-y-5">
+                  <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center gap-2">
+                      <Clock size={14} className="text-gray-500" />
+                      <h3 className="font-headline text-sm font-bold text-gray-900">Add Time</h3>
+                    </div>
+                    <div className="space-y-2">
+                      <input
+                        type="number"
+                        min={1}
+                        step={5}
+                        value={manualMinutes}
+                        onChange={e => setManualMinutes(e.target.value)}
+                        placeholder="Minutes"
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#4648d4]"
+                      />
+                      <input
+                        type="datetime-local"
+                        value={manualWhen}
+                        onChange={e => setManualWhen(e.target.value)}
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-xs outline-none focus:border-[#4648d4]"
+                      />
+                      <textarea
+                        value={manualNote}
+                        onChange={e => setManualNote(e.target.value)}
+                        placeholder="What got done?"
+                        className="min-h-[76px] w-full resize-y rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#4648d4]"
+                      />
+                      <button
+                        onClick={logManualTime}
+                        disabled={!manualMinutes || Number(manualMinutes) <= 0}
+                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#4648d4] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-[#3436b0] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Plus size={12} /> Log Time
+                      </button>
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h3 className="font-headline text-sm font-bold text-gray-900">Session Log</h3>
+                      <span className="font-mono text-[9px] uppercase tracking-widest text-gray-400">{formatTaskTime(totalLogged)}</span>
+                    </div>
+                    <div className="max-h-[360px] space-y-2 overflow-y-auto">
+                      {sessions.length > 0 ? sessions.map(session => (
+                        <div key={session.id} className="group/session rounded-lg border border-gray-100 bg-[#fafafa] px-3 py-2">
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-mono text-xs font-black text-gray-800">{formatTaskTime(session.minutes ?? 0)}</p>
+                              <p className="font-mono text-[9px] uppercase tracking-widest text-gray-400">
+                                {formatSessionDate(session.started_at)} / {session.source}
+                              </p>
+                              {session.notes && <p className="mt-1 text-xs text-gray-500">{session.notes}</p>}
+                            </div>
+                            <button onClick={() => deleteWorkSession(session.id)} className="text-gray-200 opacity-0 transition-opacity hover:text-red-400 group-hover/session:opacity-100">
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      )) : (
+                        <p className="rounded-lg border border-dashed border-gray-200 p-5 text-center text-xs text-gray-300">No sessions logged.</p>
+                      )}
+                    </div>
+                  </section>
+                </aside>
+              </section>
+            </>
+          )}
+        </main>
+      </div>
+
+      {viewingFile && <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} />}
+    </div>
+  );
+}

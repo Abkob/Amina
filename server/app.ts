@@ -27,6 +27,7 @@ import { aliasesRouter } from './routes/aliases.js';
 import { searchRouter } from './routes/search.js';
 import { topicsRouter } from './routes/topics.js';
 import { backupsRouter } from './routes/backups.js';
+import { databaseAtlasRouter } from './routes/database-atlas.js';
 import { EMBED_DIMENSION, EMBED_MODEL } from './embeddingProvider.js';
 import { getProviderSummary } from './config/providers.js';
 
@@ -75,6 +76,7 @@ export function createApp(): express.Express {
   app.use('/api/search', searchRouter);
   app.use('/api/topics', topicsRouter);
   app.use('/api/backups', backupsRouter);
+  app.use('/api/database-atlas', databaseAtlasRouter);
 
   // POST /api/entity-summaries/backfill — generate deterministic planning summaries for all entities missing them
   app.post('/api/entity-summaries/backfill', async (_req, res) => {

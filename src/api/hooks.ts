@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { DBGoal, DBTask, DBTaskNote, DBTaskNoteFile, DBNote, DBEvent, DBResource, DBMeeting, DBDeadline, DBMilestone, DBSchedulePrefs, DBWorkSession, DBJournalEntry, IngestionStatus } from '../db/schema';
+import type { DBGoal, DBTask, DBTaskNote, DBTaskNoteFile, DBNote, DBEvent, DBResource, DBMeeting, DBDeadline, DBMilestone, DBSchedulePrefs, DBWorkSession, DBJournalEntry, IngestionStatus, DBEdge } from '../db/schema';
 import { apiFetch, apiPost, apiDelete } from '../utils/apiFetch';
 
 // Static data: don't poll — use mutation-driven invalidation instead.
@@ -261,6 +261,9 @@ export function useCreateWorkSession() {
       minutes: number;
       notes?: string;
       source?: string;
+      started_at?: string;
+      ended_at?: string;
+      goal_id?: string | null;
     }) => apiPost<{ id: string }>('/api/work-sessions', body),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['work-sessions', variables.task_id] });
@@ -525,6 +528,17 @@ export function useEventTaskLinks(params: { event_id?: string; task_id?: string 
   });
 }
 
+/** Every event↔task link joined with live task state — one query paints the
+ *  completion badges for a whole calendar week. */
+export function useAllEventTaskLinks() {
+  return useQuery<DBEventTaskLinkFull[]>({
+    queryKey: ['event-task-links', 'all'],
+    queryFn: () => apiFetch<DBEventTaskLinkFull[]>('/api/event-task-links'),
+    staleTime: STALE_SHORT,
+    placeholderData: [],
+  });
+}
+
 export function useCreateEventTaskLink() {
   const qc = useQueryClient();
   return useMutation({
@@ -544,6 +558,72 @@ export function useDeleteEventTaskLink() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['event-task-links'] });
       qc.invalidateQueries({ queryKey: ['schedule-preview'] });
+    },
+  });
+}
+
+// ── Meeting-Task Links ────────────────────────────────────────────────────────
+
+export interface DBMeetingTaskLink {
+  id: string;
+  meeting_id: string;
+  task_id: string;
+  created_at: string;
+}
+
+type EdgeApiRow = Omit<DBEdge, 'source_type' | 'target_type' | 'relationship'> & {
+  source_type: string;
+  target_type: string;
+  relationship: string;
+};
+
+export function useMeetingTaskLinks(taskId: string | null) {
+  return useQuery<DBMeetingTaskLink[]>({
+    queryKey: ['meeting-task-links', taskId],
+    queryFn: async () => {
+      if (!taskId) return [];
+      const edges = await apiFetch<EdgeApiRow[]>(`/api/edges?target_id=${encodeURIComponent(taskId)}`);
+      return edges
+        .filter(e => e.source_type === 'meeting' && e.target_type === 'task' && e.relationship === 'linked_to')
+        .map(e => ({
+          id: e.id,
+          meeting_id: e.source_id,
+          task_id: e.target_id,
+          created_at: e.created_at,
+        }));
+    },
+    enabled: Boolean(taskId),
+    staleTime: STALE_SHORT,
+    placeholderData: [],
+  });
+}
+
+export function useCreateMeetingTaskLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { meeting_id: string; task_id: string }) =>
+      apiPost<{ id: string }>('/api/edges', {
+        source_id: body.meeting_id,
+        source_type: 'meeting',
+        target_id: body.task_id,
+        target_type: 'task',
+        relationship: 'linked_to',
+        metadata: JSON.stringify({ kind: 'meeting_task' }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['meeting-task-links'] });
+      qc.invalidateQueries({ queryKey: ['graph'] });
+    },
+  });
+}
+
+export function useDeleteMeetingTaskLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiDelete(`/api/edges/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['meeting-task-links'] });
+      qc.invalidateQueries({ queryKey: ['graph'] });
     },
   });
 }

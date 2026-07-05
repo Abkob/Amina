@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type Tab = 'Copilot' | 'Brain Dump' | 'Goals' | 'Resources' | 'Gantt' | 'Journal' | 'Graph' | 'Topics' | 'Schedule' | 'Settings' | 'Testing';
+export type Tab = 'Copilot' | 'Brain Dump' | 'Goals' | 'Work' | 'Resources' | 'Gantt' | 'Journal' | 'Graph' | 'Topics' | 'Schedule' | 'Settings' | 'Testing';
 
 export interface ToastMsg {
   id: number;
@@ -25,6 +25,7 @@ interface AppStore {
   currentTab:        Tab;
   selectedGoalId:    string | null;
   focusedTaskId:     string | null;
+  workTaskId:        string | null;
   focusedResourceId: string | null;
   activeNoteId:      string;
   goalsFilter:       'Active' | 'Completed' | 'Archived';
@@ -34,6 +35,9 @@ interface AppStore {
   // ─── Schedule UI (persisted) ──────────────────────────────────────────────
   selectedEventId: string | null;
   isDrawerOpen:    boolean;
+
+  // ─── App chrome (persisted) ───────────────────────────────────────────────
+  sidebarCollapsed: boolean;
 
   // ─── Ephemeral UI ─────────────────────────────────────────────────────────
   isOptimizing:    boolean;
@@ -56,6 +60,7 @@ interface AppStore {
   setCurrentTab:        (tab: Tab) => void;
   setSelectedGoalId:    (id: string | null) => void;
   setFocusedTaskId:     (id: string | null) => void;
+  setWorkTaskId:        (id: string | null) => void;
   setFocusedResourceId: (id: string | null) => void;
   /** Atomically navigate to a goal detail page — avoids the two-set race where
    *  setCurrentTab clears selectedGoalId before setSelectedGoalId restores it. */
@@ -68,6 +73,7 @@ interface AppStore {
   removeGoalCategory:   (name: string) => void;
   setSelectedEventId:   (id: string | null) => void;
   setIsDrawerOpen:      (open: boolean) => void;
+  toggleSidebar:        () => void;
   setIsOptimizing:      (v: boolean) => void;
   setIsNotificationOpen:(open: boolean) => void;
 
@@ -109,14 +115,17 @@ export const useAppStore = create<AppStore>()(
       currentTab:        'Goals',
       selectedGoalId:    null,
       focusedTaskId:     null,
+      workTaskId:        null,
       focusedResourceId: null,
       activeNoteId:      '',
       goalsFilter:     'Active',
       searchQuery:     '',
       goalCategories:  DEFAULT_GOAL_CATEGORIES,
 
-      selectedEventId: 'evt-1',
+      selectedEventId: null,
       isDrawerOpen:    true,
+
+      sidebarCollapsed: false,
 
       isOptimizing:       false,
       toast:              null,
@@ -142,6 +151,7 @@ export const useAppStore = create<AppStore>()(
       setCurrentTab:         (tab)  => set({ currentTab: tab, selectedGoalId: null, focusedTaskId: null }),
       setSelectedGoalId:     (id)   => set({ selectedGoalId: id, focusedTaskId: null }),
       setFocusedTaskId:      (id)   => set({ focusedTaskId: id }),
+      setWorkTaskId:         (id)   => set({ workTaskId: id }),
       setFocusedResourceId:  (id)   => set({ focusedResourceId: id }),
       navigateToGoal:        (goalId) => set({ currentTab: 'Goals', selectedGoalId: goalId, focusedTaskId: null }),
       navigateToResource:    (resourceId) => set({ currentTab: 'Resources', focusedResourceId: resourceId }),
@@ -161,6 +171,7 @@ export const useAppStore = create<AppStore>()(
       }),
       setSelectedEventId:    (id)   => set({ selectedEventId: id }),
       setIsDrawerOpen:       (open) => set({ isDrawerOpen: open }),
+      toggleSidebar:         () => set(s => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setIsOptimizing:       (v)    => set({ isOptimizing: v }),
       setIsNotificationOpen: (open) => set({ isNotificationOpen: open }),
 
@@ -205,9 +216,11 @@ export const useAppStore = create<AppStore>()(
         activeNoteId:      state.activeNoteId,
         selectedGoalId:    state.selectedGoalId,
         focusedTaskId:     state.focusedTaskId,
+        workTaskId:        state.workTaskId,
         focusedResourceId: state.focusedResourceId,
         selectedEventId:   state.selectedEventId,
         isDrawerOpen:      state.isDrawerOpen,
+        sidebarCollapsed:  state.sidebarCollapsed,
         goalsFilter:       state.goalsFilter,
         goalCategories:    state.goalCategories,
       }),

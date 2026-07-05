@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Check, CheckSquare, ChevronLeft, ChevronRight, Clock, Download,
+  Calendar, CalendarClock, CalendarPlus, Check, CheckSquare, ChevronLeft, ChevronRight, Clock, Download,
   ExternalLink, Eye, FileText, Link2, Paperclip, Plus, Square, Target, Trash2, Upload, X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useTaskWorkSessions, useTaskResources, useInvalidate, useCreateWorkSession, useDeleteWorkSession, useEventTaskLinks, useCreateEventTaskLink, useDeleteEventTaskLink, useEvents } from '../api/hooks';
+import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useTaskWorkSessions, useTaskResources, useInvalidate, useCreateWorkSession, useDeleteWorkSession, useEventTaskLinks, useDeleteEventTaskLink, useEvents, useAllEventTaskLinks, useGoals, useAllMeetings, useMeetingTaskLinks, useCreateMeetingTaskLink, useDeleteMeetingTaskLink } from '../api/hooks';
+import { EventComposer } from './schedule/EventComposer';
+import { addDays, eventDate, fmtTimeRange, fmtYMD, parseLocalDate } from '../utils/calendar';
 import { createResource, deleteResource, detectResourceType, addMention } from '../db/queries/resources';
 import { touchTask } from '../db/queries/tasks';
 import { ResourceMentionPicker, ResourceMentionChip, useResourceMentions } from '../components/ResourceMentionPicker';
@@ -24,6 +26,8 @@ import { addNoteFile, deleteNoteFile, getNoteFilesForNote } from '../db/queries/
 import { ActualTimeModal } from '../components/ActualTimeModal';
 import { ActualTimeChip } from '../components/ActualTimeChip';
 import { FileViewerModal } from '../components/FileViewerModal';
+import { EntityTopicChips } from '../components/EntityTopicChips';
+import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
 import type { DBResource, DBTask, DBTaskNote, DBTaskNoteFile } from '../db/schema';
 
 function formatBytes(bytes: number) {
@@ -180,16 +184,20 @@ function TimePill({
   task,
   allTasks,
   onSave,
+  onSaveRollupMode,
 }: {
   task: DBTask;
   allTasks: DBTask[];
   onSave: (minutes: number | null) => void;
+  onSaveRollupMode?: (mode: NonNullable<DBTask['time_rollup_mode']>) => void;
 }) {
-  const { minutes, isRollup, ownMinutes, childrenSum } = getRolledUpTime(task, allTasks);
+  const { minutes, isRollup, ownMinutes, childrenSum, includedChildrenSum, extraChildrenSum } = getRolledUpTime(task, allTasks);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(ownMinutes === null ? '' : formatTaskTime(ownMinutes));
   const ref = useRef<HTMLInputElement>(null);
+  const hasParent = Boolean(task.parent_task_id);
+  const isInsideParent = task.time_rollup_mode === 'inclusive';
 
   useEffect(() => {
     if (editing) ref.current?.focus();
@@ -225,24 +233,47 @@ function TimePill({
     );
   }
 
+  const includedMinutes = includedChildrenSum ?? 0;
+  const extraMinutes = extraChildrenSum ?? 0;
   const hasOverhead = isRollup && ownMinutes !== null && childrenSum !== null;
-  const tooltip = isRollup
-    ? hasOverhead
-      ? `${formatTaskTime(minutes)} total · ${formatTaskTime(ownMinutes)} own + ${formatTaskTime(childrenSum)} subtasks`
-      : `Auto-summed from subtasks: ${formatTaskTime(minutes)}`
-    : (minutes === null ? 'No time set — click to add' : `Time needed: ${formatTaskTime(minutes)}`);
+  const hasIncludedChildren = includedMinutes > 0;
+  const hasExtraChildren = extraMinutes > 0;
+  const resolvedTooltip = isRollup && ownMinutes !== null && hasIncludedChildren
+    ? `${formatTaskTime(minutes)} total. ${formatTaskTime(includedMinutes)} of subtasks are inside the ${formatTaskTime(ownMinutes)} parent estimate${hasExtraChildren ? `; ${formatTaskTime(extraMinutes)} adds extra.` : '.'}`
+    : hasOverhead
+    ? `${formatTaskTime(minutes)} total. ${formatTaskTime(ownMinutes)} parent estimate + ${formatTaskTime(childrenSum)} extra subtasks.`
+    : isRollup
+    ? `Auto-summed from subtasks: ${formatTaskTime(minutes)}`
+    : (minutes === null ? 'No time set. Click to add.' : `Time needed: ${formatTaskTime(minutes)}`);
+  const rollupModeTooltip = isInsideParent
+    ? 'Included inside the parent estimate. Click to count as extra time.'
+    : 'Adds extra time to the parent estimate. Click to include inside the parent estimate.';
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1">
       <button
         onClick={() => setEditing(true)}
-        title={tooltip}
+        title={resolvedTooltip}
         className={`inline-flex items-center gap-1 rounded-md border bg-white px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider transition-colors hover:border-[#4648d4]/30 hover:text-[#4648d4] ${isRollup ? 'border-[#4648d4]/20 text-[#4648d4]/70' : 'border-gray-200 text-gray-400'}`}
       >
         <Clock size={9} />
         {isRollup && <span className="text-[7px] opacity-60">{hasOverhead ? '+' : 'Σ'}</span>}
         {formatTaskTime(minutes)}
       </button>
+      {hasParent && minutes !== null && onSaveRollupMode && (
+        <button
+          type="button"
+          onClick={() => onSaveRollupMode(isInsideParent ? 'additive' : 'inclusive')}
+          title={rollupModeTooltip}
+          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider transition-colors ${
+            isInsideParent
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:border-emerald-300'
+              : 'border-amber-200 bg-amber-50 text-amber-600 hover:border-amber-300'
+          }`}
+        >
+          {isInsideParent ? 'in' : '+'}
+        </button>
+      )}
     </span>
   );
 }
@@ -251,11 +282,13 @@ function SectionPlanningWidgets({
   task,
   allTasks,
   onSaveTime,
+  onSaveTimeRollupMode,
   className = '',
 }: {
   task: DBTask;
   allTasks: DBTask[];
   onSaveTime: (minutes: number | null) => void;
+  onSaveTimeRollupMode: (mode: NonNullable<DBTask['time_rollup_mode']>) => void;
   className?: string;
 }) {
   return (
@@ -265,7 +298,12 @@ function SectionPlanningWidgets({
           <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-gray-400">Time Needed</span>
           <Clock size={10} className="shrink-0 text-gray-300" />
         </div>
-        <TimePill task={task} allTasks={allTasks} onSave={onSaveTime} />
+        <TimePill
+          task={task}
+          allTasks={allTasks}
+          onSave={onSaveTime}
+          onSaveRollupMode={onSaveTimeRollupMode}
+        />
       </div>
     </div>
   );
@@ -498,18 +536,185 @@ function NoteArticle({
   );
 }
 
-function EventTaskLinksPanel({ taskId }: { taskId: string }) {
-  const { data: links = [] } = useEventTaskLinks({ task_id: taskId });
+/**
+ * "On your calendar" — the next two weeks of blocked time for this task and
+ * its subtasks, plus a Block time button that opens the same composer the
+ * Schedule uses, pre-linked to this task.
+ */
+function TaskCalendarPanel({ task, subtreeIds, allTasks }: {
+  task: DBTask;
+  subtreeIds: Set<string>;
+  allTasks: DBTask[];
+}) {
+  const { data: links = [] } = useAllEventTaskLinks();
   const { data: events = [] } = useEvents();
+  const { data: goals = [] } = useGoals();
+  const [composing, setComposing] = useState(false);
+
+  const today = fmtYMD(new Date());
+  const horizon = Array.from({ length: 14 }, (_, i) => addDays(today, i));
+  const horizonEnd = horizon[13];
+
+  const eventById = new Map(events.map(e => [e.id, e]));
+  const blocks = links
+    .filter(l => subtreeIds.has(l.task_id))
+    .flatMap(l => {
+      const ev = eventById.get(l.event_id);
+      const date = ev ? eventDate(ev) : null;
+      if (!ev || !date) return [];
+      return [{
+        id: l.id,
+        date,
+        startHour: ev.start_hour,
+        duration: ev.duration_hours,
+        title: ev.title,
+        isChild: l.task_id !== task.id,
+        taskTitle: l.task_title ?? '',
+        done: Boolean(l.completed) || l.task_status === 'done',
+      }];
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour);
+
+  const minutesByDate = new Map<string, number>();
+  for (const b of blocks) {
+    if (b.date >= today && b.date <= horizonEnd) {
+      minutesByDate.set(b.date, (minutesByDate.get(b.date) ?? 0) + Math.round(b.duration * 60));
+    }
+  }
+  const dueByDate = new Map<string, number>();
+  for (const t of allTasks) {
+    if (!subtreeIds.has(t.id) || !t.due_date) continue;
+    const d = t.due_date.slice(0, 10);
+    if (d >= today && d <= horizonEnd) dueByDate.set(d, (dueByDate.get(d) ?? 0) + 1);
+  }
+
+  const upcoming = blocks.filter(b => b.date >= today).slice(0, 6);
+  const fmtStripDay = (d: string) => {
+    const dt = parseLocalDate(d);
+    return { dow: dt.toLocaleDateString('en-US', { weekday: 'narrow' }), dom: dt.getDate() };
+  };
+  const fmtBlockDay = (d: string) =>
+    parseLocalDate(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+  return (
+    <section className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5">
+          <CalendarClock size={14} className="text-gray-500" />
+          <h2 className="font-headline text-sm font-bold text-gray-900">On your calendar</h2>
+        </div>
+        <button
+          onClick={() => setComposing(true)}
+          className="flex items-center gap-1.5 rounded-lg bg-[#4648d4] px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-white hover:opacity-90"
+        >
+          <CalendarPlus size={11} /> Block time
+        </button>
+      </div>
+      <p className="mb-3 text-[10px] text-gray-400">
+        A block is a chunk of time on your Schedule calendar. This is the next two weeks for this task and its subtasks.
+      </p>
+
+      <div className="mb-3 grid grid-cols-7 gap-1 sm:grid-cols-14">
+        {horizon.map(d => {
+          const mins = minutesByDate.get(d) ?? 0;
+          const due = dueByDate.get(d) ?? 0;
+          const { dow, dom } = fmtStripDay(d);
+          const isToday = d === today;
+          return (
+            <div
+              key={d}
+              className={`rounded-md border px-1 py-1 text-center ${isToday ? 'border-[#4648d4]/40 bg-[#EEF2FF]/60' : 'border-gray-100'}`}
+              title={`${fmtBlockDay(d)}${mins ? ` · ${formatTaskTime(mins)} blocked` : ''}${due ? ` · ${due} due` : ''}`}
+            >
+              <p className={`font-mono text-[8px] uppercase ${isToday ? 'font-bold text-[#4648d4]' : 'text-gray-400'}`}>{dow}</p>
+              <p className={`font-headline text-[11px] font-bold ${isToday ? 'text-[#4648d4]' : 'text-gray-700'}`}>{dom}</p>
+              <p className={`font-mono text-[8px] ${mins ? 'font-bold text-[#4648d4]' : 'text-gray-200'}`}>
+                {mins ? formatTaskTime(mins) : '·'}
+              </p>
+              {due > 0 && <span className="mx-auto block h-1 w-1 rounded-full bg-red-400" title={`${due} due`} />}
+            </div>
+          );
+        })}
+      </div>
+
+      {upcoming.length > 0 ? (
+        <div className="space-y-1">
+          {upcoming.map(b => (
+            <div key={b.id} className="flex items-center gap-2 rounded-lg bg-[#f8f9fa] px-2.5 py-1.5">
+              <span className="shrink-0 font-mono text-[9px] font-bold text-gray-500">{fmtBlockDay(b.date)}</span>
+              <span className="shrink-0 font-mono text-[9px] text-gray-400">{fmtTimeRange(b.startHour, b.duration)}</span>
+              <span className={`min-w-0 flex-1 truncate text-[11px] font-medium ${b.done ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                {b.title}
+              </span>
+              {b.isChild && (
+                <span className="max-w-[120px] shrink-0 truncate font-mono text-[8px] uppercase text-gray-400" title={`Subtask: ${b.taskTitle}`}>
+                  ↳ {b.taskTitle}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-lg border border-dashed border-gray-200 p-3 text-center text-[11px] text-gray-300">
+          No time blocked in the next two weeks — use Block time to put this task on a day.
+        </p>
+      )}
+
+      {composing && (
+        <EventComposer
+          seed={{
+            mode: 'create',
+            date: today,
+            startHour: Math.min(21, Math.max(6, new Date().getHours() + 1)),
+            durationHours: 1,
+            linkedTaskId: task.id,
+            syncStartDate: true,
+          }}
+          days={horizon.slice(0, 7)}
+          tasks={allTasks}
+          goals={goals}
+          onClose={() => setComposing(false)}
+        />
+      )}
+    </section>
+  );
+}
+
+function formatMeetingWhen(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unscheduled';
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function EventTaskLinksPanel({ taskId, goalId }: { taskId: string; goalId?: string | null }) {
+  const { data: links = [] } = useEventTaskLinks({ task_id: taskId });
+  const { data: meetingLinks = [] } = useMeetingTaskLinks(taskId);
+  const { data: events = [] } = useEvents();
+  const { data: meetings = [] } = useAllMeetings();
   const createLink = useCreateEventTaskLink();
   const deleteLink = useDeleteEventTaskLink();
+  const createMeetingLink = useCreateMeetingTaskLink();
+  const deleteMeetingLink = useDeleteMeetingTaskLink();
   const { triggerToast } = useAppStore();
   const [selectedEventId, setSelectedEventId] = useState('');
+  const [selectedMeetingId, setSelectedMeetingId] = useState('');
 
   const linkedEventIds = new Set(links.map(l => l.event_id));
   const linkableEvents = events.filter(e => !linkedEventIds.has(e.id));
+  const meetingById = new Map(meetings.map(m => [m.id, m]));
+  const linkedMeetingIds = new Set(meetingLinks.map(l => l.meeting_id));
+  const visibleMeetingLinks = meetingLinks.map(link => ({ link, meeting: meetingById.get(link.meeting_id) }));
+  const linkableMeetings = meetings
+    .filter(m => !linkedMeetingIds.has(m.id))
+    .filter(m => !goalId || !m.goal_id || m.goal_id === goalId)
+    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
 
-  if (!links.length && !events.length) return null;
+  if (!links.length && !events.length && !meetingLinks.length && !meetings.length) return null;
 
   const handleLink = async () => {
     if (!selectedEventId) return;
@@ -519,6 +724,17 @@ function EventTaskLinksPanel({ taskId }: { taskId: string }) {
       triggerToast('Event linked.', 'success');
     } catch {
       triggerToast('Failed to link event.', 'error');
+    }
+  };
+
+  const handleLinkMeeting = async () => {
+    if (!selectedMeetingId) return;
+    try {
+      await createMeetingLink.mutateAsync({ meeting_id: selectedMeetingId, task_id: taskId });
+      setSelectedMeetingId('');
+      triggerToast('Meeting linked.', 'success');
+    } catch {
+      triggerToast('Failed to link meeting.', 'error');
     }
   };
 
@@ -534,6 +750,7 @@ function EventTaskLinksPanel({ taskId }: { taskId: string }) {
           {links.map(l => (
             <div key={l.id} className="group/el flex items-center gap-2 rounded-lg border border-gray-100 bg-white px-2.5 py-2">
               <div className="min-w-0 flex-1">
+                <span className="mb-0.5 block font-mono text-[9px] uppercase tracking-wider text-gray-300">Event</span>
                 <span className="text-xs font-semibold text-gray-700 truncate block">{l.event_title ?? l.event_id.slice(0, 12)}</span>
                 {l.planned_minutes != null && (
                   <span className="font-mono text-[10px] text-gray-400">{l.planned_minutes}m planned</span>
@@ -551,8 +768,32 @@ function EventTaskLinksPanel({ taskId }: { taskId: string }) {
         </div>
       )}
 
+      {visibleMeetingLinks.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          {visibleMeetingLinks.map(({ link, meeting }) => (
+            <div key={link.id} className="group/ml flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50/40 px-2.5 py-2">
+              <Calendar size={13} className="shrink-0 text-amber-500" />
+              <div className="min-w-0 flex-1">
+                <span className="mb-0.5 block font-mono text-[9px] uppercase tracking-wider text-amber-500/70">Meeting</span>
+                <span className="block truncate text-xs font-semibold text-gray-700">{meeting?.title ?? link.meeting_id.slice(0, 12)}</span>
+                {meeting?.scheduled_at && (
+                  <span className="font-mono text-[10px] text-gray-400">{formatMeetingWhen(meeting.scheduled_at)}</span>
+                )}
+              </div>
+              <button
+                onClick={() => deleteMeetingLink.mutate(link.id)}
+                className="shrink-0 text-gray-300 opacity-0 transition-all hover:text-red-400 group-hover/ml:opacity-100"
+                title="Unlink meeting"
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {linkableEvents.length > 0 && (
-        <div className="flex gap-2">
+        <div className="mb-2 flex gap-2">
           <select
             value={selectedEventId}
             onChange={e => setSelectedEventId(e.target.value)}
@@ -568,6 +809,29 @@ function EventTaskLinksPanel({ taskId }: { taskId: string }) {
             disabled={!selectedEventId || createLink.isPending}
             className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90 disabled:opacity-40"
             title="Link event"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      )}
+
+      {linkableMeetings.length > 0 && (
+        <div className="flex gap-2">
+          <select
+            value={selectedMeetingId}
+            onChange={e => setSelectedMeetingId(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
+          >
+            <option value="">Link a meeting...</option>
+            {linkableMeetings.map(m => (
+              <option key={m.id} value={m.id}>{m.title || formatMeetingWhen(m.scheduled_at)}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleLinkMeeting}
+            disabled={!selectedMeetingId || createMeetingLink.isPending}
+            className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90 disabled:opacity-40"
+            title="Link meeting"
           >
             <Plus size={13} />
           </button>
@@ -756,6 +1020,8 @@ export function TaskFocusView() {
   const children = childrenByParent[task.id] ?? [];
   const path = buildTaskPath(task, allTasks);
   const noteGroups = groupNotesByDate(taskNotes);
+  const effectiveDueDate = getEffectiveTaskDueDate(task, allTasks);
+  const inheritedDueDate = getInheritedTaskDueDate(task, allTasks);
 
   const attachResource = async (title: string, url: string | null, type: DBResource['type'], info = 'attached now') => {
     await createResource({ title, url, type, info }, goal.id, task.id);
@@ -869,6 +1135,10 @@ export function TaskFocusView() {
       estimated_minutes: minutes,
       estimated_duration: minutes === null ? null : formatTaskTime(minutes),
     });
+  };
+
+  const saveTaskTimeRollupMode = async (mode: NonNullable<DBTask['time_rollup_mode']>) => {
+    await updateTask(task.id, { time_rollup_mode: mode });
   };
 
   const handleDeleteResource = (resourceId: string) => {
@@ -1030,7 +1300,18 @@ export function TaskFocusView() {
             />
             <p className="mt-2 text-xs text-gray-400">
               {children.length} child task{children.length !== 1 ? 's' : ''} / {resources.length} resource{resources.length !== 1 ? 's' : ''}
+              {effectiveDueDate && (
+                <>
+                  {' / '}
+                  <span className={inheritedDueDate ? 'text-[#4648d4]' : 'text-gray-500'}>
+                    due {effectiveDueDate.slice(0, 10)}{inheritedDueDate ? ' from parent' : ''}
+                  </span>
+                </>
+              )}
             </p>
+            <div className="mt-2.5">
+              <EntityTopicChips entityType="task" entityId={task.id} />
+            </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
@@ -1057,6 +1338,7 @@ export function TaskFocusView() {
           task={task}
           allTasks={allTasks}
           onSaveTime={saveTaskTime}
+          onSaveTimeRollupMode={saveTaskTimeRollupMode}
           className="mt-4 max-w-xs"
         />
         {task.completed && task.actual_minutes != null && (
@@ -1334,7 +1616,7 @@ export function TaskFocusView() {
             </div>
           </section>
 
-          {focusedTaskId && <EventTaskLinksPanel taskId={focusedTaskId} />}
+          {focusedTaskId && <EventTaskLinksPanel taskId={focusedTaskId} goalId={selectedGoalId ?? task?.goal_id ?? null} />}
           {focusedTaskId && <WorkSessionPanel taskId={focusedTaskId} />}
         </aside>
       </div>

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ChevronLeft, Clock, Folder, Calendar, Sparkles,
   FolderOpen, Upload, FileText, CheckSquare, Square,
@@ -18,17 +19,17 @@ import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge
 import { EntityTopicChips } from '../components/EntityTopicChips';
 import { GoalPlanningPanel } from '../components/GoalPlanningPanel';
 import { TaskGraphView } from '../components/TaskGraphView';
-import { ActualTimeModal } from '../components/ActualTimeModal';
 import { ActualTimeChip } from '../components/ActualTimeChip';
 import { useGoal, useGoalTasks, useGoalResources, useTaskResources, useInvalidate, useGoalMeetings, useGoalDeadlines, useGoalMilestones, useCreateWorkSession } from '../api/hooks';
 import { archiveGoal, restoreGoal, updateGoal } from '../db/queries/goals';
-import { toggleTask, createTask, deleteTask, updateTask, deactivateTask, touchTask } from '../db/queries/tasks';
+import { toggleTask, createTask, deleteTask, updateTask, deactivateTask, touchTask, completeTask } from '../db/queries/tasks';
 import { createResource, deleteResource, detectResourceType } from '../db/queries/resources';
 import { createMeeting, updateMeeting, deleteMeeting } from '../db/queries/meetings';
 import { createDeadline, updateDeadline, deleteDeadline, assignTaskToDeadline } from '../db/queries/deadlines';
 import type { DBMeeting, DBDeadline } from '../db/schema';
 import { getGoalFinishEstimate } from '../utils/goalFinishEstimate';
 import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getTaskTimeProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
+import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
 import { apiFetch, apiPut, apiPatch, apiPost, apiDelete } from '../utils/apiFetch';
 import { calculateGoalTaskMetrics, computeGoalStatus } from '../utils/goalTaskMetrics';
 import { computeGoalTimeStats, formatVelocity, velocityColor, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
@@ -38,15 +39,12 @@ import type { DBTask, DBResource, CriticalPathStatus, DBMilestone } from '../db/
 // ─── Dynamic milestone status ─────────────────────────────────────────────────
 function deriveMilestoneStatus(milestone: DBTask, subtasks: DBTask[]): 'Completed' | 'In Progress' | 'On Hold' | 'Not Started' {
   if (milestone.completed) return 'Completed';
-  if (subtasks.length === 0) {
-    if (milestone.status === 'in_progress') return 'In Progress';
-    if (milestone.status === 'inactive')    return 'On Hold';
-    return 'Not Started';
-  }
-  if (subtasks.every(t => t.completed))           return 'Completed';
+  if (subtasks.length > 0 && subtasks.every(t => t.completed || t.status === 'done')) return 'Completed';
+  if (milestone.status === 'in_progress') return 'In Progress';
+  if (milestone.status === 'inactive' || milestone.status === 'paused' || milestone.status === 'blocked') return 'On Hold';
   if (subtasks.some(t => t.status === 'in_progress')) return 'In Progress';
-  if (subtasks.some(t => t.completed))            return 'In Progress';
-  if (subtasks.some(t => t.status === 'inactive')) return 'On Hold';
+  if (subtasks.some(t => t.completed || t.status === 'done')) return 'In Progress';
+  if (subtasks.some(t => t.status === 'inactive' || t.status === 'paused' || t.status === 'blocked')) return 'On Hold';
   return 'Not Started';
 }
 
@@ -369,11 +367,13 @@ function DeadlinePill({
   label = 'deadline',
   onSave,
   completedAt,
+  inherited = false,
 }: {
   value: string | null;
   label?: string;
   onSave: (date: string | null) => void;
   completedAt?: string | null;
+  inherited?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
@@ -404,22 +404,11 @@ function DeadlinePill({
 
   const { badge } = diffMs !== null ? formatCountdown(diffMs) : { badge: '' };
 
-  // Editing: use datetime-local so user can optionally add time.
-  // Pre-fill: datetime value or date + T23:59 for date-only.
-  const editDefault = (() => {
-    if (!value) return '';
-    if (hasTime) return value.slice(0, 16);
-    return `${value.slice(0, 10)}T23:59`;
-  })();
+  const editDefault = value ? value.slice(0, 10) : '';
 
   const handleSave = (raw: string) => {
     if (!raw) { onSave(null); return; }
-    // If user left time at 23:59 and no time was previously set, strip time back to date-only
-    if (raw.endsWith('T23:59') && !hasTime) {
-      onSave(raw.slice(0, 10));
-    } else {
-      onSave(raw);
-    }
+    onSave(raw.slice(0, 10));
   };
 
   if (editing) {
@@ -427,13 +416,13 @@ function DeadlinePill({
       <div className="flex items-center gap-1">
         <input
           ref={ref}
-          type="datetime-local"
+          type="date"
           defaultValue={editDefault}
           onBlur={e => { handleSave(e.target.value); setEditing(false); }}
           onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditing(false); }}
           className="h-[22px] rounded-full border border-[#4648d4]/40 bg-white px-2.5 text-[10px] text-[#4648d4] outline-none ring-1 ring-[#4648d4]/20"
         />
-        {value && (
+        {value && !inherited && (
           <button
             onMouseDown={e => { e.preventDefault(); onSave(null); setEditing(false); }}
             className="text-gray-300 hover:text-red-400 transition-colors"
@@ -464,13 +453,16 @@ function DeadlinePill({
   const wasLate  = daysLate !== null && daysLate > 0;
   const wasOnTime = completedAt && !wasLate;
 
-  const title = completedAt
+  const titleBase = completedAt
     ? wasLate
       ? `Completed ${daysLate}d late (due ${dateLabel})`
       : `Completed on time (due ${dateLabel})`
     : isOverdue
     ? `Overdue by ${badge.replace('-', '')}`
     : `Due: ${dateLabel}${!isFar && badge ? ` (${badge} left)` : ''}`;
+  const title = inherited
+    ? `${titleBase}. Inherited from parent task; set a task deadline to override.`
+    : titleBase;
 
   // Pill colour:
   //   completed + late  → amber
@@ -488,7 +480,9 @@ function DeadlinePill({
     ? 'border-amber-200 bg-amber-50 text-amber-600 hover:border-amber-300'
     : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-[#4648d4]/30 hover:bg-[#4648d4]/5 hover:text-[#4648d4]';
 
-  const badgeContent = completedAt
+  const badgeContent = inherited
+    ? 'parent'
+    : completedAt
     ? wasLate
       ? `${daysLate}d late`
       : 'on time'
@@ -496,7 +490,9 @@ function DeadlinePill({
     ? badge
     : null;
 
-  const badgeCls = completedAt
+  const badgeCls = inherited
+    ? 'bg-[#EEF2FF] text-[#4648d4]'
+    : completedAt
     ? wasLate
       ? 'bg-amber-100 text-amber-600'
       : 'bg-emerald-100 text-emerald-600'
@@ -508,7 +504,7 @@ function DeadlinePill({
     <button
       onClick={() => setEditing(true)}
       title={title}
-      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${pillCls}`}
+      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${pillCls} ${inherited ? 'border-dashed' : ''}`}
     >
       <Calendar size={9} className="shrink-0" />
       <span>{dateLabel}</span>
@@ -526,16 +522,20 @@ function InlineTimePill({
   task,
   allTasks,
   onSave,
+  onSaveRollupMode,
 }: {
   task: DBTask;
   allTasks: DBTask[];
   onSave: (minutes: number | null) => void;
+  onSaveRollupMode?: (mode: NonNullable<DBTask['time_rollup_mode']>) => void;
 }) {
-  const { minutes, isRollup, ownMinutes, childrenSum } = getRolledUpTime(task, allTasks);
+  const { minutes, isRollup, ownMinutes, childrenSum, includedChildrenSum, extraChildrenSum } = getRolledUpTime(task, allTasks);
   const tp = getTaskTimeProgress(task, allTasks);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(ownMinutes === null ? '' : formatTaskTime(ownMinutes));
   const ref = useRef<HTMLInputElement>(null);
+  const hasParent = Boolean(task.parent_task_id);
+  const isInsideParent = task.time_rollup_mode === 'inclusive';
 
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
   useEffect(() => {
@@ -548,13 +548,26 @@ function InlineTimePill({
     setEditing(false);
   };
 
+  const includedMinutes = includedChildrenSum ?? 0;
+  const extraMinutes = extraChildrenSum ?? 0;
   const hasOverhead = isRollup && ownMinutes !== null && childrenSum !== null;
+  const hasIncludedChildren = includedMinutes > 0;
+  const hasExtraChildren = extraMinutes > 0;
 
   const tooltipText = hasOverhead
-    ? `${formatTaskTime(minutes)} total · ${formatTaskTime(ownMinutes)} own + ${formatTaskTime(childrenSum)} subtasks`
+    ? `${formatTaskTime(minutes)} total. ${formatTaskTime(ownMinutes)} parent estimate, ${formatTaskTime(childrenSum)} subtasks.`
     : isRollup
     ? `Summed from subtasks: ${formatTaskTime(minutes)}`
     : `Estimated: ${formatTaskTime(minutes)}`;
+
+  const resolvedTooltipText = isRollup && ownMinutes !== null && hasIncludedChildren
+    ? `${formatTaskTime(minutes)} total. ${formatTaskTime(includedMinutes)} of subtasks are inside the ${formatTaskTime(ownMinutes)} parent estimate${hasExtraChildren ? `; ${formatTaskTime(extraMinutes)} adds extra.` : '.'}`
+    : hasOverhead
+    ? `${formatTaskTime(minutes)} total. ${formatTaskTime(ownMinutes)} parent estimate + ${formatTaskTime(childrenSum)} extra subtasks.`
+    : tooltipText;
+  const rollupModeTooltip = isInsideParent
+    ? 'Included inside the parent estimate. Click to count as extra time.'
+    : 'Adds extra time to the parent estimate. Click to include inside the parent estimate.';
 
   if (editing) {
     return (
@@ -590,7 +603,7 @@ function InlineTimePill({
     <span className="inline-flex items-center gap-1">
       <button
         onClick={() => setEditing(true)}
-        title={tooltipText}
+        title={resolvedTooltipText}
         className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-medium transition-all hover:shadow-sm ${
           isRollup
             ? 'border-[#4648d4]/20 bg-[#4648d4]/5 text-[#4648d4]/70 hover:border-[#4648d4]/40'
@@ -604,51 +617,123 @@ function InlineTimePill({
 
         <span>{formatTaskTime(minutes)}</span>
       </button>
+      {hasParent && minutes !== null && onSaveRollupMode && (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            onSaveRollupMode(isInsideParent ? 'additive' : 'inclusive');
+          }}
+          title={rollupModeTooltip}
+          className={`inline-flex h-[22px] min-w-[24px] items-center justify-center rounded-full border px-1.5 text-[9px] font-mono font-bold transition-colors ${
+            isInsideParent
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:border-emerald-300'
+              : 'border-amber-200 bg-amber-50 text-amber-600 hover:border-amber-300'
+          }`}
+        >
+          {isInsideParent ? 'in' : '+'}
+        </button>
+      )}
     </span>
   );
 }
 
-// ─── Task status pill with hover menu ────────────────────────────────────────
+// ─── Task status pill with click menu ────────────────────────────────────────
 function TaskStatusPill({ task, onComplete, onDeactivate, onResume }: {
   task: DBTask;
-  onComplete: () => void;
-  onDeactivate: () => void;
-  onResume: () => void;
+  onComplete: () => void | Promise<void>;
+  onDeactivate: () => void | Promise<void>;
+  onResume: () => void | Promise<void>;
 }) {
-  if (task.completed) return null;
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const s = task.status;
 
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const isDone = task.completed || s === 'done';
+  const isInProgress = s === 'in_progress';
+  const isPaused = s === 'inactive' || s === 'paused';
+  const isBlocked = s === 'blocked';
+  const isPlanned = s === 'planned';
+
   const dot =
-    s === 'in_progress' ? 'bg-[#4648d4]' :
-    s === 'inactive'    ? 'bg-amber-400'  : 'bg-gray-300';
+    isDone       ? 'bg-[#10B981]' :
+    isInProgress ? 'bg-[#4648d4]' :
+    isPaused     ? 'bg-amber-400'  :
+    isBlocked    ? 'bg-red-400'    :
+    'bg-gray-300';
 
   const label =
-    s === 'in_progress' ? 'In Progress' :
-    s === 'inactive'    ? 'Inactive'    : null;
+    isDone       ? 'Completed' :
+    isInProgress ? 'In Progress' :
+    isPaused     ? 'Paused' :
+    isBlocked    ? 'Blocked' :
+    isPlanned    ? 'Planned' :
+    'Open';
 
-  type Opt = { label: string; action: () => void; color: string };
+  type Opt = { label: string; action: () => void | Promise<void>; color: string };
   const opts: Opt[] = [];
-  if (s === 'inactive')                       opts.push({ label: 'Resume',    action: onResume,     color: 'text-[#4648d4] hover:bg-[#EEF2FF]' });
-  if (s === 'todo')                           opts.push({ label: 'Start',     action: onResume,     color: 'text-[#4648d4] hover:bg-[#EEF2FF]' });
-  if (s === 'in_progress')                    opts.push({ label: 'Pause',     action: onDeactivate, color: 'text-amber-500 hover:bg-amber-50'   });
-  if (s !== 'done')                           opts.push({ label: 'Mark done', action: onComplete,   color: 'text-emerald-600 hover:bg-emerald-50' });
+  if (isDone) {
+    opts.push({ label: 'Reopen', action: onComplete, color: 'text-gray-600 hover:bg-gray-50' });
+  } else {
+    if (isInProgress) {
+      opts.push({ label: 'Pause', action: onDeactivate, color: 'text-amber-500 hover:bg-amber-50' });
+    } else {
+      opts.push({ label: isPaused ? 'Resume' : 'Start', action: onResume, color: 'text-[#4648d4] hover:bg-[#EEF2FF]' });
+    }
+    opts.push({ label: 'Mark done', action: onComplete, color: 'text-emerald-600 hover:bg-emerald-50' });
+  }
+
+  const run = async (action: () => void | Promise<void>) => {
+    setOpen(false);
+    await action();
+  };
 
   return (
-    <div className="relative group/pill shrink-0">
-      <span className="inline-flex items-center gap-1 cursor-pointer select-none">
+    <div ref={ref} className="relative shrink-0" onClick={e => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="inline-flex h-[22px] items-center gap-1.5 rounded-full border border-gray-100 bg-white px-2 text-[9px] font-mono text-gray-500 transition-colors hover:border-[#4648d4]/20 hover:bg-[#f8f9fa]"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
-        {label && <span className="font-mono text-[9px] text-gray-400">{label}</span>}
-      </span>
-      {/* Hover menu */}
-      <div className="absolute left-0 top-full mt-1 z-30 hidden group-hover/pill:flex flex-col
-        bg-white border border-gray-100 rounded-lg shadow-lg py-1 min-w-[108px]">
-        {opts.map(o => (
-          <button key={o.label} onClick={e => { e.stopPropagation(); o.action(); }}
-            className={`px-3 py-1.5 text-[11px] font-medium text-left transition-colors ${o.color}`}>
-            {o.label}
-          </button>
-        ))}
-      </div>
+        <span>{label}</span>
+        <ChevronDown size={9} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-full z-40 mt-1 flex min-w-[116px] flex-col rounded-lg border border-gray-100 bg-white py-1 shadow-lg"
+        >
+          {opts.map(o => (
+            <button
+              key={o.label}
+              type="button"
+              onClick={() => run(o.action)}
+              className={`px-3 py-1.5 text-left text-[11px] font-medium transition-colors ${o.color}`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -672,6 +757,7 @@ function TaskTreeRow({
   onOpenFocus,
   onUpdateDeadline,
   onUpdateTime,
+  onUpdateTimeRollupMode,
   onUpdateActualTime,
 }: {
   task: DBTask;
@@ -691,6 +777,7 @@ function TaskTreeRow({
   onOpenFocus: (taskId: string) => void;
   onUpdateDeadline: (taskId: string, date: string | null) => void;
   onUpdateTime: (taskId: string, minutes: number | null) => void;
+  onUpdateTimeRollupMode: (taskId: string, mode: NonNullable<DBTask['time_rollup_mode']>) => void;
   onUpdateActualTime: (taskId: string, minutes: number | null) => void;
 }) {
   const children = childrenByParent[task.id] ?? [];
@@ -700,6 +787,8 @@ function TaskTreeRow({
   const [resourceInput, setResourceInput] = useState('');
   const resRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const effectiveDueDate = getEffectiveTaskDueDate(task, allTasks);
+  const inheritedDueDate = getInheritedTaskDueDate(task, allTasks);
 
   useEffect(() => { if (showResourceInput) resRef.current?.focus(); }, [showResourceInput]);
 
@@ -746,16 +835,18 @@ function TaskTreeRow({
         )}
 
         {/* Deadline + time — visible when set; shown on hover when empty */}
-        <div className={`flex items-center gap-1 shrink-0 ${!task.due_date && getTaskEstimatedMinutes(task) === null && !task.actual_minutes ? 'opacity-0 group-hover/sub:opacity-100' : ''} transition-opacity`}>
+        <div className={`flex items-center gap-1 shrink-0 ${!effectiveDueDate && getTaskEstimatedMinutes(task) === null && !task.actual_minutes ? 'opacity-0 group-hover/sub:opacity-100' : ''} transition-opacity`}>
           <DeadlinePill
-            value={task.due_date}
+            value={effectiveDueDate}
             onSave={d => onUpdateDeadline(task.id, d)}
             completedAt={task.completed ? (task.last_activity_at ?? task.updated_at) : null}
+            inherited={Boolean(inheritedDueDate)}
           />
           <InlineTimePill
             task={task}
             allTasks={allTasks}
             onSave={m => onUpdateTime(task.id, m)}
+            onSaveRollupMode={mode => onUpdateTimeRollupMode(task.id, mode)}
           />
           {task.completed && task.actual_minutes != null && (
             <ActualTimeChip
@@ -875,6 +966,7 @@ function TaskTreeRow({
                 onOpenFocus={onOpenFocus}
                 onUpdateDeadline={onUpdateDeadline}
                 onUpdateTime={onUpdateTime}
+                onUpdateTimeRollupMode={onUpdateTimeRollupMode}
                 onUpdateActualTime={onUpdateActualTime}
               />
             ))}
@@ -1165,6 +1257,7 @@ function MilestoneCard({
   onOpenFocus,
   onUpdateDeadline,
   onUpdateTime,
+  onUpdateTimeRollupMode,
   onUpdateActualTime,
   onDelete,
 }: {
@@ -1187,25 +1280,13 @@ function MilestoneCard({
   onOpenFocus: (taskId: string) => void;
   onUpdateDeadline: (taskId: string, date: string | null) => void;
   onUpdateTime: (taskId: string, minutes: number | null) => void;
+  onUpdateTimeRollupMode: (taskId: string, mode: NonNullable<DBTask['time_rollup_mode']>) => void;
   onUpdateActualTime: (taskId: string, minutes: number | null) => void;
   onDelete: (task: DBTask) => void;
 }) {
   const subtasks = subtasksByParent[milestone.id] ?? [];
 
-  // Derive status dynamically from subtask progress
-  const dynStatus = (() => {
-    if (milestone.completed) return 'Completed';
-    if (subtasks.length === 0) {
-      if (milestone.status === 'in_progress') return 'In Progress';
-      if (milestone.status === 'inactive')    return 'On Hold';
-      return 'Not Started';
-    }
-    if (subtasks.every(t => t.completed))                            return 'Completed';
-    if (subtasks.some(t => t.status === 'in_progress'))              return 'In Progress';
-    if (subtasks.some(t => t.completed))                             return 'In Progress';
-    if (subtasks.some(t => t.status === 'inactive'))                 return 'On Hold';
-    return 'Not Started';
-  })();
+  const dynStatus = deriveMilestoneStatus(milestone, subtasks);
 
   const [expanded, setExpanded] = useState(dynStatus === 'In Progress');
 
@@ -1222,6 +1303,31 @@ function MilestoneCard({
     'bg-gray-100 text-gray-400';
 
   const statusLabel = dynStatus;
+  const [statusOpen, setStatusOpen] = useState(false);
+  const statusRef = useRef<HTMLSpanElement>(null);
+  const effectiveDueDate = getEffectiveTaskDueDate(milestone, allTasks);
+  const inheritedDueDate = getInheritedTaskDueDate(milestone, allTasks);
+
+  useEffect(() => {
+    if (!statusOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!statusRef.current?.contains(e.target as Node)) setStatusOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setStatusOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [statusOpen]);
+
+  const runStatusAction = (action: () => void) => {
+    setStatusOpen(false);
+    action();
+  };
 
   return (
     <div id={`ms-${milestone.id}`} className="bg-white rounded-xl border border-gray-150 shadow-sm overflow-hidden">
@@ -1241,52 +1347,65 @@ function MilestoneCard({
             className="text-xs font-mono font-bold uppercase tracking-wide text-gray-800"
           />
         </span>
-        {/* Status badge — hover to change */}
+        {/* Status badge */}
         <span
-          className="relative group/msbadge shrink-0"
+          ref={statusRef}
+          className="relative shrink-0"
           onClick={e => e.stopPropagation()}
         >
-          <span className={`font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-md font-bold cursor-pointer ${badgeCls}`}>
+          <button
+            type="button"
+            onClick={() => setStatusOpen(v => !v)}
+            className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider transition-opacity hover:opacity-80 ${badgeCls}`}
+            aria-haspopup="menu"
+            aria-expanded={statusOpen}
+          >
             {statusLabel}
-          </span>
-          <div className="absolute right-0 top-full mt-1 z-30 hidden group-hover/msbadge:flex flex-col
-            bg-white border border-gray-100 rounded-lg shadow-lg py-1 min-w-[128px]">
-            {dynStatus !== 'In Progress' && dynStatus !== 'Completed' && (
-              <button onClick={() => onResume(milestone)}
-                className="px-3 py-1.5 text-[11px] font-medium text-left text-[#4648d4] hover:bg-[#EEF2FF] transition-colors">
-                {dynStatus === 'On Hold' ? 'Resume' : 'Start'}
-              </button>
-            )}
-            {dynStatus === 'In Progress' && (
-              <button onClick={() => onDeactivate(milestone)}
-                className="px-3 py-1.5 text-[11px] font-medium text-left text-amber-500 hover:bg-amber-50 transition-colors">
-                Pause
-              </button>
-            )}
-            {dynStatus !== 'Completed' && (
-              <button onClick={() => onToggleSubtask(milestone)}
-                className="px-3 py-1.5 text-[11px] font-medium text-left text-emerald-600 hover:bg-emerald-50 transition-colors">
-                Mark complete
-              </button>
-            )}
-            {dynStatus === 'Completed' && (
-              <button onClick={() => onToggleSubtask(milestone)}
-                className="px-3 py-1.5 text-[11px] font-medium text-left text-gray-500 hover:bg-gray-50 transition-colors">
-                Reopen
-              </button>
-            )}
-          </div>
+            <ChevronDown size={9} className={`transition-transform ${statusOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {statusOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-40 mt-1 flex min-w-[128px] flex-col rounded-lg border border-gray-100 bg-white py-1 shadow-lg"
+            >
+              {dynStatus !== 'In Progress' && dynStatus !== 'Completed' && (
+                <button onClick={() => runStatusAction(() => onResume(milestone))}
+                  className="px-3 py-1.5 text-left text-[11px] font-medium text-[#4648d4] transition-colors hover:bg-[#EEF2FF]">
+                  {dynStatus === 'On Hold' ? 'Resume' : 'Start'}
+                </button>
+              )}
+              {dynStatus === 'In Progress' && (
+                <button onClick={() => runStatusAction(() => onDeactivate(milestone))}
+                  className="px-3 py-1.5 text-left text-[11px] font-medium text-amber-500 transition-colors hover:bg-amber-50">
+                  Pause
+                </button>
+              )}
+              {dynStatus !== 'Completed' && (
+                <button onClick={() => runStatusAction(() => onToggleSubtask(milestone))}
+                  className="px-3 py-1.5 text-left text-[11px] font-medium text-emerald-600 transition-colors hover:bg-emerald-50">
+                  Mark complete
+                </button>
+              )}
+              {dynStatus === 'Completed' && (
+                <button onClick={() => runStatusAction(() => onToggleSubtask(milestone))}
+                  className="px-3 py-1.5 text-left text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50">
+                  Reopen
+                </button>
+              )}
+            </div>
+          )}
         </span>
         <span className="text-[10px] font-mono text-gray-400 shrink-0">{subtasks.length}</span>
         <span
           onClick={e => e.stopPropagation()}
-          className={!milestone.due_date ? 'opacity-0 group-hover/mshdr:opacity-100 transition-opacity' : ''}
+          className={!effectiveDueDate ? 'opacity-0 group-hover/mshdr:opacity-100 transition-opacity' : ''}
         >
           <DeadlinePill
-            value={milestone.due_date}
+            value={effectiveDueDate}
             label="milestone deadline"
             onSave={d => onUpdateDeadline(milestone.id, d)}
             completedAt={milestone.completed ? (milestone.last_activity_at ?? milestone.updated_at) : null}
+            inherited={Boolean(inheritedDueDate)}
           />
         </span>
         <span onClick={e => e.stopPropagation()}>
@@ -1294,6 +1413,7 @@ function MilestoneCard({
             task={milestone}
             allTasks={allTasks}
             onSave={m => onUpdateTime(milestone.id, m)}
+            onSaveRollupMode={mode => onUpdateTimeRollupMode(milestone.id, mode)}
           />
         </span>
         <button
@@ -1345,6 +1465,7 @@ function MilestoneCard({
                       onOpenFocus={onOpenFocus}
                       onUpdateDeadline={onUpdateDeadline}
                       onUpdateTime={onUpdateTime}
+                      onUpdateTimeRollupMode={onUpdateTimeRollupMode}
                       onUpdateActualTime={onUpdateActualTime}
                     />
                   ))}
@@ -1969,12 +2090,10 @@ export function GoalDetail() {
     setSelectedEventId,
     setIsDrawerOpen,
     showConfirm,
-    openCompletionReport,
   } = useAppStore();
 
   const [editingGoalTitle, setEditingGoalTitle] = useState(false);
   const [goalTitleVal, setGoalTitleVal] = useState('');
-  const [pendingComplete, setPendingComplete] = useState<DBTask | null>(null);
   const [quickTaskTitle, setQuickTaskTitle] = useState('');
   const [quickTaskTime, setQuickTaskTime] = useState('');
   const [showTimeField, setShowTimeField] = useState(false);
@@ -2028,7 +2147,22 @@ export function GoalDetail() {
   const groupedResources = { goalResources: goalResourceList, taskResources: taskResourceMap };
 
   const invalidate = useInvalidate();
+  const queryClient = useQueryClient();
   const createWorkSession = useCreateWorkSession();
+
+  const patchTaskCaches = (taskId: string, updates: Partial<DBTask> | ((task: DBTask) => Partial<DBTask>)) => {
+    queryClient.setQueriesData<DBTask[]>({ queryKey: ['tasks'] }, old => {
+      if (!old) return old;
+      let changed = false;
+      const next = old.map(task => {
+        if (task.id !== taskId) return task;
+        changed = true;
+        const patch = typeof updates === 'function' ? updates(task) : updates;
+        return { ...task, ...patch };
+      });
+      return changed ? next : old;
+    });
+  };
 
   // ── Deadline state ─────────────────────────────────────────────────────────
   const [deadlineModal, setDeadlineModal] = useState<{ mode: 'create' } | { mode: 'edit'; deadline: DBDeadline } | null>(null);
@@ -2108,25 +2242,67 @@ export function GoalDetail() {
 
   // ── Subtask actions ──
   const handleToggleSubtask = async (task: DBTask) => {
+    const now = new Date().toISOString();
     if (!task.completed) {
-      // Not done yet → log time first, then completion report modal
-      setPendingComplete(task);
+      patchTaskCaches(task.id, {
+        completed: true,
+        status: 'done',
+        completion_note: '',
+        last_activity_at: now,
+        updated_at: now,
+      });
+      try {
+        await completeTask(task.id, '');
+        triggerToast('Task completed.', 'success');
+      } catch {
+        triggerToast('Could not complete task.', 'error');
+      } finally {
+        invalidate.tasks(selectedGoalId ?? undefined);
+      }
     } else {
-      // Already done → uncomplete it
-      await toggleTask(task.id);
-      invalidate.tasks(selectedGoalId ?? undefined);
+      patchTaskCaches(task.id, previous => ({
+        completed: false,
+        status: previous.last_activity_at ? 'in_progress' : 'todo',
+        updated_at: now,
+      }));
+      try {
+        await toggleTask(task.id);
+        triggerToast('Task reopened.', 'info');
+      } catch {
+        triggerToast('Could not reopen task.', 'error');
+      } finally {
+        invalidate.tasks(selectedGoalId ?? undefined);
+      }
     }
   };
 
   const handleDeactivateSubtask = async (task: DBTask) => {
-    await deactivateTask(task.id);
-    invalidate.tasks(selectedGoalId ?? undefined);
-    triggerToast('Task paused.', 'info');
+    patchTaskCaches(task.id, { status: 'inactive', updated_at: new Date().toISOString() });
+    try {
+      await deactivateTask(task.id);
+      triggerToast('Task paused.', 'info');
+    } catch {
+      triggerToast('Could not pause task.', 'error');
+    } finally {
+      invalidate.tasks(selectedGoalId ?? undefined);
+    }
   };
 
   const handleResumeSubtask = async (task: DBTask) => {
-    await touchTask(task.id);
-    invalidate.tasks(selectedGoalId ?? undefined);
+    const now = new Date().toISOString();
+    patchTaskCaches(task.id, {
+      status: task.status === 'in_progress' || task.completed || task.status === 'done' ? task.status : 'in_progress',
+      last_activity_at: now,
+      updated_at: now,
+    });
+    try {
+      await touchTask(task.id);
+      triggerToast(task.status === 'inactive' || task.status === 'paused' ? 'Task resumed.' : 'Task started.', 'info');
+    } catch {
+      triggerToast('Could not update task status.', 'error');
+    } finally {
+      invalidate.tasks(selectedGoalId ?? undefined);
+    }
   };
 
   const handleDeleteSubtask = (task: DBTask) => {
@@ -2146,6 +2322,10 @@ export function GoalDetail() {
 
   const handleUpdateTime = async (taskId: string, minutes: number | null) => {
     await updateTask(taskId, { estimated_minutes: minutes });
+  };
+
+  const handleUpdateTimeRollupMode = async (taskId: string, mode: NonNullable<DBTask['time_rollup_mode']>) => {
+    await updateTask(taskId, { time_rollup_mode: mode });
   };
 
   const handleUpdateActualTime = async (taskId: string, minutes: number | null) => {
@@ -2530,6 +2710,7 @@ export function GoalDetail() {
                       onOpenFocus={setFocusedTaskId}
                       onUpdateDeadline={handleUpdateDeadline}
                       onUpdateTime={handleUpdateTime}
+                      onUpdateTimeRollupMode={handleUpdateTimeRollupMode}
                       onUpdateActualTime={handleUpdateActualTime}
                       onDelete={handleDeleteSubtask}
                     />
@@ -2758,26 +2939,6 @@ export function GoalDetail() {
         />
       )}
 
-      <AnimatePresence>
-        {pendingComplete && (
-          <ActualTimeModal
-            key="actual-time"
-            taskTitle={pendingComplete.title}
-            estimatedMinutes={pendingComplete.estimated_minutes}
-            onLog={async (minutes) => {
-              await createWorkSession.mutateAsync({ task_id: pendingComplete.id, minutes, source: 'completion' });
-              const taskId = pendingComplete.id;
-              setPendingComplete(null);
-              openCompletionReport(taskId);
-            }}
-            onSkip={async () => {
-              const taskId = pendingComplete.id;
-              setPendingComplete(null);
-              openCompletionReport(taskId);
-            }}
-          />
-        )}
-      </AnimatePresence>
     </motion.div>
   );
 }

@@ -148,15 +148,14 @@ function SystemStatusButton() {
 
 export function Header() {
   const {
-    currentTab, setCurrentTab,
-    isNotificationOpen, setIsNotificationOpen,
+    isNotificationOpen, setIsNotificationOpen, sidebarCollapsed,
   } = useAppStore();
   const { data: inbox } = useOrgInbox();
   const inboxTotal = inbox?.total ?? 0;
 
   return (
     <>
-      <header className="fixed top-0 right-0 left-0 md:left-[260px] h-16 z-40 bg-white/90 backdrop-blur-md hidden md:flex justify-between items-center px-6 border-b border-gray-100">
+      <header className={`fixed top-0 right-0 left-0 ${sidebarCollapsed ? 'md:left-[64px]' : 'md:left-[260px]'} transition-[left] duration-200 h-16 z-40 bg-white/90 backdrop-blur-md hidden md:flex justify-between items-center px-6 border-b border-gray-100`}>
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
             <span className="font-headline text-lg font-black text-black tracking-tight">Marina</span>
@@ -164,28 +163,6 @@ export function Header() {
               OS 2.0
             </div>
           </div>
-          <nav className="flex items-center gap-6">
-            <button
-              onClick={() => setCurrentTab('Brain Dump')}
-              className={`font-mono text-xs uppercase tracking-wider pb-1 transition-all ${
-                currentTab === 'Brain Dump'
-                  ? 'text-black font-bold border-b-2 border-black'
-                  : 'text-gray-400 hover:text-black'
-              }`}
-            >
-              Focus
-            </button>
-            <button
-              onClick={() => setCurrentTab('Goals')}
-              className={`font-mono text-xs uppercase tracking-wider pb-1 transition-all ${
-                ['Goals', 'Resources', 'Settings'].includes(currentTab)
-                  ? 'text-black font-bold border-b-2 border-black'
-                  : 'text-gray-400 hover:text-black'
-              }`}
-            >
-              Reflect
-            </button>
-          </nav>
         </div>
 
         <div className="flex items-center gap-4">

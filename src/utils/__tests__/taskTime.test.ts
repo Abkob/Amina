@@ -257,6 +257,44 @@ describe('getRolledUpTime', () => {
     expect(result.childrenSum).toBe(90);
   });
 
+  it('inclusive child time stays inside the parent estimate', () => {
+    const parent = makeTask({ id: 'P', estimated_minutes: 240 });
+    const child  = makeTask({ id: 'C', parent_task_id: 'P', estimated_minutes: 90, time_rollup_mode: 'inclusive' });
+    const all    = [parent, child];
+
+    const result = getRolledUpTime(parent, all);
+    expect(result.minutes).toBe(240);
+    expect(result.isRollup).toBe(true);
+    expect(result.ownMinutes).toBe(240);
+    expect(result.childrenSum).toBe(90);
+    expect(result.includedChildrenSum).toBe(90);
+    expect(result.extraChildrenSum).toBeNull();
+  });
+
+  it('inclusive child can raise the parent total when it exceeds the parent estimate', () => {
+    const parent = makeTask({ id: 'P', estimated_minutes: 60 });
+    const child  = makeTask({ id: 'C', parent_task_id: 'P', estimated_minutes: 90, time_rollup_mode: 'inclusive' });
+    const all    = [parent, child];
+
+    const result = getRolledUpTime(parent, all);
+    expect(result.minutes).toBe(90);
+    expect(result.childrenSum).toBe(90);
+    expect(result.includedChildrenSum).toBe(90);
+  });
+
+  it('mixes included child time with extra child time', () => {
+    const parent   = makeTask({ id: 'P', estimated_minutes: 240 });
+    const included = makeTask({ id: 'C1', parent_task_id: 'P', estimated_minutes: 90, time_rollup_mode: 'inclusive' });
+    const extra    = makeTask({ id: 'C2', parent_task_id: 'P', estimated_minutes: 120 });
+    const all      = [parent, included, extra];
+
+    const result = getRolledUpTime(parent, all);
+    expect(result.minutes).toBe(360);
+    expect(result.childrenSum).toBe(210);
+    expect(result.includedChildrenSum).toBe(90);
+    expect(result.extraChildrenSum).toBe(120);
+  });
+
   it('parent own time + multiple children → own + sum of all children', () => {
     const parent = makeTask({ id: 'P', estimated_minutes: 30 });
     const c1     = makeTask({ id: 'C1', parent_task_id: 'P', estimated_minutes: 60 });

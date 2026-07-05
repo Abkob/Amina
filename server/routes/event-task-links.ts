@@ -3,7 +3,7 @@ import { query } from '../db.js';
 
 const router = Router();
 
-// GET /api/event-task-links?event_id=xxx  OR  ?task_id=xxx
+// GET /api/event-task-links?event_id=xxx  OR  ?task_id=xxx  OR no params (all links)
 router.get('/', async (req, res) => {
   const { event_id, task_id } = req.query;
   if (event_id) {
@@ -29,7 +29,16 @@ router.get('/', async (req, res) => {
     );
     return res.json(rows);
   }
-  return res.status(400).json({ error: 'event_id or task_id required' });
+  // No filter: every link with its task's live state — one query drives the
+  // completion badges for a whole calendar week.
+  const { rows } = await query(
+    `SELECT etl.id, etl.event_id, etl.task_id, etl.planned_minutes, etl.created_at,
+            t.title as task_title, t.status as task_status, t.goal_id, t.completed
+     FROM event_task_links etl
+     JOIN tasks t ON t.id = etl.task_id
+     LIMIT 2000`,
+  );
+  return res.json(rows);
 });
 
 // POST /api/event-task-links

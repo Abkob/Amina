@@ -10,7 +10,7 @@ const router = Router();
 const TASK_UPDATE_FIELDS = new Set([
   'goal_id', 'parent_task_id', 'milestone_id', 'deadline_id',
   'title', 'description', 'status', 'priority', 'kind', 'critical_path_status',
-  'tags_json', 'due_date', 'start_date', 'estimated_duration', 'estimated_minutes',
+  'tags_json', 'due_date', 'start_date', 'estimated_duration', 'estimated_minutes', 'time_rollup_mode',
   'weight_percent', 'completed', 'position',
   'last_activity_at', 'completion_note',
   // M-021 real date planning
@@ -20,6 +20,8 @@ const TASK_UPDATE_FIELDS = new Set([
 
 // 'todo' is the legacy synonym of 'not_started'; both accepted.
 const VALID_TASK_STATUSES = new Set(['todo', 'not_started', 'planned', 'in_progress', 'paused', 'done', 'inactive', 'blocked']);
+const STARTABLE_TASK_STATUSES = new Set(['todo', 'not_started', 'planned', 'paused', 'inactive', 'blocked']);
+const VALID_TIME_ROLLUP_MODES = new Set(['additive', 'inclusive']);
 const VALID_TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
 
 // GET /api/tasks?goal_id=...&parent_task_id=...&limit=N&offset=N
@@ -67,6 +69,9 @@ router.post('/', async (req, res) => {
   if (b.priority !== undefined && !VALID_TASK_PRIORITIES.has(b.priority as string)) {
     return res.status(400).json({ error: `Invalid priority. Must be one of: ${[...VALID_TASK_PRIORITIES].join(', ')}` });
   }
+  if (b.time_rollup_mode !== undefined && !VALID_TIME_ROLLUP_MODES.has(b.time_rollup_mode as string)) {
+    return res.status(400).json({ error: `Invalid time_rollup_mode. Must be one of: ${[...VALID_TIME_ROLLUP_MODES].join(', ')}` });
+  }
   try {
     requireISODate(b.due_date, 'due_date');
     requireISODate(b.start_date, 'start_date');
@@ -85,9 +90,9 @@ router.post('/', async (req, res) => {
   await query(
     `INSERT INTO tasks
       (id,goal_id,parent_task_id,milestone_id,deadline_id,title,description,status,priority,kind,
-       critical_path_status,tags_json,due_date,start_date,estimated_duration,estimated_minutes,
+       critical_path_status,tags_json,due_date,start_date,estimated_duration,estimated_minutes,time_rollup_mode,
        weight_percent,completed,position,created_at,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
     [
       id,
       b.goal_id ?? null,
@@ -105,6 +110,7 @@ router.post('/', async (req, res) => {
       b.start_date ?? null,
       b.estimated_duration ?? null,
       b.estimated_minutes ?? null,
+      b.time_rollup_mode ?? 'additive',
       b.weight_percent ?? null,
       b.completed ?? false,
       position,
@@ -152,6 +158,9 @@ router.patch('/:id', async (req, res) => {
   }
   if (body.priority !== undefined && !VALID_TASK_PRIORITIES.has(body.priority as string)) {
     return res.status(400).json({ error: `Invalid priority. Must be one of: ${[...VALID_TASK_PRIORITIES].join(', ')}` });
+  }
+  if (body.time_rollup_mode !== undefined && !VALID_TIME_ROLLUP_MODES.has(body.time_rollup_mode as string)) {
+    return res.status(400).json({ error: `Invalid time_rollup_mode. Must be one of: ${[...VALID_TIME_ROLLUP_MODES].join(', ')}` });
   }
   try {
     if ('due_date' in body) requireISODate(body.due_date, 'due_date');
@@ -251,7 +260,7 @@ router.post('/:id/touch', async (req, res) => {
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   const task = rows[0] as Record<string, unknown>;
   const now = new Date().toISOString();
-  const newStatus = (task.status === 'todo' || task.status === 'inactive') ? 'in_progress' : task.status;
+  const newStatus = STARTABLE_TASK_STATUSES.has(String(task.status)) ? 'in_progress' : task.status;
   await query(
     'UPDATE tasks SET last_activity_at=$1, status=$2, updated_at=$3 WHERE id=$4',
     [now, newStatus, now, req.params.id],
@@ -371,7 +380,7 @@ router.post('/:id/notes', async (req, res) => {
   const { rows } = await query('SELECT goal_id, status FROM tasks WHERE id=$1', [req.params.id]);
   if (rows.length) {
     const task = rows[0] as Record<string, unknown>;
-    const newStatus = task.status === 'todo' ? 'in_progress' : task.status;
+    const newStatus = STARTABLE_TASK_STATUSES.has(String(task.status)) ? 'in_progress' : task.status;
     await query(
       'UPDATE tasks SET updated_at=$1, last_activity_at=$2, status=$3 WHERE id=$4',
       [now, now, newStatus, req.params.id],

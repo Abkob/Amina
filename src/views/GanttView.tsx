@@ -5,6 +5,7 @@ import { getTasksByGoal, updateTask } from '../db/queries/tasks';
 import { getAllMeetings } from '../db/queries/meetings';
 import type { DBGoal, DBTask, DBMeeting } from '../db/schema';
 import { useAppStore } from '../store/useAppStore';
+import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
 
 // ── Zoom config ───────────────────────────────────────────────────────────────
 
@@ -64,6 +65,10 @@ interface GanttRow {
   depth:       number;
   color:       string;
   hasChildren: boolean;
+  showUnscheduledMarker?: boolean;
+  rollupRange?: DateRange | null;
+  effectiveDueDate?: string | null;
+  inheritedDueDate?: boolean;
   task?:       DBTask;
   goal?:       DBGoal;
 }
@@ -72,6 +77,11 @@ interface Bar {
   x: number; w: number;
   clampL: boolean; clampR: boolean;
   status: string;
+}
+
+interface DateRange {
+  start: Date;
+  end: Date;
 }
 
 // ── Header column helpers ─────────────────────────────────────────────────────
@@ -138,8 +148,8 @@ function dayCols(days: Date[], cellW: number): (HCol & { isToday: boolean; muted
 
 // ── Bar computation ───────────────────────────────────────────────────────────
 
-function computeBar(task: DBTask, viewStart: Date, cellW: number, range: number): Bar | null {
-  const due   = task.due_date   ? new Date(task.due_date)   : null;
+function getOwnDateRange(task: DBTask, dueDate: string | null = task.due_date): DateRange | null {
+  const due   = dueDate         ? new Date(dueDate)         : null;
   const start = task.start_date ? new Date(task.start_date) : null;
   const estMs = task.estimated_minutes ? (task.estimated_minutes / 480) * DAY_MS : null;
 
@@ -149,22 +159,37 @@ function computeBar(task: DBTask, viewStart: Date, cellW: number, range: number)
   if (start && due)       { bS = start; bE = due; }
   else if (start && estMs){ bS = start; bE = new Date(start.getTime() + estMs); }
   else if (due && estMs)  { bE = due;   bS = new Date(due.getTime() - estMs); }
+  else if (start)         { bS = start; bE = new Date(start.getTime() + DAY_MS); }
   else if (due)           { bE = due;   bS = new Date(due.getTime() - DAY_MS); }
-  else if (estMs)         { const n = new Date(); n.setHours(0,0,0,0); bS = n; bE = new Date(n.getTime() + estMs); }
   else                    { return null; }
 
-  const vEnd = new Date(viewStart.getTime() + range * DAY_MS);
-  if (bE!.getTime() < viewStart.getTime() || bS!.getTime() > vEnd.getTime()) return null;
+  return { start: bS, end: bE };
+}
 
-  const clampL = bS!.getTime() < viewStart.getTime();
-  const clampR = bE!.getTime() > vEnd.getTime();
-  const cS = clampL ? viewStart.getTime() : bS!.getTime();
-  const cE = clampR ? vEnd.getTime()      : bE!.getTime();
+function computeBarFromRange(dateRange: DateRange, status: string, viewStart: Date, cellW: number, range: number): Bar | null {
+  const bS = dateRange.start;
+  const bE = dateRange.end;
+  const vEnd = new Date(viewStart.getTime() + range * DAY_MS);
+  if (bE.getTime() < viewStart.getTime() || bS.getTime() > vEnd.getTime()) return null;
+
+  const clampL = bS.getTime() < viewStart.getTime();
+  const clampR = bE.getTime() > vEnd.getTime();
+  const cS = clampL ? viewStart.getTime() : bS.getTime();
+  const cE = clampR ? vEnd.getTime()      : bE.getTime();
 
   const x = ((cS - viewStart.getTime()) / DAY_MS) * cellW;
   const w = Math.max(((cE - cS) / DAY_MS) * cellW, cellW * 0.5);
 
-  return { x, w, clampL, clampR, status: task.status };
+  return { x, w, clampL, clampR, status };
+}
+
+function computeBar(task: DBTask, viewStart: Date, cellW: number, range: number, dueDate: string | null = task.due_date): Bar | null {
+  const dateRange = getOwnDateRange(task, dueDate);
+  return dateRange ? computeBarFromRange(dateRange, task.status, viewStart, cellW, range) : null;
+}
+
+function hasGanttSchedule(task: DBTask, dueDate: string | null = task.due_date): boolean {
+  return getOwnDateRange(task, dueDate) !== null;
 }
 
 // ── Row hierarchy builder ─────────────────────────────────────────────────────
@@ -176,6 +201,7 @@ function buildRows(
   collapsed: Set<string>,
   hiddenIds: Set<string>,
   hideStatuses: Set<string>,
+  hideUnscheduled: boolean,
 ): GanttRow[] {
   const rows: GanttRow[] = [];
 
@@ -192,16 +218,85 @@ function buildRows(
     }
     for (const arr of byParent.values()) arr.sort((a, b) => a.position - b.position);
 
-    rows.push({ kind: 'goal', id: goal.id, label: goal.title, depth: 0, color, hasChildren: (byParent.get(null) ?? []).length > 0, goal });
+    const descendantMemo = new Map<string, boolean>();
+    const rangeMemo = new Map<string, DateRange | null>();
+    const dueMemo = new Map<string, string | null>();
+    const getEffectiveDue = (task: DBTask): string | null => {
+      const cached = dueMemo.get(task.id);
+      if (cached !== undefined) return cached;
+      const due = getEffectiveTaskDueDate(task, tasks);
+      dueMemo.set(task.id, due);
+      return due;
+    };
+    const passesBaseFilters = (task: DBTask) =>
+      task.kind !== 'next_action'
+      && !hiddenIds.has(task.id)
+      && !hideStatuses.has(normStatus(task.status));
+    const mergeRanges = (ranges: DateRange[]): DateRange | null => {
+      if (!ranges.length) return null;
+      return ranges.reduce((acc, r) => ({
+        start: acc.start.getTime() <= r.start.getTime() ? acc.start : r.start,
+        end: acc.end.getTime() >= r.end.getTime() ? acc.end : r.end,
+      }));
+    };
+    const getEffectiveRange = (task: DBTask): DateRange | null => {
+      const cached = rangeMemo.get(task.id);
+      if (cached !== undefined) return cached;
+
+      const ownRange = getOwnDateRange(task, getEffectiveDue(task));
+      if (ownRange) {
+        rangeMemo.set(task.id, ownRange);
+        return ownRange;
+      }
+
+      const childRanges = (byParent.get(task.id) ?? [])
+        .filter(passesBaseFilters)
+        .map(child => getEffectiveRange(child))
+        .filter((r): r is DateRange => r !== null);
+      const merged = mergeRanges(childRanges);
+      rangeMemo.set(task.id, merged);
+      return merged;
+    };
+    const hasVisibleDescendant = (taskId: string): boolean => {
+      const cached = descendantMemo.get(taskId);
+      if (cached !== undefined) return cached;
+      const result = (byParent.get(taskId) ?? []).some(child =>
+        passesBaseFilters(child)
+        && (!hideUnscheduled || getEffectiveRange(child) !== null || hasVisibleDescendant(child.id)),
+      );
+      descendantMemo.set(taskId, result);
+      return result;
+    };
+    const isVisibleTask = (task: DBTask) =>
+      passesBaseFilters(task)
+      && (!hideUnscheduled || getEffectiveRange(task) !== null || hasVisibleDescendant(task.id));
+    const visibleChildren = (parentId: string | null) => (byParent.get(parentId) ?? []).filter(isVisibleTask);
+
+    rows.push({ kind: 'goal', id: goal.id, label: goal.title, depth: 0, color, hasChildren: visibleChildren(null).length > 0, goal });
     if (collapsed.has(goal.id)) return;
 
     function addChildren(parentId: string | null, depth: number) {
       for (const t of byParent.get(parentId) ?? []) {
-        if (t.kind === 'next_action') continue;
-        if (hiddenIds.has(t.id) || hideStatuses.has(normStatus(t.status))) continue; // skip + skip children
-        const kids = byParent.get(t.id) ?? [];
+        if (!isVisibleTask(t)) continue;
+        const kids = visibleChildren(t.id);
         const kind: GanttRow['kind'] = depth === 1 && t.kind === 'critical_path' ? 'milestone' : depth === 1 ? 'task' : 'subtask';
-        rows.push({ kind, id: t.id, label: t.title, depth, color, hasChildren: kids.length > 0, task: t });
+        const effectiveDueDate = getEffectiveDue(t);
+        const inheritedDueDate = getInheritedTaskDueDate(t, tasks) !== null;
+        const ownRange = getOwnDateRange(t, effectiveDueDate);
+        const effectiveRange = getEffectiveRange(t);
+        rows.push({
+          kind,
+          id: t.id,
+          label: t.title,
+          depth,
+          color,
+          hasChildren: kids.length > 0,
+          showUnscheduledMarker: !hideUnscheduled,
+          rollupRange: ownRange ? null : effectiveRange,
+          effectiveDueDate,
+          inheritedDueDate,
+          task: t,
+        });
         if (!collapsed.has(t.id)) addChildren(t.id, depth + 1);
       }
     }
@@ -282,8 +377,13 @@ function GanttRowEl({ row, days, viewStart, cellW, range, isCollapsed, onToggle,
   onHide:       (id: string) => void;
 }) {
   const h      = ROW_H[row.kind];
-  const bar    = row.task ? computeBar(row.task, viewStart, cellW, range) : null;
+  const ownBar = row.task ? computeBar(row.task, viewStart, cellW, range, row.effectiveDueDate ?? null) : null;
+  const rollupBar = !ownBar && row.rollupRange
+    ? computeBarFromRange(row.rollupRange, row.task?.status ?? 'todo', viewStart, cellW, range)
+    : null;
+  const bar    = ownBar ?? rollupBar;
   const bst    = bar ? (STATUS_BAR[bar.status] ?? STATUS_BAR.todo) : null;
+  const isRollupBar = !ownBar && Boolean(rollupBar);
   const today  = new Date(); today.setHours(0, 0, 0, 0);
   const todayX = ((today.getTime() - viewStart.getTime()) / DAY_MS) * cellW;
   const inView = todayX >= 0 && todayX <= range * cellW;
@@ -370,27 +470,30 @@ function GanttRowEl({ row, days, viewStart, cellW, range, isCollapsed, onToggle,
               width:           bar.w,
               top:             row.kind === 'goal' ? '20%' : '15%',
               height:          row.kind === 'goal' ? '60%' : '70%',
-              backgroundColor: bst.dashed ? row.color + '18' : row.color,
-              borderColor:     row.color,
-              borderWidth:     bst.dashed ? 2 : 0,
-              borderStyle:     bst.dashed ? 'dashed' : 'none',
-              opacity:         bst.opacity,
-              boxShadow:       bst.dashed ? 'none' : '0 1px 3px rgba(0,0,0,0.15)',
+              backgroundColor: isRollupBar ? row.color + '10' : bst.dashed ? row.color + '18' : row.color,
+              borderColor:     isRollupBar ? row.color + '88' : row.color,
+              borderWidth:     isRollupBar ? 1 : bst.dashed ? 2 : 0,
+              borderStyle:     isRollupBar ? 'solid' : bst.dashed ? 'dashed' : 'none',
+              opacity:         isRollupBar ? 1 : bst.opacity,
+              boxShadow:       isRollupBar || bst.dashed ? 'none' : '0 1px 3px rgba(0,0,0,0.15)',
             }}
             onDoubleClick={() => onBarDblClick(row)}
             title={[
               row.label,
-              row.task?.start_date && `start ${row.task.start_date.slice(0,10)}`,
-              row.task?.due_date   && `due ${row.task.due_date.slice(0,10)}`,
+              isRollupBar && 'rollup from child tasks',
+              !isRollupBar && row.task?.start_date && `start ${row.task.start_date.slice(0,10)}`,
+              !isRollupBar && row.effectiveDueDate && (row.inheritedDueDate
+                ? `due ${row.effectiveDueDate.slice(0,10)} from parent`
+                : `due ${row.effectiveDueDate.slice(0,10)}`),
               row.task?.estimated_minutes && `est ${Math.round(row.task.estimated_minutes / 60)}h`,
             ].filter(Boolean).join(' · ')}
           >
             {/* Progress fill for in_progress */}
-            {bar.status === 'in_progress' && fillPct > 0 && (
+            {!isRollupBar && bar.status === 'in_progress' && fillPct > 0 && (
               <div className="absolute left-0 top-0 bottom-0 bg-white/20 pointer-events-none" style={{ width: `${fillPct}%` }} />
             )}
             {/* Done stripe overlay */}
-            {bar.status === 'done' && (
+            {!isRollupBar && bar.status === 'done' && (
               <div className="absolute inset-0 opacity-20 pointer-events-none"
                 style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.5) 4px, rgba(255,255,255,0.5) 6px)' }} />
             )}
@@ -398,8 +501,8 @@ function GanttRowEl({ row, days, viewStart, cellW, range, isCollapsed, onToggle,
             {bar.clampR && <div className="absolute right-0 top-0 bottom-0 w-1.5 bg-black/20 rounded-r" />}
             {/* Label inside bar */}
             {bar.w > 30 && (
-              <span className={`pl-1.5 text-[8px] font-semibold truncate pointer-events-none leading-none select-none ${bst.dashed ? 'text-gray-600' : 'text-white'}`}>
-                {row.task?.estimated_minutes ? `${Math.round(row.task.estimated_minutes / 60)}h` : ''}
+              <span className={`pl-1.5 text-[8px] font-semibold truncate pointer-events-none leading-none select-none ${isRollupBar || bst.dashed ? 'text-gray-600' : 'text-white'}`}>
+                {isRollupBar ? 'rollup' : row.task?.estimated_minutes ? `${Math.round(row.task.estimated_minutes / 60)}h` : ''}
               </span>
             )}
             {/* Double-click hint on hover */}
@@ -410,7 +513,7 @@ function GanttRowEl({ row, days, viewStart, cellW, range, isCollapsed, onToggle,
         )}
 
         {/* Unscheduled — clickable diamond */}
-        {!bar && row.task && inView && (
+        {!bar && row.task && inView && !hasGanttSchedule(row.task, row.effectiveDueDate ?? null) && !row.rollupRange && row.showUnscheduledMarker !== false && (
           <div
             className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rotate-45 border-2 cursor-pointer hover:scale-125 transition-transform"
             style={{ left: todayX - 6, borderColor: row.color + 'aa', backgroundColor: row.color + '22' }}
@@ -427,15 +530,32 @@ function GanttRowEl({ row, days, viewStart, cellW, range, isCollapsed, onToggle,
 
 function DateModal({ row, onSave, onClose }: {
   row:    GanttRow;
-  onSave: (start: string | null, end: string | null) => void;
+  onSave: (updates: Partial<Pick<DBTask, 'start_date' | 'due_date' | 'scheduling_enabled'>>) => void;
   onClose:() => void;
 }) {
   const [start, setStart] = useState(row.task?.start_date?.slice(0, 10) ?? '');
   const [end,   setEnd]   = useState(row.task?.due_date?.slice(0, 10)   ?? '');
+  const isLongTerm = row.task?.scheduling_enabled === false;
+  const hasChildren = row.hasChildren;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl border border-gray-200 p-5 w-72" onClick={e => e.stopPropagation()}>
         <p className="text-[11px] font-bold text-gray-800 mb-4 truncate">{row.label}</p>
+        {hasChildren && !row.task?.start_date && !row.task?.due_date && row.rollupRange && (
+          <p className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-2 text-[10px] text-indigo-700">
+            This parent is rolling up from child task dates.
+          </p>
+        )}
+        {row.inheritedDueDate && row.effectiveDueDate && (
+          <p className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-2 text-[10px] text-indigo-700">
+            This task is following its parent due date ({row.effectiveDueDate.slice(0, 10)}). Set an explicit due date here to override it.
+          </p>
+        )}
+        {isLongTerm && (
+          <p className="mb-3 rounded-lg border border-amber-100 bg-amber-50 px-2.5 py-2 text-[10px] text-amber-700">
+            Long-term mode is on. This task stays out of schedule auto-planning.
+          </p>
+        )}
         <div className="space-y-3">
           <label className="flex flex-col gap-1">
             <span className="text-[9px] font-mono text-gray-400 uppercase tracking-wide">Start</span>
@@ -448,17 +568,30 @@ function DateModal({ row, onSave, onClose }: {
               className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4] transition-colors" />
           </label>
         </div>
-        <div className="flex gap-2 mt-4">
-          <button onClick={() => onSave(start || null, end || null)}
-            className="flex-1 bg-[#4648d4] text-white text-xs font-bold py-2 rounded-lg hover:bg-[#3436b0] transition-colors">
+        <div className="mt-4 space-y-2">
+          <button
+            onClick={() => onSave({ start_date: start || null, due_date: end || null, scheduling_enabled: true })}
+            className="w-full bg-[#4648d4] text-white text-xs font-bold py-2 rounded-lg hover:bg-[#3436b0] transition-colors">
             Save
           </button>
-          <button onClick={onClose} className="px-3 py-2 text-xs text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
-            Cancel
-          </button>
-          <button onClick={() => onSave(null, null)} title="Clear dates"
-            className="px-3 py-2 text-xs text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors">
-            <Minus size={12} />
+          <div className="flex gap-2">
+            <button onClick={onClose} className="flex-1 px-3 py-2 text-xs text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+              Cancel
+            </button>
+            <button onClick={() => onSave({ start_date: null, due_date: null })} title="Clear dates"
+              className="px-3 py-2 text-xs text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors">
+              <Minus size={12} />
+            </button>
+          </div>
+          <button
+            onClick={() => onSave({ start_date: null, due_date: null, scheduling_enabled: isLongTerm ? true : false })}
+            className={`w-full rounded-lg border px-3 py-2 text-[10px] font-semibold transition-colors ${
+              isLongTerm
+                ? 'border-[#4648d4]/25 text-[#4648d4] hover:bg-[#4648d4]/5'
+                : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300'
+            }`}
+          >
+            {isLongTerm ? 'Use in schedule again' : hasChildren ? 'Long-term / child rollup' : 'Long-term / no deadline'}
           </button>
         </div>
       </div>
@@ -470,7 +603,15 @@ function DateModal({ row, onSave, onClose }: {
 
 const CAL_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 type CalMode = 'day' | 'week' | 'month';
-interface CalEvent { dateStr: string; task: DBTask; color: string; goalId: string; goalTitle: string }
+interface CalEvent {
+  dateStr: string;
+  task: DBTask;
+  color: string;
+  goalId: string;
+  goalTitle: string;
+  inheritedDueDate?: boolean;
+  effectiveDueDate?: string | null;
+}
 
 // blocked and inactive are treated identically throughout the UI
 const normStatus = (s: string) => s === 'blocked' ? 'inactive' : s;
@@ -533,7 +674,7 @@ function CalendarView({
   const { navigateToGoal, setFocusedTaskId } = useAppStore();
   const [calMode, setCalMode] = useState<CalMode>('month');
   const [curDate, setCurDate] = useState<Date>(() => { const d = new Date(); d.setHours(0,0,0,0); return d; });
-  const [popTask, setPopTask] = useState<{ task: DBTask; color: string; goalId: string; goalTitle: string } | null>(null);
+  const [popTask, setPopTask] = useState<CalEvent | null>(null);
 
   const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
 
@@ -542,9 +683,14 @@ function CalendarView({
     goals.forEach((g, gi) => {
       if (!selected.has(g.id)) return;
       const color = GOAL_COLORS[gi % GOAL_COLORS.length];
-      for (const t of tasksByGoal[g.id] ?? []) {
-        if (t.due_date) out.push({ dateStr: t.due_date.slice(0, 10), task: t, color, goalId: g.id, goalTitle: g.title });
-        if (t.start_date && t.start_date.slice(0,10) !== t.due_date?.slice(0,10))
+      const tasks = tasksByGoal[g.id] ?? [];
+      for (const t of tasks) {
+        const effectiveDueDate = getEffectiveTaskDueDate(t, tasks);
+        const inheritedDueDate = getInheritedTaskDueDate(t, tasks) !== null;
+        if (effectiveDueDate) {
+          out.push({ dateStr: effectiveDueDate.slice(0, 10), task: t, color, goalId: g.id, goalTitle: g.title, inheritedDueDate, effectiveDueDate });
+        }
+        if (t.start_date && t.start_date.slice(0,10) !== effectiveDueDate?.slice(0,10))
           out.push({ dateStr: t.start_date.slice(0,10), task: t, color, goalId: g.id, goalTitle: g.title });
       }
     });
@@ -639,7 +785,11 @@ function CalendarView({
         <div className="space-y-1 mb-4">
           <StatusBadge status={popTask.task.status} />
           {popTask.task.start_date && <p className="text-[10px] text-gray-500 font-mono">Start: {popTask.task.start_date.slice(0,10)}</p>}
-          {popTask.task.due_date   && <p className="text-[10px] text-gray-500 font-mono">Due:   {popTask.task.due_date.slice(0,10)}</p>}
+          {(popTask.effectiveDueDate ?? popTask.task.due_date) && (
+            <p className="text-[10px] text-gray-500 font-mono">
+              Due: {(popTask.effectiveDueDate ?? popTask.task.due_date)!.slice(0,10)}{popTask.inheritedDueDate ? ' from parent' : ''}
+            </p>
+          )}
           {popTask.task.estimated_minutes && (
             <p className="text-[10px] text-gray-500 font-mono">Est: {Math.round(popTask.task.estimated_minutes / 60)}h
               {popTask.task.actual_minutes ? ` · done ${Math.round(popTask.task.actual_minutes / 60)}h` : ''}
@@ -713,7 +863,7 @@ function CalendarView({
             <div className="space-y-2">
               {evts.map((evt, i) => (
                 <button key={`${evt.task.id}-${i}`}
-                  onClick={() => setPopTask({ task: evt.task, color: evt.color, goalId: evt.goalId, goalTitle: evt.goalTitle })}
+                  onClick={() => setPopTask(evt)}
                   className="w-full text-left border border-gray-100 rounded-xl p-3 hover:border-gray-200 hover:shadow-sm transition-all relative overflow-hidden"
                 >
                   <div className="absolute left-0 top-0 bottom-0 w-1 rounded-l-xl" style={{ backgroundColor: evt.color }} />
@@ -769,7 +919,7 @@ function CalendarView({
                   ))}
                   {evts.slice(0, 10).map((evt, ei) => (
                     <CalChip key={`${evt.task.id}-${ei}`} evt={evt}
-                      onClick={() => setPopTask({ task: evt.task, color: evt.color, goalId: evt.goalId, goalTitle: evt.goalTitle })} />
+                      onClick={() => setPopTask(evt)} />
                   ))}
                   {evts.length > 10 && <p className="text-[8px] text-gray-400 pl-1">+{evts.length - 10} more</p>}
                 </div>
@@ -818,7 +968,7 @@ function CalendarView({
                       ))}
                       {evts.slice(0, 4).map((evt, ei) => (
                         <CalChip key={`${evt.task.id}-${ei}`} evt={evt}
-                          onClick={() => setPopTask({ task: evt.task, color: evt.color, goalId: evt.goalId, goalTitle: evt.goalTitle })} />
+                          onClick={() => setPopTask(evt)} />
                       ))}
                       {evts.length > 4 && <p className="text-[8px] text-gray-400 pl-1">+{evts.length - 4} more</p>}
                     </div>
@@ -853,11 +1003,14 @@ const STATUS_HIDE_OPTIONS = [
 
 function FilterPanel({
   hideStatuses, onToggleStatus,
+  hideUnscheduled, onToggleUnscheduled,
   hiddenIds, allTasksById,
   onUnhide, onUnhideAll, onClose,
 }: {
   hideStatuses:   Set<string>;
   onToggleStatus: (s: string) => void;
+  hideUnscheduled: boolean;
+  onToggleUnscheduled: () => void;
   hiddenIds:      Set<string>;
   allTasksById:   Map<string, DBTask>;
   onUnhide:       (id: string) => void;
@@ -865,7 +1018,7 @@ function FilterPanel({
   onClose:        () => void;
 }) {
   const hiddenList  = [...hiddenIds].filter(id => allTasksById.has(id));
-  const totalActive = hiddenList.length + hideStatuses.size;
+  const totalActive = hiddenList.length + hideStatuses.size + (hideUnscheduled ? 1 : 0);
 
   return (
     <div className="absolute top-full right-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-60 p-3.5" onClick={e => e.stopPropagation()}>
@@ -902,6 +1055,30 @@ function FilterPanel({
           );
         })}
       </div>
+
+      <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-2">Planning</p>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={hideUnscheduled}
+        onClick={onToggleUnscheduled}
+        className={`mb-4 flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left transition-all ${
+          hideUnscheduled
+            ? 'border-[#4648d4]/30 bg-[#4648d4]/5'
+            : 'border-gray-200 bg-white hover:border-gray-300'
+        }`}
+      >
+        <span className="flex items-center gap-2">
+          <span className={`h-3 w-3 rotate-45 border-2 ${hideUnscheduled ? 'border-[#4648d4] bg-[#4648d4]/10' : 'border-gray-300 bg-gray-50'}`} />
+            <span>
+              <span className="block text-[10px] font-semibold text-gray-700">Hide unscheduled</span>
+            <span className="block text-[8px] font-mono text-gray-400">No start or due date</span>
+            </span>
+        </span>
+        <span className={`relative h-4 w-7 rounded-full transition-colors ${hideUnscheduled ? 'bg-[#4648d4]' : 'bg-gray-200'}`}>
+          <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${hideUnscheduled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+        </span>
+      </button>
 
       {/* Manually hidden rows */}
       {hiddenList.length > 0 ? (
@@ -1022,7 +1199,7 @@ function MeetingFlagsRow({
 
 // ── GanttView ─────────────────────────────────────────────────────────────────
 
-export function GanttView() {
+export function GanttView({ embedded = false }: { embedded?: boolean } = {}) {
   const [goals,       setGoals]       = useState<DBGoal[]>([]);
   const [meetings,    setMeetings]    = useState<DBMeeting[]>([]);
   const [selected,    setSelected]    = useState<Set<string>>(new Set());
@@ -1033,6 +1210,7 @@ export function GanttView() {
   const [viewMode,      setViewMode]      = useState<'gantt' | 'calendar'>('gantt');
   const [hiddenIds,     setHiddenIds]     = useState<Set<string>>(new Set());
   const [hideStatuses,  setHideStatuses]  = useState<Set<string>>(new Set());
+  const [hideUnscheduled, setHideUnscheduled] = useState(false);
   const [showFilters,   setShowFilters]   = useState(false);
   const filterBtnRef = useRef<HTMLDivElement>(null);
 
@@ -1081,8 +1259,8 @@ export function GanttView() {
   }, [tasksByGoal]);
 
   const rows = useMemo(
-    () => buildRows(goals, selected, tasksByGoal, collapsed, hiddenIds, hideStatuses),
-    [goals, selected, tasksByGoal, collapsed, hiddenIds, hideStatuses],
+    () => buildRows(goals, selected, tasksByGoal, collapsed, hiddenIds, hideStatuses, hideUnscheduled),
+    [goals, selected, tasksByGoal, collapsed, hiddenIds, hideStatuses, hideUnscheduled],
   );
 
   const goalColorMap = useMemo(() => {
@@ -1091,7 +1269,7 @@ export function GanttView() {
     return m;
   }, [goals]);
 
-  const filterBadge = hiddenIds.size + hideStatuses.size;
+  const filterBadge = hiddenIds.size + hideStatuses.size + (hideUnscheduled ? 1 : 0);
 
   // Human-readable label of the currently visible range
   const rangeLabel = useMemo(() => {
@@ -1136,14 +1314,17 @@ export function GanttView() {
     setHiddenIds(s => { const n = new Set(s); n.delete(id); return n; });
   const toggleHideStatus = (st: string) =>
     setHideStatuses(s => { const n = new Set(s); n.has(st) ? n.delete(st) : n.add(st); return n; });
-  const resetAllFilters = () => { setHiddenIds(new Set()); setHideStatuses(new Set()); };
+  const resetAllFilters = () => { setHiddenIds(new Set()); setHideStatuses(new Set()); setHideUnscheduled(false); };
 
   const toggleGoal = (id: string) =>
     setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const handleDateSave = async (row: GanttRow, start: string | null, end: string | null) => {
+  const handlePlanningSave = async (
+    row: GanttRow,
+    updates: Partial<Pick<DBTask, 'start_date' | 'due_date' | 'scheduling_enabled'>>,
+  ) => {
     if (!row.task) return;
-    await updateTask(row.task.id, { start_date: start, due_date: end });
+    await updateTask(row.task.id, updates);
     const goalId = row.task.goal_id;
     if (goalId) {
       const updated = await getTasksByGoal(goalId);
@@ -1153,7 +1334,7 @@ export function GanttView() {
   };
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-white">
+    <div className={`flex flex-col overflow-hidden bg-white ${embedded ? 'h-full min-h-[640px] rounded-xl border border-gray-200' : 'h-screen'}`}>
 
       {/* ── Top bar ── */}
       <div className="shrink-0 border-b border-gray-200 bg-white px-5 py-2.5 flex items-center gap-3 flex-wrap">
@@ -1226,6 +1407,8 @@ export function GanttView() {
               <FilterPanel
                 hideStatuses={hideStatuses}
                 onToggleStatus={toggleHideStatus}
+                hideUnscheduled={hideUnscheduled}
+                onToggleUnscheduled={() => setHideUnscheduled(v => !v)}
                 hiddenIds={hiddenIds}
                 allTasksById={allTasksById}
                 onUnhide={unhideRow}
@@ -1293,6 +1476,10 @@ export function GanttView() {
             <div className="w-3 h-3 rotate-45 border-2 border-gray-400 bg-gray-100 shrink-0" />
             <span className="text-[9px] text-gray-500 font-mono">◇ Unscheduled</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <div className="h-3 w-6 rounded-sm border border-[#4648d4]/50 bg-[#4648d4]/10 shrink-0" />
+            <span className="text-[9px] text-gray-500 font-mono">Rollup from children</span>
+          </div>
           <span className="ml-auto text-[9px] text-gray-400 font-mono hidden lg:block">Double-click any bar or ◇ to set dates</span>
         </div>
       )}
@@ -1309,6 +1496,8 @@ export function GanttView() {
               const fakeRow: GanttRow = {
                 kind: 'task', id: task.id, label: task.title,
                 depth: 1, color, hasChildren: false, task,
+                effectiveDueDate: getEffectiveTaskDueDate(task, tasksByGoal[task.goal_id ?? ''] ?? []),
+                inheritedDueDate: getInheritedTaskDueDate(task, tasksByGoal[task.goal_id ?? ''] ?? []) !== null,
               };
               setEditRow(fakeRow);
             }}
@@ -1364,7 +1553,7 @@ export function GanttView() {
       {editRow?.task && (
         <DateModal
           row={editRow}
-          onSave={(s, e) => handleDateSave(editRow, s, e)}
+          onSave={updates => handlePlanningSave(editRow, updates)}
           onClose={() => setEditRow(null)}
         />
       )}
