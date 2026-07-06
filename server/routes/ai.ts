@@ -6,7 +6,8 @@ import { validateModelActions, type ValidatedAction } from '../services/actionVa
 import { chat, parseJSON, ollamaHealth, CHAT_MODEL } from '../ollama.js';
 import { buildRetrievalContext } from '../services/retrieval.js';
 import { computeSchedule, type SchedulerResult } from '../services/scheduler.js';
-import { layoutPlan, addDaysStr, dateToWeekPosServer, eventDateServer, fmtTimeStr, resolvePlanWindow, type PlanWindowParams } from '../services/planLayout.js';
+import { layoutPlan, addDaysStr, dateToWeekPosServer, eventDateServer, fmtTimeStr, resolvePlanWindow, expandSeries, type PlanWindowParams, type SeriesParams } from '../services/planLayout.js';
+import { suggestEstimate } from '../services/estimateSuggest.js';
 import { assertSafeAIContext } from '../utils/contextSafety.js';
 import { rateLimit } from '../utils/rateLimit.js';
 import { generateDeterministicSummaries, generateEntitySummary } from '../services/summaryGenerator.js';
@@ -500,6 +501,20 @@ ALWAYS respond with a valid JSON object (no markdown wrapping, pure JSON):
         "end_hour": 18,
         "relative_hours": 3
       }
+    },
+    {
+      "id": "a8",
+      "type": "create_block_series",
+      "description": "Recurring routine time, e.g. every morning 6-9 for a month",
+      "params": {
+        "title": "Morning study",
+        "start_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "start_hour": 6,
+        "end_hour": 9,
+        "days_of_week": [1, 2, 3, 4, 5],
+        "task_id": "<optional — link every session to this task>"
+      }
     }
   ],
   "feasibility": {
@@ -543,6 +558,8 @@ The JSON injected under "Current data" has these top-level keys:
   - relative to right now ("the next 3 hours") → set relative_hours ONLY; the server knows the clock, you don't
   All params are optional — omit what the user didn't constrain. The app renders the plan as an interactive calendar the user can drag and apply.
 - With plan_schedule, "reply" is your recommendation, not a schedule: 1–3 sentences on what to hit first and why, what's at risk, and what won't fit. NEVER enumerate day-by-day placements in text — the calendar shows them.
+- RECURRING/ROUTINE requests ("every day 6–9am for a month", "weekday mornings until August", "gym MWF at 7") are ONE create_block_series action: derive start/end dates from their words (default span: one month), days_of_week (1=Mon…7=Sun) ONLY when they restrict days, task_id when they name an existing task. The app shows every occurrence on a calendar for one-tap apply.
+- Unestimated tasks are excluded from plans, but the plan widget lets the user estimate them with one tap — if many tasks lack estimates, mention it in your reply and encourage the quick triage.
 - actions[] may be empty if no changes are needed
 - Only propose actions that make sense given the user's data
 - Use schedule_prefs.effective_capacity_minutes for all scheduling math
@@ -1382,6 +1399,77 @@ async function loadSchedulerInputs(horizonDays: number) {
 // days into concrete timed blocks around meetings and existing calendar
 // blocks. Nothing is written — the payload lives on the chat message until
 // the user applies it from the widget.
+/** Timed meetings + existing dated blocks between two dates — the fixed
+ *  context every plan/series lays itself around. */
+async function loadBusyWindow(fromStr: string, toStr: string) {
+  const [{ rows: meetingRows }, { rows: eventRows }] = await Promise.all([
+    query(
+      `SELECT id, title, scheduled_at, duration_minutes FROM meetings
+       WHERE DATE(scheduled_at::timestamp) BETWEEN $1 AND $2`,
+      [fromStr, toStr],
+    ),
+    query(`SELECT id, title, day_index, start_hour, duration_hours, week_start FROM events WHERE week_start IS NOT NULL`),
+  ]);
+
+  const busy: Array<{ date: string; start_hour: number; duration_hours: number; title: string; kind: 'meeting' | 'block' }> = [];
+  for (const m of meetingRows as Record<string, unknown>[]) {
+    const dt = new Date(String(m.scheduled_at));
+    if (Number.isNaN(dt.getTime())) continue;
+    busy.push({
+      date: String(m.scheduled_at).slice(0, 10),
+      start_hour: dt.getHours() + dt.getMinutes() / 60,
+      duration_hours: Math.max(0.25, Number(m.duration_minutes ?? 60) / 60),
+      title: String(m.title ?? 'Meeting'),
+      kind: 'meeting',
+    });
+  }
+  for (const ev of eventRows as Record<string, unknown>[]) {
+    const date = eventDateServer(String(ev.week_start), Number(ev.day_index ?? 0));
+    if (date < fromStr || date > toStr) continue;
+    busy.push({
+      date,
+      start_hour: Number(ev.start_hour ?? 9),
+      duration_hours: Math.max(0.25, Number(ev.duration_hours ?? 1)),
+      title: String(ev.title ?? 'Block'),
+      kind: 'block',
+    });
+  }
+  return busy;
+}
+
+/** Unestimated-but-otherwise-schedulable tasks with a history-grounded guess
+ *  each — the plan widget's one-tap estimate triage. */
+async function loadEstimateTriage(notSchedulable: Array<{ task_id: string; title: string; reasons: string[] }>) {
+  // A task qualifies for triage when the estimate is what's blocking it —
+  // a missing date can ride along (the triage tap gives it the plan window's
+  // end as target), but parent/disabled/exhausted tasks are out.
+  const EST = 'missing estimated duration';
+  const DATE = 'missing target date or deadline';
+  const candidates = notSchedulable
+    .filter(t => t.reasons.includes(EST) && t.reasons.every(r => r === EST || r === DATE))
+    .slice(0, 10);
+  if (!candidates.length) return [];
+
+  const ids = candidates.map(t => t.task_id);
+  const [{ rows: goalRows }, { rows: historyRows }] = await Promise.all([
+    query(`SELECT id, goal_id FROM tasks WHERE id = ANY($1)`, [ids]),
+    query(`SELECT goal_id, actual_minutes FROM tasks WHERE completed = true AND actual_minutes IS NOT NULL ORDER BY updated_at DESC LIMIT 500`),
+  ]);
+  const goalOf = new Map((goalRows as { id: string; goal_id: string | null }[]).map(r => [r.id, r.goal_id]));
+  const history = historyRows as { goal_id: string | null; actual_minutes: number | null }[];
+
+  return candidates.map(t => {
+    const s = suggestEstimate({ goal_id: goalOf.get(t.task_id) ?? null }, history);
+    return {
+      task_id: t.task_id,
+      title: t.title,
+      suggested_minutes: s.minutes,
+      basis: s.basis,
+      needs_date: t.reasons.includes(DATE),
+    };
+  });
+}
+
 async function buildPlanPayload(windowParams: PlanWindowParams) {
   // Resolve the window the user meant (a day, a range, an afternoon, "next
   // 3 hours") against the wall clock, then plan only inside it.
@@ -1419,38 +1507,7 @@ async function buildPlanPayload(windowParams: PlanWindowParams) {
   const workEnd = window.endHour ?? Number(prefRow.work_end ?? 18);
 
   // Busy calendar time in the horizon: timed meetings + existing dated blocks
-  const [{ rows: meetingRows }, { rows: eventRows }] = await Promise.all([
-    query(
-      `SELECT id, title, scheduled_at, duration_minutes FROM meetings
-       WHERE DATE(scheduled_at::timestamp) BETWEEN $1 AND $2`,
-      [todayStr, endStr],
-    ),
-    query(`SELECT id, title, day_index, start_hour, duration_hours, week_start FROM events WHERE week_start IS NOT NULL`),
-  ]);
-
-  const busy: Array<{ date: string; start_hour: number; duration_hours: number; title: string; kind: 'meeting' | 'block' }> = [];
-  for (const m of meetingRows as Record<string, unknown>[]) {
-    const dt = new Date(String(m.scheduled_at));
-    if (Number.isNaN(dt.getTime())) continue;
-    busy.push({
-      date: String(m.scheduled_at).slice(0, 10),
-      start_hour: dt.getHours() + dt.getMinutes() / 60,
-      duration_hours: Math.max(0.25, Number(m.duration_minutes ?? 60) / 60),
-      title: String(m.title ?? 'Meeting'),
-      kind: 'meeting',
-    });
-  }
-  for (const ev of eventRows as Record<string, unknown>[]) {
-    const date = eventDateServer(String(ev.week_start), Number(ev.day_index ?? 0));
-    if (date < todayStr || date > endStr) continue;
-    busy.push({
-      date,
-      start_hour: Number(ev.start_hour ?? 9),
-      duration_hours: Math.max(0.25, Number(ev.duration_hours ?? 1)),
-      title: String(ev.title ?? 'Block'),
-      kind: 'block',
-    });
-  }
+  const busy = await loadBusyWindow(todayStr, endStr);
 
   const layout = layoutPlan({
     dayAssignments: schedulerResult.day_assignments,
@@ -1461,10 +1518,12 @@ async function buildPlanPayload(windowParams: PlanWindowParams) {
   });
 
   return {
+    kind: 'plan' as const,
     from: todayStr,
     to: endStr,
     work_start: workStart,
     work_end: workEnd,
+    needs_estimate: await loadEstimateTriage(inp.notSchedulable),
     days: schedulerResult.day_assignments.map(d => ({
       date: d.date,
       // Hour-scoped windows ("this afternoon") can't offer more capacity
@@ -1487,18 +1546,45 @@ async function buildPlanPayload(windowParams: PlanWindowParams) {
   };
 }
 
+/** "Every day 6–9am for a month" → the same widget payload shape as a plan,
+ *  but the blocks are a fixed series (no scheduler run — routines aren't
+ *  solved for, they're declared). */
+async function buildSeriesPayload(p: SeriesParams) {
+  const todayStr = fmtYMD(new Date());
+  const start = p.start_date > todayStr ? p.start_date : todayStr;
+  const end = p.end_date >= start ? p.end_date : start;
+  const blocks = expandSeries({ ...p, start_date: start, end_date: end });
+  const to = blocks.length ? blocks[blocks.length - 1].date : end;
+  return {
+    kind: 'series' as const,
+    from: start,
+    to,
+    work_start: Math.floor(p.start_hour),
+    work_end: Math.ceil(Math.max(p.end_hour, p.start_hour + 0.5)),
+    needs_estimate: [] as Array<{ task_id: string; title: string; suggested_minutes: number; basis: string }>,
+    days: [] as Array<{ date: string; available_minutes: number }>,
+    busy: await loadBusyWindow(start, to),
+    blocks,
+    unplaced: [] as Array<{ task_id: string; title: string; minutes: number }>,
+    scheduler: { status: 'series', gap_minutes: 0, unestimated_count: 0, overflow_count: 0 },
+    status: 'pending' as const,
+    adjustments: {} as Record<string, { date: string; start_hour: number }>,
+  };
+}
+
 // POST /api/ai/schedule/plan/apply — commit a chat plan: every block becomes a
 // real calendar event linked to its task; earliest block per task sets its
 // start day. One transaction — the calendar shows exactly what was approved.
 const PlanApplySchema = z.object({
   blocks: z.array(z.object({
-    task_id: z.string().min(1),
+    // Series blocks may carry no task — they're standalone routine time.
+    task_id: z.string().min(1).optional(),
     title: z.string().min(1).max(500),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     start_hour: z.number().min(0).max(23.75),
     duration_hours: z.number().min(0.25).max(12),
-    planned_minutes: z.number().int().min(1).max(1440),
-  }).strict()).min(1).max(100),
+    planned_minutes: z.number().int().min(1).max(1440).optional(),
+  }).strict()).min(1).max(200),
 }).strict();
 
 router.post('/schedule/plan/apply', async (req, res) => {
@@ -1510,15 +1596,20 @@ router.post('/schedule/plan/apply', async (req, res) => {
     });
   }
   const { blocks } = parsedBody.data;
-  const taskIds = [...new Set(blocks.map(b => b.task_id))];
+  const linked = blocks.filter((b): b is typeof b & { task_id: string } => Boolean(b.task_id));
+  const taskIds = [...new Set(linked.map(b => b.task_id))];
   try {
     await transaction(async client => {
-      const { rows: taskRows } = await client.query(
-        `SELECT id, start_date FROM tasks WHERE id = ANY($1) AND completed = false`,
-        [taskIds],
-      );
-      if (taskRows.length !== taskIds.length) {
-        throw Object.assign(new Error('Plan references unknown or completed tasks'), { status: 400 });
+      let startByTask = new Map<string, string | null>();
+      if (taskIds.length) {
+        const { rows: taskRows } = await client.query(
+          `SELECT id, start_date FROM tasks WHERE id = ANY($1) AND completed = false`,
+          [taskIds],
+        );
+        if (taskRows.length !== taskIds.length) {
+          throw Object.assign(new Error('Plan references unknown or completed tasks'), { status: 400 });
+        }
+        startByTask = new Map((taskRows as { id: string; start_date: string | null }[]).map(r => [r.id, r.start_date]));
       }
       const now = new Date().toISOString();
       for (const b of blocks) {
@@ -1529,16 +1620,17 @@ router.post('/schedule/plan/apply', async (req, res) => {
            VALUES ($1,$2,'Focus',$3,$4,$5,$6,'',$7,NULL,false,'ai',$8,$8)`,
           [evId, b.title, day_index, b.start_hour, b.duration_hours, fmtTimeStr(b.start_hour, b.duration_hours), week_start, now],
         );
-        await client.query(
-          `INSERT INTO event_task_links (id,event_id,task_id,planned_minutes,created_at) VALUES ($1,$2,$3,$4,$5)`,
-          [crypto.randomUUID(), evId, b.task_id, b.planned_minutes, now],
-        );
+        if (b.task_id) {
+          await client.query(
+            `INSERT INTO event_task_links (id,event_id,task_id,planned_minutes,created_at) VALUES ($1,$2,$3,$4,$5)`,
+            [crypto.randomUUID(), evId, b.task_id, b.planned_minutes ?? null, now],
+          );
+        }
       }
       const firstDate = new Map<string, string>();
-      for (const b of [...blocks].sort((a, b2) => a.date.localeCompare(b2.date))) {
+      for (const b of [...linked].sort((a, b2) => a.date.localeCompare(b2.date))) {
         if (!firstDate.has(b.task_id)) firstDate.set(b.task_id, b.date);
       }
-      const startByTask = new Map((taskRows as { id: string; start_date: string | null }[]).map(r => [r.id, r.start_date]));
       for (const [taskId, date] of firstDate) {
         if (startByTask.get(taskId) !== date) {
           await client.query(`UPDATE tasks SET start_date=$1, updated_at=$2 WHERE id=$3`, [date, now, taskId]);
@@ -1561,6 +1653,16 @@ const PlanStateSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     start_hour: z.number().min(0).max(23.75),
   }).strict()).optional(),
+  // Rebuild the plan server-side for the same (or adjusted) window — used
+  // after estimate triage so newly estimated tasks get laid in. The server
+  // computes the new payload itself; the client never writes plan blocks.
+  refresh_window: z.object({
+    horizon_days: z.number().int().min(1).max(35).optional(),
+    from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    start_hour: z.number().min(0).max(23.75).optional(),
+    end_hour: z.number().min(0.25).max(24).optional(),
+  }).strict().optional(),
 }).strict();
 
 router.patch('/sessions/:id/messages/:msgId/plan', async (req, res) => {
@@ -1573,14 +1675,20 @@ router.patch('/sessions/:id/messages/:msgId/plan', async (req, res) => {
   if (!rows.length) return res.status(404).json({ error: 'Message not found' });
   let meta: Record<string, unknown>;
   try { meta = JSON.parse((rows[0] as { metadata_json: string | null }).metadata_json ?? '{}') ?? {}; } catch { meta = {}; }
-  const plan = meta.plan as Record<string, unknown> | undefined;
+  let plan = meta.plan as Record<string, unknown> | undefined;
   if (!plan) return res.status(400).json({ error: 'Message carries no plan' });
+
+  if (parsedBody.data.refresh_window) {
+    const rebuilt = await buildPlanPayload(parsedBody.data.refresh_window);
+    meta.plan = { ...rebuilt, status: 'pending' };
+    plan = meta.plan as Record<string, unknown>;
+  }
   if (parsedBody.data.status) plan.status = parsedBody.data.status;
   if (parsedBody.data.adjustments) {
     plan.adjustments = { ...(plan.adjustments as Record<string, unknown> ?? {}), ...parsedBody.data.adjustments };
   }
   await query(`UPDATE chat_messages SET metadata_json=$1 WHERE id=$2`, [JSON.stringify(meta), req.params.msgId]);
-  res.json({ ok: true });
+  res.json({ ok: true, plan: parsedBody.data.refresh_window ? plan : undefined });
 });
 
 // POST /api/ai/schedule/drafts {horizon_days} → 3 alternative plans
@@ -1973,16 +2081,22 @@ router.post('/sessions/:id/chat', rateLimit(60, 60_000, 'ai-session-chat'), asyn
     // deterministic scheduler and the message carries an interactive calendar.
     const validatedAll = Array.isArray(parsed.actions) ? validateModelActions(parsed.actions) : [];
     const planAction = validatedAll.find(a => a.type === 'plan_schedule' && !a.rejected_reason);
+    const seriesAction = validatedAll.find(a => a.type === 'create_block_series' && !a.rejected_reason);
     const validated = await persistActionsAsProposals(
-      validatedAll.filter(a => a.type !== 'plan_schedule'),
+      validatedAll.filter(a => a.type !== 'plan_schedule' && a.type !== 'create_block_series'),
       'chat_session',
       req.params.id,
     );
 
-    let plan: Awaited<ReturnType<typeof buildPlanPayload>> | null = null;
+    let plan:
+      | Awaited<ReturnType<typeof buildPlanPayload>>
+      | Awaited<ReturnType<typeof buildSeriesPayload>>
+      | null = null;
     if (planAction) {
       // Params are already strict-Zod validated; the resolver handles clamping.
       plan = await buildPlanPayload(planAction.params as PlanWindowParams);
+    } else if (seriesAction) {
+      plan = await buildSeriesPayload(seriesAction.params as unknown as SeriesParams);
     }
 
     const metadata = JSON.stringify({

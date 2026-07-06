@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Trash2, Users } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, RefreshCw, Trash2, Users } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { apiPatch, apiPost } from '../../utils/apiFetch';
 import {
@@ -17,15 +17,18 @@ import { planDayLoads, planFeedbackLine } from '../../utils/planFeedback';
  */
 
 export interface ChatPlanBlock {
-  task_id: string;
+  /** absent on routine-series blocks that aren't tied to a task */
+  task_id?: string;
   title: string;
   date: string;
   start_hour: number;
   duration_hours: number;
-  planned_minutes: number;
+  planned_minutes?: number;
 }
 
 export interface ChatPlan {
+  /** 'series' = declared routine occurrences, no scheduler run */
+  kind?: 'plan' | 'series';
   from: string;
   to: string;
   work_start: number;
@@ -34,6 +37,8 @@ export interface ChatPlan {
   busy: Array<{ date: string; start_hour: number; duration_hours: number; title: string; kind: 'meeting' | 'block' }>;
   blocks: ChatPlanBlock[];
   unplaced: Array<{ task_id: string; title: string; minutes: number }>;
+  /** unestimated-but-otherwise-ready tasks with a history-based guess each */
+  needs_estimate?: Array<{ task_id: string; title: string; suggested_minutes: number; basis: string; needs_date?: boolean }>;
   scheduler: { status: string; gap_minutes: number; unestimated_count: number; overflow_count: number };
   status?: 'pending' | 'applied' | 'discarded';
   adjustments?: Record<string, { date: string; start_hour: number }>;
@@ -48,23 +53,70 @@ function fmtMins(mins: number): string {
   return `${mins < 0 ? '-' : ''}${h}h${m ? ` ${m}m` : ''}`;
 }
 
-export function PlanCalendarWidget({ plan, sessionId, messageId }: {
+export function PlanCalendarWidget({ plan: initialPlan, sessionId, messageId }: {
   plan: ChatPlan;
   sessionId: string | null;
   messageId?: string;
 }) {
   const { triggerToast } = useAppStore();
 
+  // The plan can be rebuilt in place (estimate triage → refresh), so it lives
+  // in state; the prop is only the starting point.
+  const [plan, setPlan] = useState<ChatPlan>(initialPlan);
   // Proposed blocks with the user's drag adjustments folded in (index-keyed)
   const [blocks, setBlocks] = useState<ChatPlanBlock[]>(() =>
-    plan.blocks.map((b, i) => {
-      const adj = plan.adjustments?.[String(i)];
+    initialPlan.blocks.map((b, i) => {
+      const adj = initialPlan.adjustments?.[String(i)];
       return adj ? { ...b, date: adj.date, start_hour: adj.start_hour } : b;
     }),
   );
-  const [status, setStatus] = useState<'pending' | 'applied' | 'discarded'>(plan.status ?? 'pending');
+  const [status, setStatus] = useState<'pending' | 'applied' | 'discarded'>(initialPlan.status ?? 'pending');
   const [busyState, setBusyState] = useState(false);
-  const adjustments = useRef<Record<string, { date: string; start_hour: number }>>({ ...(plan.adjustments ?? {}) });
+  const adjustments = useRef<Record<string, { date: string; start_hour: number }>>({ ...(initialPlan.adjustments ?? {}) });
+  const isSeries = plan.kind === 'series';
+
+  // Estimate triage: one tap per unestimated task, then rebuild the plan
+  const [triage, setTriage] = useState<Record<string, 'pending' | 'set' | 'skipped'>>({});
+  const [refreshing, setRefreshing] = useState(false);
+  const triageSetCount = Object.values(triage).filter(v => v === 'set').length;
+
+  const setEstimate = async (item: NonNullable<ChatPlan['needs_estimate']>[number], minutes: number) => {
+    try {
+      await apiPatch(`/api/tasks/${item.task_id}`, {
+        estimated_minutes: minutes,
+        estimated_duration: fmtMins(minutes),
+        // Including a dateless task in this plan gives it the window's end as
+        // its target — that's what "plan it this week" means.
+        ...(item.needs_date ? { target_date: plan.to } : {}),
+      });
+      setTriage(t => ({ ...t, [item.task_id]: 'set' }));
+    } catch (e) {
+      triggerToast((e as Error).message || 'Could not save the estimate.', 'error');
+    }
+  };
+
+  /** Server rebuilds the plan for the same window (now including the newly
+   *  estimated tasks) and stores it on the message — no model round-trip. */
+  const refreshPlan = async () => {
+    if (!sessionId || !messageId) return;
+    setRefreshing(true);
+    try {
+      const r = await apiPatch<{ ok: boolean; plan?: ChatPlan }>(
+        `/api/ai/sessions/${sessionId}/messages/${messageId}/plan`,
+        { refresh_window: { from_date: plan.from, to_date: plan.to, start_hour: plan.work_start, end_hour: plan.work_end } },
+      );
+      if (r.plan) {
+        setPlan(r.plan);
+        setBlocks(r.plan.blocks);
+        adjustments.current = {};
+        setTriage({});
+      }
+    } catch (e) {
+      triggerToast((e as Error).message || 'Could not update the plan.', 'error');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Weeks covered by the horizon (Monday-based), pager between them
   const weekStarts = useMemo(() => {
@@ -127,7 +179,10 @@ export function PlanCalendarWidget({ plan, sessionId, messageId }: {
 
   // Live feedback on the current arrangement
   const feedback = useMemo(
-    () => planFeedbackLine(planDayLoads(blocks, plan.days)),
+    () => planFeedbackLine(planDayLoads(
+      blocks.map(b => ({ date: b.date, planned_minutes: b.planned_minutes ?? Math.round(b.duration_hours * 60) })),
+      plan.days,
+    )),
     [blocks, plan.days],
   );
 
@@ -141,11 +196,17 @@ export function PlanCalendarWidget({ plan, sessionId, messageId }: {
     <div className={`mt-2 overflow-hidden rounded-xl border bg-white text-left ${status === 'discarded' ? 'border-gray-200 opacity-60' : 'border-[#4648d4]/25'}`}>
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-2">
-        <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-[#4648d4]">Plan · {horizonLabel}</span>
-        <span className={`font-mono text-[9px] font-bold uppercase ${schedTone}`}>
-          {plan.scheduler.status}
-          {plan.scheduler.gap_minutes !== 0 && ` · ${plan.scheduler.gap_minutes > 0 ? '+' : ''}${fmtMins(plan.scheduler.gap_minutes)}`}
+        <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-[#4648d4]">
+          {isSeries ? 'Routine' : 'Plan'} · {horizonLabel}
         </span>
+        {isSeries ? (
+          <span className="font-mono text-[9px] font-bold uppercase text-gray-500">×{blocks.length} sessions</span>
+        ) : (
+          <span className={`font-mono text-[9px] font-bold uppercase ${schedTone}`}>
+            {plan.scheduler.status}
+            {plan.scheduler.gap_minutes !== 0 && ` · ${plan.scheduler.gap_minutes > 0 ? '+' : ''}${fmtMins(plan.scheduler.gap_minutes)}`}
+          </span>
+        )}
         {status !== 'pending' && (
           <span className={`rounded-full px-2 py-0.5 font-mono text-[8px] font-bold uppercase ${status === 'applied' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
             {status}
@@ -163,6 +224,62 @@ export function PlanCalendarWidget({ plan, sessionId, messageId }: {
           </span>
         )}
       </div>
+
+      {/* Estimate triage — one tap per unestimated task, then rebuild */}
+      {interactive && !isSeries && (plan.needs_estimate?.length ?? 0) > 0 && (
+        <div className="space-y-1 border-b border-amber-100 bg-amber-50/60 px-3 py-2">
+          <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-amber-700">
+            {plan.needs_estimate!.length} task{plan.needs_estimate!.length !== 1 ? 's' : ''} missing an estimate — tap one to include it
+          </p>
+          {plan.needs_estimate!.map(t => {
+            const state = triage[t.task_id] ?? 'pending';
+            const chips = [...new Set([15, 30, 60, 120, 240, t.suggested_minutes])].sort((a, b) => a - b);
+            return (
+              <div key={t.task_id} className="flex flex-wrap items-center gap-1">
+                <span
+                  className={`min-w-0 flex-1 truncate text-[10px] font-medium ${state === 'pending' ? 'text-gray-700' : 'text-gray-400'}`}
+                  title={`Suggested ${fmtMins(t.suggested_minutes)} — ${t.basis}`}
+                >
+                  {state === 'set' ? '✓ ' : state === 'skipped' ? '– ' : ''}{t.title}
+                </span>
+                {state === 'pending' && (
+                  <>
+                    {chips.map(m => (
+                      <button
+                        key={m}
+                        onClick={() => setEstimate(t, m)}
+                        className={`rounded border px-1.5 py-0.5 font-mono text-[8px] font-bold transition-colors ${
+                          m === t.suggested_minutes
+                            ? 'border-[#4648d4] bg-[#EEF2FF] text-[#4648d4]'
+                            : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                        }`}
+                        title={m === t.suggested_minutes ? `Suggested: ${t.basis}` : undefined}
+                      >
+                        {fmtMins(m)}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setTriage(s => ({ ...s, [t.task_id]: 'skipped' }))}
+                      className="rounded px-1 py-0.5 font-mono text-[8px] text-gray-400 hover:text-gray-600"
+                    >
+                      skip
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+          {triageSetCount > 0 && (
+            <button
+              onClick={refreshPlan}
+              disabled={refreshing || !messageId}
+              className="mt-0.5 flex items-center gap-1 rounded bg-[#4648d4] px-2 py-1 font-mono text-[8px] font-bold uppercase text-white hover:opacity-90 disabled:opacity-40"
+            >
+              <RefreshCw size={9} className={refreshing ? 'animate-spin' : ''} /> Update plan with new estimates
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Day headers */}
       <div className="grid grid-cols-[34px_repeat(7,minmax(0,1fr))] border-b border-gray-100">
@@ -215,7 +332,7 @@ export function PlanCalendarWidget({ plan, sessionId, messageId }: {
             {plan.unplaced.length} task{plan.unplaced.length !== 1 ? 's' : ''} didn't fit in these work hours.
           </p>
         )}
-        {plan.scheduler.unestimated_count > 0 && (
+        {plan.scheduler.unestimated_count > 0 && !(plan.needs_estimate?.length) && (
           <p className="text-[10px] text-gray-400">{plan.scheduler.unestimated_count} task{plan.scheduler.unestimated_count !== 1 ? 's' : ''} left out — no time estimate yet.</p>
         )}
         {interactive ? (
@@ -225,7 +342,7 @@ export function PlanCalendarWidget({ plan, sessionId, messageId }: {
               disabled={busyState || blocks.length === 0}
               className="flex items-center gap-1.5 rounded-lg bg-[#4648d4] px-3 py-1.5 font-mono text-[9px] font-bold uppercase text-white hover:opacity-90 disabled:opacity-40"
             >
-              <Check size={11} /> Apply plan
+              <Check size={11} /> {isSeries ? `Apply all ${blocks.length}` : 'Apply plan'}
             </button>
             <button
               onClick={discard}

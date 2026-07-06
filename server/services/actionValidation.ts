@@ -68,6 +68,18 @@ export const ActionParamsSchemas: Record<string, z.ZodTypeAny> = {
     end_hour: z.number().min(0.25).max(24).optional(),
     relative_hours: z.number().min(0.5).max(16).optional(),
   }).strict(),
+  // Routine stopgap: "every day 6–9am for a month" → a series of dated
+  // calendar blocks shown on the plan widget and applied in one transaction.
+  // (First-class routines with adherence tracking come later.)
+  create_block_series: z.object({
+    title: z.string().min(1).max(200),
+    start_date: isoDate,
+    end_date: isoDate,
+    start_hour: z.number().min(0).max(23.75),
+    end_hour: z.number().min(0.25).max(24),
+    days_of_week: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
+    task_id: z.string().optional(),
+  }).strict(),
 };
 
 export interface ValidatedAction {

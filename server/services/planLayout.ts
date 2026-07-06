@@ -127,6 +127,54 @@ export function resolvePlanWindow(p: PlanWindowParams, todayStr: string, nowHour
   };
 }
 
+// ── Routine series expansion (stopgap until first-class routines) ────────────
+// "Every day 6–9am for a month" → concrete dated blocks the plan widget can
+// show and apply in one transaction. Pure and capped.
+
+export interface SeriesParams {
+  title: string;
+  start_date: string;
+  end_date: string;   // inclusive
+  start_hour: number;
+  end_hour: number;   // > start_hour
+  /** 1=Mon … 7=Sun; omitted = every day */
+  days_of_week?: number[];
+  task_id?: string;
+}
+
+export interface SeriesBlock {
+  title: string;
+  date: string;
+  start_hour: number;
+  duration_hours: number;
+  task_id?: string;
+  planned_minutes?: number;
+}
+
+const MAX_SERIES_INSTANCES = 120;
+
+export function expandSeries(p: SeriesParams): SeriesBlock[] {
+  if (p.end_hour <= p.start_hour) return [];
+  const duration = p.end_hour - p.start_hour;
+  const wanted = p.days_of_week && p.days_of_week.length ? new Set(p.days_of_week) : null;
+  const out: SeriesBlock[] = [];
+  let date = p.start_date;
+  while (date <= p.end_date && out.length < MAX_SERIES_INSTANCES) {
+    const dow = ((new Date(date + 'T00:00:00').getDay() + 6) % 7) + 1; // 1=Mon…7=Sun
+    if (!wanted || wanted.has(dow)) {
+      out.push({
+        title: p.title,
+        date,
+        start_hour: p.start_hour,
+        duration_hours: duration,
+        ...(p.task_id ? { task_id: p.task_id, planned_minutes: Math.round(duration * 60) } : {}),
+      });
+    }
+    date = addDaysStr(date, 1);
+  }
+  return out;
+}
+
 interface Interval { start: number; end: number }
 
 /** Free intervals of a day: the work window minus that day's busy slots. */
