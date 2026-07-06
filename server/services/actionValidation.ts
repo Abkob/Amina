@@ -54,6 +54,20 @@ export const ActionParamsSchemas: Record<string, z.ZodTypeAny> = {
     target_type: z.enum(['goal', 'task', 'milestone']),
     target_id: z.string().min(1),
   }).strict(),
+  // Ask for a visual schedule plan: the server runs the deterministic
+  // scheduler over the requested window and the chat response carries an
+  // interactive calendar payload. NOT a durable proposal — the user applies
+  // or discards it from the plan widget in the conversation. The window is
+  // whatever the user meant: a horizon, a specific day, a date range, part of
+  // a day, or "the next N hours" (resolved against the server clock).
+  plan_schedule: z.object({
+    horizon_days: z.number().int().min(1).max(35).optional(),
+    from_date: isoDate.optional(),
+    to_date: isoDate.optional(),
+    start_hour: z.number().min(0).max(23.75).optional(),
+    end_hour: z.number().min(0.25).max(24).optional(),
+    relative_hours: z.number().min(0.5).max(16).optional(),
+  }).strict(),
 };
 
 export interface ValidatedAction {

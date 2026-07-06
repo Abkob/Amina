@@ -231,8 +231,11 @@ export function EventComposer({ seed, days, tasks, goals, onClose }: {
         });
         eventId = created.id;
       }
-      // Reconcile the task link
-      const linkChanged = (linked?.id ?? null) !== (seed.linkedTaskId ?? null);
+      // Reconcile the task link against what's PERSISTED: in create mode
+      // nothing is persisted yet (seed.linkedTaskId is only a prefill), so a
+      // linked task always writes a link row.
+      const persistedTaskId = isEdit ? (seed.linkedTaskId ?? null) : null;
+      const linkChanged = (linked?.id ?? null) !== persistedTaskId;
       if (linkChanged && seed.linkId) await apiDelete(`/api/event-task-links/${seed.linkId}`);
       if (linkChanged && linked && eventId) {
         await apiPost('/api/event-task-links', {

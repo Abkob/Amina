@@ -59,7 +59,7 @@ const URL_INVALIDATION: Array<[RegExp, string[]]> = [
   [/^\/api\/edges/,             ['graph', 'resources', 'tasks']],
   [/^\/api\/topics/,            ['topics', 'topic-suggestions', 'topic-members', 'entity-topics', 'graph-topic-members']],
   [/^\/api\/ai\/proposals/,     ['proposals', 'ai-proposals', 'tasks', 'goals', 'goals-health', 'milestones', 'schedule-preview', 'graph']],
-  [/^\/api\/ai\/schedule/,      ['proposals', 'ai-proposals', 'tasks', 'schedule-preview']],
+  [/^\/api\/ai\/schedule/,      ['proposals', 'ai-proposals', 'tasks', 'schedule-preview', 'events', 'event-task-links']],
   [/^\/api\/ai\/sessions/,      ['chat-sessions', 'proposals', 'ai-proposals']],
   [/^\/api\/work-sessions/,     ['work-sessions', 'work-session-stats', 'tasks']],
   [/^\/api\/schedule-prefs/,    ['schedule-prefs', 'schedule-overrides', 'schedule-preview']],

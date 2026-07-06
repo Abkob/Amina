@@ -6,6 +6,7 @@ import { validateModelActions, type ValidatedAction } from '../services/actionVa
 import { chat, parseJSON, ollamaHealth, CHAT_MODEL } from '../ollama.js';
 import { buildRetrievalContext } from '../services/retrieval.js';
 import { computeSchedule, type SchedulerResult } from '../services/scheduler.js';
+import { layoutPlan, addDaysStr, dateToWeekPosServer, eventDateServer, fmtTimeStr, resolvePlanWindow, type PlanWindowParams } from '../services/planLayout.js';
 import { assertSafeAIContext } from '../utils/contextSafety.js';
 import { rateLimit } from '../utils/rateLimit.js';
 import { generateDeterministicSummaries, generateEntitySummary } from '../services/summaryGenerator.js';
@@ -486,6 +487,19 @@ ALWAYS respond with a valid JSON object (no markdown wrapping, pure JSON):
         "target_type": "goal|task|milestone",
         "target_id": "<id>"
       }
+    },
+    {
+      "id": "a7",
+      "type": "plan_schedule",
+      "description": "Lay the user's tasks onto their calendar for the window they asked about",
+      "params": {
+        "horizon_days": 14,
+        "from_date": "YYYY-MM-DD",
+        "to_date": "YYYY-MM-DD",
+        "start_hour": 13.5,
+        "end_hour": 18,
+        "relative_hours": 3
+      }
     }
   ],
   "feasibility": {
@@ -522,6 +536,13 @@ The JSON injected under "Current data" has these top-level keys:
   - When total_incomplete > tasks_in_context, mention that omitted tasks exist and they may affect planning
 
 ## Rules
+- ANY request to organize, lay out, or fill time is ONE plan_schedule action — recognize the INTENT, not specific phrasings. "Plan my week", "plan Monday", "plan July 15th", "what should I work on this afternoon", "fit my tasks in before Friday", "I have 3 free hours, what now" all qualify. Derive the window from their words using the context's today date:
+  - a specific day → from_date = to_date = that date (resolve weekday names to the NEXT such date)
+  - a range or horizon → from_date/to_date, or horizon_days from today (default 14)
+  - part of a day ("this afternoon", "tonight") → also set start_hour/end_hour as 24h decimals (13.5 = 1:30 PM)
+  - relative to right now ("the next 3 hours") → set relative_hours ONLY; the server knows the clock, you don't
+  All params are optional — omit what the user didn't constrain. The app renders the plan as an interactive calendar the user can drag and apply.
+- With plan_schedule, "reply" is your recommendation, not a schedule: 1–3 sentences on what to hit first and why, what's at risk, and what won't fit. NEVER enumerate day-by-day placements in text — the calendar shows them.
 - actions[] may be empty if no changes are needed
 - Only propose actions that make sense given the user's data
 - Use schedule_prefs.effective_capacity_minutes for all scheduling math
@@ -1355,6 +1376,213 @@ async function loadSchedulerInputs(horizonDays: number) {
   };
 }
 
+// ── Chat plan (interactive calendar widget in the conversation) ───────────────
+// Built when the model emits a plan_schedule action: the deterministic
+// scheduler decides which day each task is worked on, layoutPlan packs those
+// days into concrete timed blocks around meetings and existing calendar
+// blocks. Nothing is written — the payload lives on the chat message until
+// the user applies it from the widget.
+async function buildPlanPayload(windowParams: PlanWindowParams) {
+  // Resolve the window the user meant (a day, a range, an afternoon, "next
+  // 3 hours") against the wall clock, then plan only inside it.
+  const nowClock = new Date();
+  const window = resolvePlanWindow(windowParams, fmtYMD(nowClock), nowClock.getHours() + nowClock.getMinutes() / 60);
+
+  // Scheduler inputs must span from today THROUGH the window's end (its
+  // queries anchor at today); the schedule itself starts at the window start.
+  const daysFromToday = Math.max(
+    1,
+    Math.round((new Date(window.to + 'T00:00:00').getTime() - new Date(fmtYMD(nowClock) + 'T00:00:00').getTime()) / 86_400_000) + 1,
+  );
+  const inp = await loadSchedulerInputs(Math.min(daysFromToday, 35));
+  const todayStr = window.from;
+  const endStr = window.to;
+  const horizonDays = Math.max(
+    1,
+    Math.round((new Date(endStr + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000) + 1,
+  );
+
+  const schedulerResult = computeSchedule({
+    start_date: todayStr,
+    tasks: inp.tasks,
+    meetings: inp.meetings,
+    prefs: inp.prefs,
+    overrides: inp.overrides,
+    horizon_days: horizonDays,
+  });
+
+  // Work window hours (loadSchedulerInputs doesn't surface them); an
+  // hour-scoped request ("this afternoon") overrides them.
+  const { rows: prefsRows } = await query("SELECT work_start, work_end FROM user_schedule_prefs WHERE id='default'");
+  const prefRow = (prefsRows[0] ?? {}) as Record<string, unknown>;
+  const workStart = window.startHour ?? Number(prefRow.work_start ?? 9);
+  const workEnd = window.endHour ?? Number(prefRow.work_end ?? 18);
+
+  // Busy calendar time in the horizon: timed meetings + existing dated blocks
+  const [{ rows: meetingRows }, { rows: eventRows }] = await Promise.all([
+    query(
+      `SELECT id, title, scheduled_at, duration_minutes FROM meetings
+       WHERE DATE(scheduled_at::timestamp) BETWEEN $1 AND $2`,
+      [todayStr, endStr],
+    ),
+    query(`SELECT id, title, day_index, start_hour, duration_hours, week_start FROM events WHERE week_start IS NOT NULL`),
+  ]);
+
+  const busy: Array<{ date: string; start_hour: number; duration_hours: number; title: string; kind: 'meeting' | 'block' }> = [];
+  for (const m of meetingRows as Record<string, unknown>[]) {
+    const dt = new Date(String(m.scheduled_at));
+    if (Number.isNaN(dt.getTime())) continue;
+    busy.push({
+      date: String(m.scheduled_at).slice(0, 10),
+      start_hour: dt.getHours() + dt.getMinutes() / 60,
+      duration_hours: Math.max(0.25, Number(m.duration_minutes ?? 60) / 60),
+      title: String(m.title ?? 'Meeting'),
+      kind: 'meeting',
+    });
+  }
+  for (const ev of eventRows as Record<string, unknown>[]) {
+    const date = eventDateServer(String(ev.week_start), Number(ev.day_index ?? 0));
+    if (date < todayStr || date > endStr) continue;
+    busy.push({
+      date,
+      start_hour: Number(ev.start_hour ?? 9),
+      duration_hours: Math.max(0.25, Number(ev.duration_hours ?? 1)),
+      title: String(ev.title ?? 'Block'),
+      kind: 'block',
+    });
+  }
+
+  const layout = layoutPlan({
+    dayAssignments: schedulerResult.day_assignments,
+    tasks: inp.tasks.map(t => ({ id: t.id, title: t.title, remaining_minutes: t.estimated_minutes })),
+    workStart,
+    workEnd,
+    busy: busy.map(b => ({ date: b.date, start_hour: b.start_hour, end_hour: b.start_hour + b.duration_hours })),
+  });
+
+  return {
+    from: todayStr,
+    to: endStr,
+    work_start: workStart,
+    work_end: workEnd,
+    days: schedulerResult.day_assignments.map(d => ({
+      date: d.date,
+      // Hour-scoped windows ("this afternoon") can't offer more capacity
+      // than the window itself holds.
+      available_minutes: window.startHour !== undefined
+        ? Math.min(d.available_minutes, Math.round((workEnd - workStart) * 60))
+        : d.available_minutes,
+    })),
+    busy,
+    blocks: layout.blocks,
+    unplaced: layout.unplaced,
+    scheduler: {
+      status: schedulerResult.status,
+      gap_minutes: schedulerResult.gap_minutes,
+      unestimated_count: schedulerResult.unestimated_task_ids.length,
+      overflow_count: schedulerResult.tasks_overflow.length,
+    },
+    status: 'pending' as const,
+    adjustments: {} as Record<string, { date: string; start_hour: number }>,
+  };
+}
+
+// POST /api/ai/schedule/plan/apply — commit a chat plan: every block becomes a
+// real calendar event linked to its task; earliest block per task sets its
+// start day. One transaction — the calendar shows exactly what was approved.
+const PlanApplySchema = z.object({
+  blocks: z.array(z.object({
+    task_id: z.string().min(1),
+    title: z.string().min(1).max(500),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    start_hour: z.number().min(0).max(23.75),
+    duration_hours: z.number().min(0.25).max(12),
+    planned_minutes: z.number().int().min(1).max(1440),
+  }).strict()).min(1).max(100),
+}).strict();
+
+router.post('/schedule/plan/apply', async (req, res) => {
+  const parsedBody = PlanApplySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    return res.status(422).json({
+      error: 'invalid plan',
+      issues: parsedBody.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).slice(0, 10),
+    });
+  }
+  const { blocks } = parsedBody.data;
+  const taskIds = [...new Set(blocks.map(b => b.task_id))];
+  try {
+    await transaction(async client => {
+      const { rows: taskRows } = await client.query(
+        `SELECT id, start_date FROM tasks WHERE id = ANY($1) AND completed = false`,
+        [taskIds],
+      );
+      if (taskRows.length !== taskIds.length) {
+        throw Object.assign(new Error('Plan references unknown or completed tasks'), { status: 400 });
+      }
+      const now = new Date().toISOString();
+      for (const b of blocks) {
+        const { week_start, day_index } = dateToWeekPosServer(b.date);
+        const evId = crypto.randomUUID();
+        await client.query(
+          `INSERT INTO events (id,title,type,day_index,start_hour,duration_hours,time_str,description,week_start,connected_resource_json,locked,source,created_at,updated_at)
+           VALUES ($1,$2,'Focus',$3,$4,$5,$6,'',$7,NULL,false,'ai',$8,$8)`,
+          [evId, b.title, day_index, b.start_hour, b.duration_hours, fmtTimeStr(b.start_hour, b.duration_hours), week_start, now],
+        );
+        await client.query(
+          `INSERT INTO event_task_links (id,event_id,task_id,planned_minutes,created_at) VALUES ($1,$2,$3,$4,$5)`,
+          [crypto.randomUUID(), evId, b.task_id, b.planned_minutes, now],
+        );
+      }
+      const firstDate = new Map<string, string>();
+      for (const b of [...blocks].sort((a, b2) => a.date.localeCompare(b2.date))) {
+        if (!firstDate.has(b.task_id)) firstDate.set(b.task_id, b.date);
+      }
+      const startByTask = new Map((taskRows as { id: string; start_date: string | null }[]).map(r => [r.id, r.start_date]));
+      for (const [taskId, date] of firstDate) {
+        if (startByTask.get(taskId) !== date) {
+          await client.query(`UPDATE tasks SET start_date=$1, updated_at=$2 WHERE id=$3`, [date, now, taskId]);
+        }
+      }
+    });
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500;
+    return res.status(status).json({ error: (err as Error).message });
+  }
+  res.json({ ok: true, created: blocks.length });
+});
+
+// PATCH /api/ai/sessions/:id/messages/:msgId/plan — persist the plan widget's
+// state (applied/discarded + the user's drag adjustments) into the message
+// metadata so a reloaded conversation shows the plan exactly as it was left.
+const PlanStateSchema = z.object({
+  status: z.enum(['pending', 'applied', 'discarded']).optional(),
+  adjustments: z.record(z.string(), z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    start_hour: z.number().min(0).max(23.75),
+  }).strict()).optional(),
+}).strict();
+
+router.patch('/sessions/:id/messages/:msgId/plan', async (req, res) => {
+  const parsedBody = PlanStateSchema.safeParse(req.body);
+  if (!parsedBody.success) return res.status(422).json({ error: 'invalid plan state' });
+  const { rows } = await query(
+    `SELECT metadata_json FROM chat_messages WHERE id=$1 AND session_id=$2`,
+    [req.params.msgId, req.params.id],
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Message not found' });
+  let meta: Record<string, unknown>;
+  try { meta = JSON.parse((rows[0] as { metadata_json: string | null }).metadata_json ?? '{}') ?? {}; } catch { meta = {}; }
+  const plan = meta.plan as Record<string, unknown> | undefined;
+  if (!plan) return res.status(400).json({ error: 'Message carries no plan' });
+  if (parsedBody.data.status) plan.status = parsedBody.data.status;
+  if (parsedBody.data.adjustments) {
+    plan.adjustments = { ...(plan.adjustments as Record<string, unknown> ?? {}), ...parsedBody.data.adjustments };
+  }
+  await query(`UPDATE chat_messages SET metadata_json=$1 WHERE id=$2`, [JSON.stringify(meta), req.params.msgId]);
+  res.json({ ok: true });
+});
+
 // POST /api/ai/schedule/drafts {horizon_days} → 3 alternative plans
 router.post('/schedule/drafts', async (req, res) => {
   const horizonDays = Math.min(Math.max(3, Number((req.body as Record<string, unknown>)?.horizon_days ?? 14)), 35);
@@ -1741,15 +1969,28 @@ router.post('/sessions/:id/chat', rateLimit(60, 60_000, 'ai-session-chat'), asyn
     // Validate model actions and persist them as durable proposals FIRST so
     // the assistant message can be stored with proposal ids attached — a
     // reloaded conversation then restores its action cards and their state.
-    const validated = Array.isArray(parsed.actions)
-      ? await persistActionsAsProposals(validateModelActions(parsed.actions), 'chat_session', req.params.id)
-      : [];
+    // plan_schedule is intercepted: it is not a proposal — the server runs the
+    // deterministic scheduler and the message carries an interactive calendar.
+    const validatedAll = Array.isArray(parsed.actions) ? validateModelActions(parsed.actions) : [];
+    const planAction = validatedAll.find(a => a.type === 'plan_schedule' && !a.rejected_reason);
+    const validated = await persistActionsAsProposals(
+      validatedAll.filter(a => a.type !== 'plan_schedule'),
+      'chat_session',
+      req.params.id,
+    );
+
+    let plan: Awaited<ReturnType<typeof buildPlanPayload>> | null = null;
+    if (planAction) {
+      // Params are already strict-Zod validated; the resolver handles clamping.
+      plan = await buildPlanPayload(planAction.params as PlanWindowParams);
+    }
 
     const metadata = JSON.stringify({
       actions: validated,
       feasibility: parsed.feasibility ?? null,
       citations,
       model: CHAT_MODEL,
+      ...(plan ? { plan } : {}),
     });
 
     // Persist user message + assistant reply (with metadata)
@@ -1763,7 +2004,7 @@ router.post('/sessions/:id/chat', rateLimit(60, 60_000, 'ai-session-chat'), asyn
     );
     await query(`UPDATE chat_sessions SET updated_at=$1 WHERE id=$2`, [now, req.params.id]);
 
-    res.json({ ...parsed, reply: replyText, actions: validated, citations, session_id: req.params.id });
+    res.json({ ...parsed, reply: replyText, actions: validated, plan, citations, session_id: req.params.id, message_id: msgId2 });
   } catch (err) {
     const msg = String(err);
     if (msg.includes('ECONNREFUSED') || msg.includes('fetch')) {

@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSchedulePreview, useGoals, useInvalidate, useChatSessions, useCreateChatSession, useDeleteChatSession, useSendSessionMessage, type ScheduleDay, type SchedulerResult, type ScheduleTaskInfo, type DayAssignment } from '../api/hooks';
 import { apiFetch, apiPost } from '../utils/apiFetch';
 import { useAppStore } from '../store/useAppStore';
+import { PlanCalendarWidget, type ChatPlan } from './copilot/PlanCalendarWidget';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,10 @@ interface ChatMessage {
   actions?: CopilotAction[];
   feasibility?: FeasibilityResult;
   citations?: ChatCitation[];
+  /** interactive calendar payload when the turn was a plan request */
+  plan?: ChatPlan;
+  /** server-side message id — needed to persist plan widget state */
+  serverMsgId?: string;
   timestamp: Date;
   error?: string;
 }
@@ -221,8 +226,9 @@ function FeasibilityBanner({ f }: { f: FeasibilityResult }) {
 
 // ── Message Bubble ────────────────────────────────────────────────────────────
 
-function MessageBubble({ msg, onConfirmAction, onSkipAction }: {
+function MessageBubble({ msg, sessionId, onConfirmAction, onSkipAction }: {
   msg: ChatMessage;
+  sessionId: string | null;
   onConfirmAction: (msgId: string, actionId: string) => void;
   onSkipAction:    (msgId: string, actionId: string) => void;
 }) {
@@ -250,6 +256,9 @@ function MessageBubble({ msg, onConfirmAction, onSkipAction }: {
           <div className="bg-white/6 border border-white/8 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
             {renderMarkdown(msg.content)}
           </div>
+        )}
+        {msg.plan && (
+          <PlanCalendarWidget plan={msg.plan} sessionId={sessionId} messageId={msg.serverMsgId} />
         )}
         {msg.feasibility && <FeasibilityBanner f={msg.feasibility} />}
         {msg.actions?.length ? (
@@ -760,11 +769,12 @@ export function CopilotView() {
       interface StoredAction extends Omit<CopilotAction, 'status'> { proposal_status?: string }
       const msgs = await apiFetch<{
         id: string; role: 'user' | 'assistant'; content: string; created_at: string;
-        metadata?: { actions?: StoredAction[]; feasibility?: FeasibilityResult | null; citations?: ChatCitation[] } | null;
+        metadata?: { actions?: StoredAction[]; feasibility?: FeasibilityResult | null; citations?: ChatCitation[]; plan?: ChatPlan } | null;
       }[]>(`/api/ai/sessions/${sessionId}/messages`);
       setActiveSessionId(sessionId);
       // Restore action cards from persisted metadata; card status reflects the
       // CURRENT durable proposal state, so applied/skipped survive reloads.
+      // Plan widgets restore with their saved status and drag adjustments.
       setMessages(msgs.map(m => ({
         id: m.id,
         role: m.role,
@@ -775,6 +785,8 @@ export function CopilotView() {
         })),
         feasibility: m.metadata?.feasibility ?? undefined,
         citations: m.metadata?.citations ?? undefined,
+        plan: m.metadata?.plan ?? undefined,
+        serverMsgId: m.id,
         timestamp: new Date(m.created_at),
       })));
       setShowHistory(false);
@@ -811,11 +823,21 @@ export function CopilotView() {
         setActiveSessionId(sessionId);
       }
 
-      const data = await apiPost<{ reply?: string; actions?: Omit<CopilotAction, 'status'>[]; feasibility?: FeasibilityResult; citations?: ChatCitation[]; error?: string }>(
+      const data = await apiPost<{ reply?: string; actions?: Omit<CopilotAction, 'status'>[]; feasibility?: FeasibilityResult; citations?: ChatCitation[]; plan?: ChatPlan | null; message_id?: string; error?: string }>(
         `/api/ai/sessions/${sessionId}/chat`, { message: outgoing },
       );
       const actions: CopilotAction[] = (data.actions ?? []).map(a => ({ ...a, status: 'pending' as const }));
-      setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: data.reply ?? '', actions, feasibility: data.feasibility, citations: data.citations, timestamp: new Date() }]);
+      setMessages(prev => [...prev, {
+        id: assistantId,
+        role: 'assistant',
+        content: data.reply ?? '',
+        actions,
+        feasibility: data.feasibility,
+        citations: data.citations,
+        plan: data.plan ?? undefined,
+        serverMsgId: data.message_id,
+        timestamp: new Date(),
+      }]);
       qc.invalidateQueries({ queryKey: ['proposals'] });
     } catch (err) {
       const isOffline = err instanceof Error && err.message.includes('Failed to fetch');
@@ -971,6 +993,7 @@ export function CopilotView() {
                 <MessageBubble
                   key={msg.id}
                   msg={msg}
+                  sessionId={activeSessionId}
                   onConfirmAction={handleConfirmAction}
                   onSkipAction={handleSkipAction}
                 />

@@ -322,6 +322,36 @@ function ChildTaskRow({
   onToggle: () => void;
   onDelete: () => void;
 }) {
+  const { triggerToast } = useAppStore();
+  const [timeDraft, setTimeDraft] = useState(task.estimated_minutes ? formatTaskTime(task.estimated_minutes) : '');
+
+  useEffect(() => {
+    setTimeDraft(task.estimated_minutes ? formatTaskTime(task.estimated_minutes) : '');
+  }, [task.id, task.estimated_minutes]);
+
+  const saveTime = async () => {
+    const raw = timeDraft.trim();
+    if (!raw) {
+      if (task.estimated_minutes != null) {
+        await updateTask(task.id, { estimated_minutes: null, estimated_duration: null });
+      }
+      return;
+    }
+    const minutes = parseTaskTimeInput(raw);
+    if (minutes == null) {
+      setTimeDraft(task.estimated_minutes ? formatTaskTime(task.estimated_minutes) : '');
+      triggerToast('Time reads like "45m", "2h" or "1h 30m".', 'error');
+      return;
+    }
+    if (minutes !== task.estimated_minutes) {
+      await updateTask(task.id, { estimated_minutes: minutes, estimated_duration: formatTaskTime(minutes) });
+    }
+  };
+
+  const saveDue = async (value: string) => {
+    await updateTask(task.id, { due_date: value || null });
+  };
+
   return (
     <div className="rounded-lg border border-gray-150 bg-white px-3 py-2 shadow-sm">
       <div className="flex items-center gap-3">
@@ -332,9 +362,11 @@ function ChildTaskRow({
           <p className={`truncate text-xs font-semibold text-gray-800 ${task.completed ? 'line-through text-gray-400' : ''}`}>
             {task.title}
           </p>
-          <p className="mt-0.5 text-[9px] font-mono uppercase tracking-widest text-gray-400">
-            {childCount} child task{childCount !== 1 ? 's' : ''}
-          </p>
+          {childCount > 0 && (
+            <p className="mt-0.5 text-[9px] font-mono uppercase tracking-widest text-gray-400">
+              {childCount} subtask{childCount !== 1 ? 's' : ''}
+            </p>
+          )}
         </button>
         <button onClick={onOpen} className="rounded-md p-1 text-gray-300 hover:bg-gray-50 hover:text-[#4648d4] transition-colors" title="Open focus page">
           <ChevronRight size={14} />
@@ -342,6 +374,28 @@ function ChildTaskRow({
         <button onClick={onDelete} className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-400 transition-colors">
           <Trash2 size={12} />
         </button>
+      </div>
+      <div className="mt-1.5 flex items-center gap-2 pl-7">
+        <label className="flex items-center gap-1" title="Time estimate — how long this child needs">
+          <Clock size={10} className="shrink-0 text-gray-300" />
+          <input
+            value={timeDraft}
+            onChange={e => setTimeDraft(e.target.value)}
+            onBlur={saveTime}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            placeholder="est."
+            className="w-16 rounded border border-gray-150 bg-[#f8f9fa] px-1.5 py-0.5 font-mono text-[10px] text-gray-700 outline-none focus:border-[#4648d4]"
+          />
+        </label>
+        <label className="flex items-center gap-1" title="Due date for this child">
+          <Calendar size={10} className="shrink-0 text-gray-300" />
+          <input
+            type="date"
+            value={task.due_date ? task.due_date.slice(0, 10) : ''}
+            onChange={e => saveDue(e.target.value)}
+            className="rounded border border-gray-150 bg-[#f8f9fa] px-1.5 py-0.5 font-mono text-[10px] text-gray-600 outline-none focus:border-[#4648d4]"
+          />
+        </label>
       </div>
     </div>
   );
@@ -694,18 +748,13 @@ function formatMeetingWhen(value: string) {
 function EventTaskLinksPanel({ taskId, goalId }: { taskId: string; goalId?: string | null }) {
   const { data: links = [] } = useEventTaskLinks({ task_id: taskId });
   const { data: meetingLinks = [] } = useMeetingTaskLinks(taskId);
-  const { data: events = [] } = useEvents();
   const { data: meetings = [] } = useAllMeetings();
-  const createLink = useCreateEventTaskLink();
   const deleteLink = useDeleteEventTaskLink();
   const createMeetingLink = useCreateMeetingTaskLink();
   const deleteMeetingLink = useDeleteMeetingTaskLink();
   const { triggerToast } = useAppStore();
-  const [selectedEventId, setSelectedEventId] = useState('');
   const [selectedMeetingId, setSelectedMeetingId] = useState('');
 
-  const linkedEventIds = new Set(links.map(l => l.event_id));
-  const linkableEvents = events.filter(e => !linkedEventIds.has(e.id));
   const meetingById = new Map(meetings.map(m => [m.id, m]));
   const linkedMeetingIds = new Set(meetingLinks.map(l => l.meeting_id));
   const visibleMeetingLinks = meetingLinks.map(link => ({ link, meeting: meetingById.get(link.meeting_id) }));
@@ -714,17 +763,15 @@ function EventTaskLinksPanel({ taskId, goalId }: { taskId: string; goalId?: stri
     .filter(m => !goalId || !m.goal_id || m.goal_id === goalId)
     .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
 
-  if (!links.length && !events.length && !meetingLinks.length && !meetings.length) return null;
+  if (!links.length && !meetingLinks.length && !meetings.length) return null;
 
-  const handleLink = async () => {
-    if (!selectedEventId) return;
-    try {
-      await createLink.mutateAsync({ event_id: selectedEventId, task_id: taskId });
-      setSelectedEventId('');
-      triggerToast('Event linked.', 'success');
-    } catch {
-      triggerToast('Failed to link event.', 'error');
-    }
+  // "When" label for a linked block, from the join row's schedule fields
+  const linkWhen = (l: (typeof links)[number]) => {
+    if (l.week_start == null || l.day_index == null || l.start_hour == null) return null;
+    const date = eventDate({ week_start: l.week_start, day_index: l.day_index });
+    if (!date) return null;
+    const day = parseLocalDate(date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return `${day} · ${fmtTimeRange(l.start_hour, l.duration_hours ?? 1)}`;
   };
 
   const handleLinkMeeting = async () => {
@@ -740,26 +787,31 @@ function EventTaskLinksPanel({ taskId, goalId }: { taskId: string; goalId?: stri
 
   return (
     <section>
-      <div className="mb-3 flex items-center gap-1.5">
+      <div className="mb-1 flex items-center gap-1.5">
         <Link2 size={14} className="text-gray-500" />
-        <h2 className="font-headline text-sm font-bold text-gray-900">Linked Events</h2>
+        <h2 className="font-headline text-sm font-bold text-gray-900">Calendar time</h2>
       </div>
+      <p className="mb-3 text-[10px] text-gray-400">
+        Blocks on your Schedule that are linked to this task, and meetings tied to it.
+      </p>
 
       {links.length > 0 && (
         <div className="mb-2 space-y-1.5">
           {links.map(l => (
             <div key={l.id} className="group/el flex items-center gap-2 rounded-lg border border-gray-100 bg-white px-2.5 py-2">
               <div className="min-w-0 flex-1">
-                <span className="mb-0.5 block font-mono text-[9px] uppercase tracking-wider text-gray-300">Event</span>
+                <span className="mb-0.5 block font-mono text-[9px] uppercase tracking-wider text-gray-300">
+                  {linkWhen(l) ?? 'Block'}
+                </span>
                 <span className="text-xs font-semibold text-gray-700 truncate block">{l.event_title ?? l.event_id.slice(0, 12)}</span>
                 {l.planned_minutes != null && (
-                  <span className="font-mono text-[10px] text-gray-400">{l.planned_minutes}m planned</span>
+                  <span className="font-mono text-[10px] text-gray-400">{l.planned_minutes}m of this task planned</span>
                 )}
               </div>
               <button
                 onClick={() => deleteLink.mutate(l.id)}
                 className="shrink-0 text-gray-300 opacity-0 hover:text-red-400 group-hover/el:opacity-100 transition-all"
-                title="Unlink event"
+                title="Unlink this block from the task"
               >
                 <Trash2 size={11} />
               </button>
@@ -792,27 +844,10 @@ function EventTaskLinksPanel({ taskId, goalId }: { taskId: string; goalId?: stri
         </div>
       )}
 
-      {linkableEvents.length > 0 && (
-        <div className="mb-2 flex gap-2">
-          <select
-            value={selectedEventId}
-            onChange={e => setSelectedEventId(e.target.value)}
-            className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
-          >
-            <option value="">Link an event…</option>
-            {linkableEvents.map(e => (
-              <option key={e.id} value={e.id}>{e.title || e.type}</option>
-            ))}
-          </select>
-          <button
-            onClick={handleLink}
-            disabled={!selectedEventId || createLink.isPending}
-            className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90 disabled:opacity-40"
-            title="Link event"
-          >
-            <Plus size={13} />
-          </button>
-        </div>
+      {links.length === 0 && (
+        <p className="mb-2 rounded-lg border border-dashed border-gray-200 p-3 text-center text-[10px] text-gray-300">
+          No blocks linked yet — use "Block time" above to put this task on your calendar.
+        </p>
       )}
 
       {linkableMeetings.length > 0 && (
@@ -1018,6 +1053,18 @@ export function TaskFocusView() {
     return acc;
   }, {});
   const children = childrenByParent[task.id] ?? [];
+  // This task plus every descendant — the calendar panel aggregates them all
+  const subtreeIds = new Set<string>([task.id]);
+  {
+    const stack = [task.id];
+    while (stack.length) {
+      const id = stack.pop()!;
+      for (const c of childrenByParent[id] ?? []) {
+        subtreeIds.add(c.id);
+        stack.push(c.id);
+      }
+    }
+  }
   const path = buildTaskPath(task, allTasks);
   const noteGroups = groupNotesByDate(taskNotes);
   const effectiveDueDate = getEffectiveTaskDueDate(task, allTasks);
@@ -1352,7 +1399,52 @@ export function TaskFocusView() {
         )}
       </header>
 
+      <TaskCalendarPanel task={task} subtreeIds={subtreeIds} allTasks={allTasks} />
+
       <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+        <div className="min-w-0 space-y-6">
+        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3 border-b border-gray-100 pb-3">
+            <div className="flex items-center gap-2">
+              <CheckSquare size={15} className="text-gray-500" />
+              <h2 className="font-headline text-sm font-bold text-gray-900">Child Tasks</h2>
+            </div>
+            <span className="font-mono text-[9px] uppercase tracking-widest text-gray-400">
+              time &amp; due editable inline
+            </span>
+          </div>
+
+          <div className="mb-3 flex gap-2">
+            <input
+              value={childTitle}
+              onChange={e => setChildTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleAddChild(); }}
+              placeholder="New child task"
+              className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
+            />
+            <button onClick={handleAddChild} className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90">
+              <Plus size={13} />
+            </button>
+          </div>
+
+          <div className="space-y-2">
+            {children.length > 0 ? children.map(child => (
+              <ChildTaskRow
+                key={child.id}
+                task={child}
+                childCount={(childrenByParent[child.id] ?? []).length}
+                onOpen={() => setFocusedTaskId(child.id)}
+                onToggle={async () => { await toggleTask(child.id); invalidate.tasks(selectedGoalId ?? undefined); }}
+                onDelete={() => handleDeleteChild(child)}
+              />
+            )) : (
+              <p className="rounded-lg border border-dashed border-gray-200 p-4 text-center text-[11px] text-gray-300">
+                No child tasks yet — break this task down to plan it piece by piece.
+              </p>
+            )}
+          </div>
+        </section>
+
         <section className="min-w-0 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-3 border-b border-gray-100 pb-3">
             <div className="flex items-center gap-2">
@@ -1547,42 +1639,9 @@ export function TaskFocusView() {
             </p>
           )}
         </section>
+        </div>
 
         <aside className="space-y-6">
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-headline text-sm font-bold text-gray-900">Child Tasks</h2>
-            </div>
-
-            <div className="mb-3 flex gap-2">
-              <input
-                value={childTitle}
-                onChange={e => setChildTitle(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleAddChild(); }}
-                placeholder="New child task"
-                className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
-              />
-              <button onClick={handleAddChild} className="rounded-lg bg-[#4648d4] px-2.5 py-1.5 text-white hover:opacity-90">
-                <Plus size={13} />
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              {children.length > 0 ? children.map(child => (
-                <ChildTaskRow
-                  key={child.id}
-                  task={child}
-                  childCount={(childrenByParent[child.id] ?? []).length}
-                  onOpen={() => setFocusedTaskId(child.id)}
-                  onToggle={async () => { await toggleTask(child.id); invalidate.tasks(selectedGoalId ?? undefined); }}
-                  onDelete={() => handleDeleteChild(child)}
-                />
-              )) : (
-                <p className="rounded-lg border border-dashed border-gray-200 p-4 text-center text-[11px] text-gray-300">No child tasks yet.</p>
-              )}
-            </div>
-          </section>
-
           <section>
             <div className="mb-3 flex items-center gap-1.5">
               <Paperclip size={14} className="text-gray-500" />
