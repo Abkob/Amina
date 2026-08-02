@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { canUseLocalPersistence } from '../runtime.js';
 
 const execFileAsync = promisify(execFile);
 const router = Router();
@@ -37,6 +38,7 @@ function dbUrl(): string {
 const SAFE_NAME = /^[a-zA-Z0-9._-]+\.dump$/;
 
 export async function createBackup(reason: string): Promise<{ file: string; bytes: number }> {
+  if (!canUseLocalPersistence()) throw Object.assign(new Error('Local pg_dump backups are unavailable on Vercel; use managed database backups.'), { status: 409 });
   fs.mkdirSync(BACKUPS_DIR, { recursive: true });
   const pgDump = findPgDump();
   if (!pgDump) throw new Error('pg_dump not found — set PG_DUMP_PATH in .env');
@@ -53,6 +55,7 @@ export async function createBackup(reason: string): Promise<{ file: string; byte
 }
 
 export function rotateBackups(): number {
+  if (!canUseLocalPersistence()) return 0;
   if (!fs.existsSync(BACKUPS_DIR)) return 0;
   const files = fs.readdirSync(BACKUPS_DIR)
     .filter(f => SAFE_NAME.test(f))
@@ -67,6 +70,9 @@ export function rotateBackups(): number {
 
 // GET /api/backups — list with sizes and dates, newest first
 router.get('/', async (_req, res) => {
+  if (!canUseLocalPersistence()) {
+    return res.json({ available: false, reason: 'Use managed PostgreSQL backups on Vercel', backups: [] });
+  }
   fs.mkdirSync(BACKUPS_DIR, { recursive: true });
   const files = fs.readdirSync(BACKUPS_DIR)
     .filter(f => SAFE_NAME.test(f))
@@ -92,6 +98,7 @@ router.post('/', async (_req, res) => {
 
 // DELETE /api/backups/:name
 router.delete('/:name', async (req, res) => {
+  if (!canUseLocalPersistence()) return res.status(409).json({ error: 'Local backups are unavailable on Vercel' });
   const name = req.params.name;
   if (!SAFE_NAME.test(name)) return res.status(400).json({ error: 'invalid backup name' });
   const full = path.join(BACKUPS_DIR, name);
@@ -103,6 +110,7 @@ router.delete('/:name', async (req, res) => {
 
 // GET /api/backups/:name/download — stream the dump file
 router.get('/:name/download', (req, res) => {
+  if (!canUseLocalPersistence()) return res.status(409).json({ error: 'Local backups are unavailable on Vercel' });
   const name = req.params.name;
   if (!SAFE_NAME.test(name)) return res.status(400).json({ error: 'invalid backup name' });
   const full = path.join(BACKUPS_DIR, name);

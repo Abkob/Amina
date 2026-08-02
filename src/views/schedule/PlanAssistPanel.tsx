@@ -83,7 +83,7 @@ export function PlanAssistPanel({ suggestions, taskLookup, unestimated, rollupCo
         {suggestions.map(s => {
           const info = taskLookup[s.taskId];
           return (
-            <div key={s.taskId} className="flex items-center gap-2 rounded-lg border border-gray-100 px-2 py-1.5">
+            <div key={s.taskId} data-testid="schedule-proposal" className="flex items-center gap-2 rounded-lg border border-gray-100 px-2 py-1.5">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] font-medium text-gray-800" title={info?.title ?? s.taskId}>
                   {info?.title ?? s.taskId}
@@ -95,6 +95,7 @@ export function PlanAssistPanel({ suggestions, taskLookup, unestimated, rollupCo
               <button
                 onClick={() => place(s)}
                 disabled={busyId === s.taskId || busyAll}
+                title="Apply"
                 className="flex shrink-0 items-center gap-1 rounded bg-[#4648d4] px-2 py-1 text-[9px] font-bold uppercase text-white hover:opacity-90 disabled:opacity-40"
               >
                 <CalendarPlus size={10} /> Place

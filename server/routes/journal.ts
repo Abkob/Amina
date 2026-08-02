@@ -9,6 +9,8 @@ import { scheduleObsidianVaultSync } from '../services/obsidianVaultSync.js';
 import { sanitizeEntityTitle } from '../utils/sanitize.js';
 import { localDateStr } from '../utils/localDate.js';
 import { log, newCid } from '../utils/logger.js';
+import { runInBackground } from '../utils/background.js';
+import { isVercelRuntime } from '../runtime.js';
 
 const router = Router();
 
@@ -155,9 +157,9 @@ router.post('/', async (req, res) => {
         `UPDATE journal_entries SET raw_text=$1, content_hash=$2, ingestion_status='pending', ingestion_attempts=0, updated_at=$3 WHERE id=$4`,
         [raw_text, content_hash, now, entry.id],
       );
-      markEmbeddingStale('journal_entry', entry.id).catch(() => {});
+      runInBackground(markEmbeddingStale('journal_entry', entry.id), 'journal update stale embedding');
       res.json({ id: entry.id, ingestion_status: 'pending', updated: true });
-      ingestJournalEntry(entry.id).catch(err => console.error('[journal] re-ingest from note:', err));
+      runInBackground(ingestJournalEntry(entry.id), 'journal re-ingest from note');
       return;
     }
   }
@@ -176,7 +178,7 @@ router.post('/', async (req, res) => {
   res.json({ id, ingestion_status: 'pending' });
 
   // Fire-and-forget ingestion
-  ingestJournalEntry(id).catch(err => console.error('[journal] Ingestion error:', err));
+  runInBackground(ingestJournalEntry(id), 'journal ingestion');
 });
 
 // PATCH /api/journal/:id
@@ -203,9 +205,8 @@ router.patch('/:id', async (req, res) => {
 
   // Re-trigger ingestion fire-and-forget when content changed
   if (rawTextChanged) {
-    markEmbeddingStale('journal_entry', req.params.id).catch(() => {});
-    ingestJournalEntry(req.params.id)
-      .catch(err => console.error('[journal] re-ingest after edit:', err));
+    runInBackground(markEmbeddingStale('journal_entry', req.params.id), 'journal edit stale embedding');
+    runInBackground(ingestJournalEntry(req.params.id), 'journal re-ingest after edit');
   }
 });
 
@@ -228,8 +229,7 @@ router.delete('/:id', async (req, res) => {
     await client.query('DELETE FROM journal_entries WHERE id=$1', [entryId]);
   });
   // Queue removal of any existing embedding (fire-and-forget)
-  query("DELETE FROM embeddings WHERE entity_type='journal_entry' AND entity_id=$1", [entryId])
-    .catch(err => console.error('[journal] embedding delete:', err));
+  runInBackground(query("DELETE FROM embeddings WHERE entity_type='journal_entry' AND entity_id=$1", [entryId]), 'journal embedding delete');
   res.json({ ok: true });
 });
 
@@ -315,7 +315,7 @@ router.post('/:id/ingest', async (req, res) => {
     [new Date().toISOString(), req.params.id],
   );
   res.json({ ok: true, message: 'Ingestion started' });
-  ingestJournalEntry(req.params.id).catch(err => console.error('[journal] Ingestion error:', err));
+  runInBackground(ingestJournalEntry(req.params.id), 'manual journal ingestion');
 });
 
 // ─── Ingestion pipeline ───────────────────────────────────────────────────────
@@ -610,13 +610,15 @@ ${entry.raw_text}
   // Refresh journal_digest summaries for all linked entities (fire-and-forget, outside transaction)
   for (const link of parsed.links) {
     if (!link.target_id || link.confidence < 0.4) continue;
-    generateJournalDigestSummary(link.target_type, link.target_id)
-      .catch(err => console.warn('[journal] journal_digest refresh failed:', err));
+    runInBackground(
+      generateJournalDigestSummary(link.target_type, link.target_id),
+      'journal digest refresh',
+    );
   }
 
   // Choice A — tags ARE topics: manual tags join matching topics outright,
   // AI-extracted tags only suggest (shared logic in topicTagSync).
-  (async () => {
+  await (async () => {
     try {
       const { syncTagsToTopics, parseTags } = await import('../services/topicTagSync.js');
       const { rows } = await query<{ tags_json: string }>('SELECT tags_json FROM journal_entries WHERE id=$1', [entryId]);
@@ -630,8 +632,7 @@ ${entry.raw_text}
   // Cluster-suggestion step of the ingestion pipeline: new journal content may
   // surface new topic candidates. Delayed so the journal's fresh embedding
   // (enqueued in the transaction above) has a chance to be computed first.
-  setTimeout(() => {
-    import('./topics.js')
+  const generateSuggestions = () => import('./topics.js')
       .then(({ runSuggestionGeneration }) => runSuggestionGeneration(null, 'journal_ingestion'))
       .then(r => {
         if (r.suggestions_created > 0) {
@@ -640,8 +641,14 @@ ${entry.raw_text}
           }, cid);
         }
       })
-      .catch(err => console.warn('[journal] post-ingestion suggestion run failed:', err));
-  }, 45_000).unref?.();
+      .then(() => undefined);
+  if (isVercelRuntime) {
+    runInBackground(generateSuggestions(), 'journal post-ingestion suggestions');
+  } else {
+    setTimeout(() => {
+      runInBackground(generateSuggestions(), 'journal post-ingestion suggestions');
+    }, 45_000).unref?.();
+  }
 }
 
 /**
@@ -659,6 +666,7 @@ export async function rollupCaptureWalls(): Promise<number> {
        AND NOT EXISTS (SELECT 1 FROM journal_entries j WHERE j.source = 'capture_rollup' AND j.entry_date = LEFT(n.created_at, 10))
        AND NOT EXISTS (SELECT 1 FROM journal_entries j2 WHERE j2.source_note_id = n.id)
      ORDER BY day DESC LIMIT 7`,
+    [today],
   );
   let created = 0;
   for (const { day } of days) {
@@ -684,7 +692,7 @@ export async function rollupCaptureWalls(): Promise<number> {
       [id, day, rawText, crypto.createHash('sha256').update(rawText).digest('hex'), now],
     );
     created++;
-    ingestJournalEntry(id).catch(err => console.error('[journal] rollup ingest:', err));
+    runInBackground(ingestJournalEntry(id), 'capture rollup journal ingestion');
   }
   return created;
 }

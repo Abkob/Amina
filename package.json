@@ -8,6 +8,14 @@
     "server": "tsx watch server/index.ts",
     "migrate": "tsx server/migrate.ts",
     "build": "vite build",
+    "check": "npm run lint && npm test && npm run build && npm run vercel:entry-check && npm run vercel:preflight",
+    "db:check": "tsx scripts/data-integrity-check.ts",
+    "db:deploy": "tsx scripts/deploy-schema.ts",
+    "storage:migrate": "tsx scripts/migrate-storage-to-blob.ts",
+    "vercel:bundle": "esbuild api/index.ts --bundle --platform=node --target=node24 --format=esm --packages=external --outfile=tmp/vercel-api.mjs",
+    "vercel:entry-check": "npm run vercel:bundle && tsx scripts/check-serverless-entry.ts",
+    "vercel:preflight": "tsx scripts/vercel-preflight.ts",
+    "vercel:preflight:env": "tsx scripts/vercel-preflight.ts --env",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
@@ -15,6 +23,9 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test"
+  },
+  "engines": {
+    "node": "24.x"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
@@ -31,6 +42,8 @@
     "@tiptap/starter-kit": "^3.27.1",
     "@types/dompurify": "^3.0.5",
     "@types/pdf-parse": "^1.1.5",
+    "@vercel/blob": "^2.6.1",
+    "@vercel/functions": "^3.7.6",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.11.1",
     "cors": "^2.8.6",

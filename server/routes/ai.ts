@@ -43,6 +43,7 @@ import {
 import { searchResearchEvidence } from '../services/researchRag.js';
 import { findExplicitTaskMatches } from '../services/contextTargeting.js';
 import { synchronizedTaskDeadlineUpdates } from '../utils/taskDeadline.js';
+import { runInBackground } from '../utils/background.js';
 
 const router = Router();
 
@@ -2202,8 +2203,8 @@ router.post('/apply', async (req, res) => {
         [id + '_edge', goal_id, 'goal', id, 'task', 'contains', '{}', now],
       );
     }
-    generateEntitySummary('task', id).catch(err => console.error('[summary] ai create_task:', err));
-    queueEmbeddingUpsert('task', id).catch(err => console.error('[embedding] ai create_task:', err));
+    runInBackground(generateEntitySummary('task', id), 'AI create task summary');
+    runInBackground(queueEmbeddingUpsert('task', id), 'AI create task embedding queue');
     return res.json({ id });
   }
 
@@ -2214,8 +2215,8 @@ router.post('/apply', async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [id, title, description ?? '', category ?? 'Work', 'Safe', 0, deadline ?? null, start_date ?? null, false, 1, now, now],
     );
-    generateEntitySummary('goal', id).catch(err => console.error('[summary] ai create_goal:', err));
-    queueEmbeddingUpsert('goal', id).catch(err => console.error('[embedding] ai create_goal:', err));
+    runInBackground(generateEntitySummary('goal', id), 'AI create goal summary');
+    runInBackground(queueEmbeddingUpsert('goal', id), 'AI create goal embedding queue');
     return res.json({ id });
   }
 
@@ -2268,11 +2269,11 @@ router.post('/apply', async (req, res) => {
         );
       }
     });
-    generateEntitySummary('goal', id).catch(err => console.error('[summary] ai create_goal_with_tasks:', err));
-    queueEmbeddingUpsert('goal', id).catch(err => console.error('[embedding] ai create_goal_with_tasks:', err));
+    runInBackground(generateEntitySummary('goal', id), 'AI create goal with tasks summary');
+    runInBackground(queueEmbeddingUpsert('goal', id), 'AI create goal with tasks embedding queue');
     for (const taskId of taskIds) {
-      generateEntitySummary('task', taskId).catch(err => console.error('[summary] ai create_goal_with_tasks task:', err));
-      queueEmbeddingUpsert('task', taskId).catch(err => console.error('[embedding] ai create_goal_with_tasks task:', err));
+      runInBackground(generateEntitySummary('task', taskId), 'AI create goal task summary');
+      runInBackground(queueEmbeddingUpsert('task', taskId), 'AI create goal task embedding queue');
     }
     return res.json({ id, task_ids: taskIds });
   }
@@ -2294,8 +2295,8 @@ router.post('/apply', async (req, res) => {
     const sets = entries.map(([col], i) => `${col}=$${i + 1}`).join(',');
     const vals = entries.map(([, v]) => v);
     await query(`UPDATE tasks SET ${sets} WHERE id=$${vals.length + 1}`, [...vals, task_id]);
-    markEmbeddingStale('task', task_id as string).catch(() => {});
-    queueEmbeddingUpsert('task', task_id as string).catch(err => console.error('[embedding] ai update_task:', err));
+    runInBackground(markEmbeddingStale('task', task_id as string), 'AI update task stale embedding');
+    runInBackground(queueEmbeddingUpsert('task', task_id as string), 'AI update task embedding queue');
     return res.json({ ok: true });
   }
 
@@ -2309,9 +2310,9 @@ router.post('/apply', async (req, res) => {
     const vals = entries.map(([, v]) => v);
     await query(`UPDATE goals SET ${sets} WHERE id=$${vals.length + 1}`, [...vals, goal_id]);
     // Fire side effects after successful update (embedding invalidation + summary refresh)
-    generateEntitySummary('goal', goal_id as string).catch(err => console.error('[summary] ai update_goal:', err));
-    markEmbeddingStale('goal', goal_id as string).catch(() => {});
-    queueEmbeddingUpsert('goal', goal_id as string).catch(err => console.error('[embedding] ai update_goal:', err));
+    runInBackground(generateEntitySummary('goal', goal_id as string), 'AI update goal summary');
+    runInBackground(markEmbeddingStale('goal', goal_id as string), 'AI update goal stale embedding');
+    runInBackground(queueEmbeddingUpsert('goal', goal_id as string), 'AI update goal embedding queue');
     return res.json({ ok: true });
   }
 
@@ -2324,7 +2325,7 @@ router.post('/apply', async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [id, goal_id, title ?? '', description ?? '', due_date ?? null, color ?? '#6366f1', count, false, now, now],
     );
-    generateEntitySummary('milestone', id).catch(err => console.error('[summary] ai create_milestone:', err));
+    runInBackground(generateEntitySummary('milestone', id), 'AI create milestone summary');
     return res.json({ id });
   }
 
@@ -2653,39 +2654,39 @@ router.post('/proposals/:id/apply', async (req, res) => {
   // We fire-and-forget so the response is immediate, but these always execute after commit.
   if (actionResult.created_task_id) {
     const tid = actionResult.created_task_id as string;
-    generateEntitySummary('task', tid).catch(err => console.error('[summary] proposal create_task:', err));
-    queueEmbeddingUpsert('task', tid).catch(err => console.error('[embedding] proposal create_task:', err));
+    runInBackground(generateEntitySummary('task', tid), 'proposal create task summary');
+    runInBackground(queueEmbeddingUpsert('task', tid), 'proposal create task embedding queue');
     delete actionResult.created_task_id;
   }
   if (Array.isArray(actionResult.created_task_ids)) {
     for (const tid of actionResult.created_task_ids as string[]) {
-      generateEntitySummary('task', tid).catch(err => console.error('[summary] proposal create_goal_with_tasks task:', err));
-      queueEmbeddingUpsert('task', tid).catch(err => console.error('[embedding] proposal create_goal_with_tasks task:', err));
+      runInBackground(generateEntitySummary('task', tid), 'proposal create goal task summary');
+      runInBackground(queueEmbeddingUpsert('task', tid), 'proposal create goal task embedding queue');
     }
     delete actionResult.created_task_ids;
   }
   if (actionResult.updated_task_id) {
     const tid = actionResult.updated_task_id as string;
-    markEmbeddingStale('task', tid).catch(() => {});
-    queueEmbeddingUpsert('task', tid).catch(err => console.error('[embedding] proposal update_task:', err));
+    runInBackground(markEmbeddingStale('task', tid), 'proposal update task stale embedding');
+    runInBackground(queueEmbeddingUpsert('task', tid), 'proposal update task embedding queue');
     delete actionResult.updated_task_id;
   }
   if (actionResult.created_goal_id) {
     const gid = actionResult.created_goal_id as string;
-    generateEntitySummary('goal', gid).catch(err => console.error('[summary] proposal create_goal:', err));
-    queueEmbeddingUpsert('goal', gid).catch(err => console.error('[embedding] proposal create_goal:', err));
+    runInBackground(generateEntitySummary('goal', gid), 'proposal create goal summary');
+    runInBackground(queueEmbeddingUpsert('goal', gid), 'proposal create goal embedding queue');
     delete actionResult.created_goal_id;
   }
   if (actionResult.updated_goal_id) {
     const gid = actionResult.updated_goal_id as string;
-    generateEntitySummary('goal', gid).catch(err => console.error('[summary] proposal update_goal:', err));
-    markEmbeddingStale('goal', gid).catch(() => {});
-    queueEmbeddingUpsert('goal', gid).catch(err => console.error('[embedding] proposal update_goal:', err));
+    runInBackground(generateEntitySummary('goal', gid), 'proposal update goal summary');
+    runInBackground(markEmbeddingStale('goal', gid), 'proposal update goal stale embedding');
+    runInBackground(queueEmbeddingUpsert('goal', gid), 'proposal update goal embedding queue');
     delete actionResult.updated_goal_id;
   }
   if (actionResult.created_milestone_id) {
     const mid = actionResult.created_milestone_id as string;
-    generateEntitySummary('milestone', mid).catch(err => console.error('[summary] proposal create_milestone:', err));
+    runInBackground(generateEntitySummary('milestone', mid), 'proposal create milestone summary');
     delete actionResult.created_milestone_id;
   }
 

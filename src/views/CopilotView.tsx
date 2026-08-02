@@ -8,6 +8,7 @@ import { PlanCalendarWidget, type ChatPlan } from './copilot/PlanCalendarWidget'
 import { PlanOptionsWidget, type ChatPlanOptions } from './copilot/PlanOptionsWidget';
 import { DayScheduleWidget, type ChatScheduleDayView } from './copilot/DayScheduleWidget';
 import { OverdueTasksWidget, type OverdueTasksView } from './copilot/OverdueTasksWidget';
+import { uploadResourceFile } from '../db/queries/resources';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1012,9 +1013,7 @@ export function CopilotView() {
   const uploadAttachment = async (file: File) => {
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const { id } = await apiFetch<{ id: string }>('/api/resources/upload', { method: 'POST', body: fd });
+      const id = await uploadResourceFile(file);
       setAttachment({ id, title: file.name, indexing: true });
       qc.invalidateQueries({ queryKey: ['resources'] });
       triggerToast(`"${file.name}" added to your Resource Library. Tell the copilot where to file it.`, 'success');

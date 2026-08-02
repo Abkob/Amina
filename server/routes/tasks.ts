@@ -4,6 +4,7 @@ import { syncGoalMetrics } from './goals.js';
 import { generateEntitySummary } from '../services/summaryGenerator.js';
 import { queueEmbeddingUpsert, markEmbeddingStale } from '../services/embeddingLifecycle.js';
 import { requireISODate } from '../utils/localDate.js';
+import { runInBackground } from '../utils/background.js';
 import {
   childDeadlineError,
   dateOnly,
@@ -192,8 +193,8 @@ router.post('/', async (req, res) => {
   }
 
   res.json({ id });
-  generateEntitySummary('task', id).catch(err => console.error('[summary] task create:', err));
-  queueEmbeddingUpsert('task', id).catch(err => console.error('[embedding] task create:', err));
+  runInBackground(generateEntitySummary('task', id), 'task create summary');
+  runInBackground(queueEmbeddingUpsert('task', id), 'task create embedding queue');
   if (b.tags_json) {
     import('../services/topicTagSync.js')
       .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('task', id, parseTags(b.tags_json), 'manual'))
@@ -293,9 +294,9 @@ router.patch('/:id', async (req, res) => {
   if (shouldSync && goalId) await syncGoalMetrics(goalId);
 
   res.json({ ok: true });
-  generateEntitySummary('task', taskId).catch(err => console.error('[summary] task update:', err));
-  markEmbeddingStale('task', taskId).catch(() => {});
-  queueEmbeddingUpsert('task', taskId).catch(err => console.error('[embedding] task update:', err));
+  runInBackground(generateEntitySummary('task', taskId), 'task update summary');
+  runInBackground(markEmbeddingStale('task', taskId), 'task update stale embedding');
+  runInBackground(queueEmbeddingUpsert('task', taskId), 'task update embedding queue');
   // Choice A — tags ARE topics: user-typed tags join matching topics.
   if ('tags_json' in body) {
     import('../services/topicTagSync.js')
@@ -436,11 +437,11 @@ router.delete('/:id', async (req, res) => {
   });
 
   if (goalId) await syncGoalMetrics(goalId);
-  res.json({ ok: true });
-  query(
+  await query(
     "DELETE FROM embeddings WHERE entity_type='task' AND entity_id = ANY($1::text[])",
     [allTaskIds],
-  ).catch(err => console.error('[cleanup] task embeddings:', err));
+  );
+  res.json({ ok: true });
 });
 
 // ── Task notes ────────────────────────────────────────────────────────────────

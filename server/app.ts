@@ -33,9 +33,14 @@ import { obsidianVaultRouter } from './routes/obsidian-vault.js';
 import { researchRouter } from './routes/research.js';
 import { orchestratorRouter } from './routes/orchestrator.js';
 import { usageRouter } from './routes/usage.js';
+import { authRouter } from './routes/auth.js';
+import { cronRouter } from './routes/cron.js';
+import { uploadsRouter } from './routes/uploads.js';
 import { EMBED_DIMENSION, EMBED_MODEL } from './embeddingProvider.js';
 import { getProviderSummary, isNvidiaChatModel } from './config/providers.js';
 import { scheduleObsidianVaultSync, shouldSyncObsidianVaultForRequest } from './services/obsidianVaultSync.js';
+import { requireApiAuth } from './utils/auth.js';
+import { isVercelRuntime, runtimeCapabilities } from './runtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -49,9 +54,14 @@ export const UPLOADS_DIR = path.join(__dirname, 'uploads');
 export function createApp(): express.Express {
   const app = express();
 
+  const allowedOrigins = new Set([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    process.env.APP_URL,
+  ].filter((value): value is string => Boolean(value)));
   app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
-    credentials: false,
+    origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin)),
+    credentials: true,
   }));
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -59,7 +69,22 @@ export function createApp(): express.Express {
     res.setHeader('Referrer-Policy', 'no-referrer');
     next();
   });
-  app.use(express.json({ limit: '10mb' }));
+  // Vercel Functions reject request bodies above 4.5 MB. File uploads use
+  // direct-to-Blob tokens, so leave a small margin for JSON/API overhead.
+  app.use(express.json({ limit: isVercelRuntime ? '4mb' : '10mb' }));
+  app.use('/api/auth', authRouter);
+  // The Blob completion callback has no browser cookie. This router performs
+  // authentication internally for token issuance and lets the SDK validate callbacks.
+  app.use('/api/uploads', uploadsRouter);
+  app.get('/api/health/live', (_req, res) => {
+    res.json({ status: 'ok', runtime: runtimeCapabilities().runtime, timestamp: new Date().toISOString() });
+  });
+  app.use('/api', requireApiAuth);
+  app.use('/api/cron', cronRouter);
+  app.get('/api/runtime', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(runtimeCapabilities());
+  });
   app.use((req, res, next) => {
     const shouldSync = shouldSyncObsidianVaultForRequest(req.method, req.path);
     if (shouldSync) {
@@ -121,11 +146,6 @@ export function createApp(): express.Express {
       }
     }
     res.json({ queued, skipped });
-  });
-
-  // GET /api/health/live — fast liveness check, no external I/O
-  app.get('/api/health/live', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
   // GET /api/health/ready — readiness check: DB connectivity + configured model availability

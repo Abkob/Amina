@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { canUseLocalPersistence } from '../runtime.js';
 import { query } from '../db.js';
 
 type MaybeString = string | null;
@@ -311,6 +312,7 @@ export function getObsidianVaultDir(): string {
 }
 
 export function isObsidianVaultSyncEnabled(): boolean {
+  if (!canUseLocalPersistence()) return false;
   if (process.env.NODE_ENV === 'test' && process.env.OBSIDIAN_VAULT_SYNC !== 'true') return false;
   return process.env.OBSIDIAN_VAULT_SYNC !== 'false';
 }

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { apiFetch, apiPost, apiDelete } from '../utils/apiFetch';
+import { uploadResourceFile } from '../db/queries/resources';
 
 /* The Testing workbench drives every real pipeline against data YOU pick and
  * shows the raw outputs (status transitions, evidence JSON, similarity scores,
@@ -200,9 +201,7 @@ function DocumentBench() {
   const upload = async (file: File) => {
     setBusy(true);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const { id } = await apiFetch<{ id: string }>('/api/resources/upload', { method: 'POST', body: fd });
+      const id = await uploadResourceFile(file);
       setResourceId(id);
       setFindResults(null);
       // chunking + embedding are async — poll a few times

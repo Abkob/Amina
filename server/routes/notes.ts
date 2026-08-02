@@ -57,7 +57,7 @@ router.patch('/:id', async (req, res) => {
   const contentChanged = 'title' in req.body || 'content' in req.body;
   const { sets, vals } = buildUpdate(updates);
   await query(`UPDATE notes SET ${sets} WHERE id=$${vals.length + 1}`, [...vals, req.params.id]);
-  if (contentChanged) markEmbeddingStale('note', req.params.id).catch(() => {});
+  if (contentChanged) await markEmbeddingStale('note', req.params.id);
   res.json({ ok: true });
 });
 
@@ -73,9 +73,8 @@ router.delete('/:id', async (req, res) => {
     await client.query("DELETE FROM ai_action_proposals WHERE source_type='note' AND source_id=$1 AND status='pending'", [noteId]);
     await client.query('DELETE FROM notes WHERE id=$1', [noteId]);
   });
+  await query("DELETE FROM embeddings WHERE entity_type='note' AND entity_id=$1", [noteId]);
   res.json({ ok: true });
-  query("DELETE FROM embeddings WHERE entity_type='note' AND entity_id=$1", [noteId])
-    .catch(err => console.error('[cleanup] note embeddings:', err));
 });
 
 export { router as notesRouter };

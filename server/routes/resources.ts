@@ -7,9 +7,13 @@ import { query, buildUpdate, transaction } from '../db.js';
 import { generateEntitySummary } from '../services/summaryGenerator.js';
 import { queueEmbeddingUpsert, markEmbeddingStale } from '../services/embeddingLifecycle.js';
 import { processResourceChunks } from '../services/chunkPipeline.js';
+import { isVercelRuntime } from '../runtime.js';
+import { z } from 'zod';
+import { deleteStoredFile, isPrivateBlobReference, materializeStoredFile, openStoredFile, verifyPrivateBlob } from '../services/fileStorage.js';
+import { runInBackground } from '../utils/background.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
-const UPLOADS_DIR = path.join(__dir, '..', 'uploads');
+const UPLOADS_DIR = isVercelRuntime ? path.join('/tmp', 'amina-uploads') : path.join(__dir, '..', 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const ALLOWED_MIMES = new Set([
@@ -55,6 +59,15 @@ function typeFromFilename(name: string): string {
 }
 
 const VALID_READ_STATES = new Set(['Unread', 'Reading', 'Done', 'Shelved']);
+
+const BlobRegistration = z.object({
+  blob: z.object({ url: z.string().url(), pathname: z.string().min(1).max(512) }),
+  original_name: z.string().min(1).max(255),
+  mime_type: z.string().min(1).max(200),
+  size: z.number().int().positive().max(50 * 1024 * 1024),
+  attach_to_id: z.string().min(1).optional(),
+  attach_to_type: z.enum(['task', 'goal']).optional(),
+});
 
 // ─── Magic-byte validation ─────────────────────────────────────────────────────
 // Read the first 16 bytes of the uploaded file and confirm they match the
@@ -201,6 +214,9 @@ router.delete('/mentions/:edgeId', async (req, res) => {
 
 // POST /api/resources/upload
 router.post('/upload', (req, res, next) => {
+  if (isVercelRuntime) {
+    return res.status(409).json({ error: 'Use private Blob upload on Vercel' });
+  }
   upload.single('file')(req, res, (err) => {
     if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({ error: 'File too large (50 MB limit)' });
@@ -243,11 +259,69 @@ router.post('/upload', (req, res, next) => {
     );
   }
   res.json({ id });
-  generateEntitySummary('resource', id).catch(err => console.error('[summary] resource upload:', err));
-  queueEmbeddingUpsert('resource', id).catch(err => console.error('[embedding] resource upload:', err));
+  runInBackground(generateEntitySummary('resource', id), 'resource upload summary');
+  runInBackground(queueEmbeddingUpsert('resource', id), 'resource upload embedding queue');
   // Chunk text/PDF files for semantic search
-  processResourceChunks(id, file.path, file.mimetype)
-    .catch(err => console.error('[chunk-pipeline] upload:', err));
+  runInBackground(processResourceChunks(id, file.path, file.mimetype), 'resource upload chunking');
+});
+
+// Register an authenticated direct-to-Blob upload without sending the file
+// body through the Vercel Function payload limit.
+router.post('/register-blob', async (req, res) => {
+  const body = BlobRegistration.parse(req.body);
+  const ext = path.extname(body.original_name).toLowerCase();
+  if (BLOCKED_EXTS.has(ext) || (!ALLOWED_MIMES.has(body.mime_type) && !body.mime_type.startsWith('text/'))) {
+    await deleteStoredFile(body.blob.url).catch(() => undefined);
+    return res.status(400).json({ error: 'Unsupported file type' });
+  }
+  const metadata = await verifyPrivateBlob(body.blob.url);
+  if (metadata.pathname !== body.blob.pathname || metadata.size !== body.size) {
+    return res.status(400).json({ error: 'Blob metadata does not match the completed upload' });
+  }
+  if (metadata.contentType !== body.mime_type) {
+    return res.status(400).json({ error: 'Blob content type does not match the selected file' });
+  }
+  const attachToId = body.attach_to_id ?? null;
+  const attachToType = body.attach_to_type ?? 'goal';
+  if (attachToId && !(await attachmentTargetExists(attachToId, attachToType))) {
+    return res.status(400).json({ error: 'Attachment target does not exist or has an invalid type' });
+  }
+
+  const materialized = await materializeStoredFile(body.blob.url, body.original_name);
+  if (!validateMagicBytes(materialized.path, body.mime_type)) {
+    await materialized.cleanup();
+    await deleteStoredFile(body.blob.url);
+    return res.status(400).json({ error: 'File content does not match its declared type' });
+  }
+
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const base = path.basename(body.original_name, path.extname(body.original_name));
+  try {
+    await query(
+      'INSERT INTO resources (id,title,url,type,info,file_path,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [id, base, `/api/resources/blob/${id}`, typeFromFilename(body.original_name), `Uploaded ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, body.blob.url, now],
+    );
+    if (attachToId) {
+      await query(
+        `INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
+         VALUES ($1,$2,'resource',$3,$4,'attached_to',NULL,$5) ON CONFLICT DO NOTHING`,
+        [crypto.randomUUID(), id, attachToId, attachToType, now],
+      );
+    }
+  } catch (err) {
+    await materialized.cleanup();
+    await deleteStoredFile(body.blob.url);
+    throw err;
+  }
+
+  runInBackground(generateEntitySummary('resource', id), 'resource blob summary');
+  runInBackground(queueEmbeddingUpsert('resource', id), 'resource blob embedding queue');
+  runInBackground(
+    processResourceChunks(id, materialized.path, body.mime_type).finally(materialized.cleanup),
+    'resource blob chunking',
+  );
+  res.json({ id });
 });
 
 // POST /api/resources/:id/rechunk — re-run text extraction + chunking for an
@@ -268,13 +342,19 @@ router.post('/:id/rechunk', async (req, res) => {
       await query('UPDATE resources SET file_path=$1 WHERE id=$2', [filePath, r.id]);
     }
   }
-  if (!filePath || !fs.existsSync(filePath)) {
+  if (!filePath) {
     return res.status(409).json({ error: 'No file on disk for this resource — re-upload it to enable chunking' });
   }
 
-  const ext = path.extname(filePath).toLowerCase();
-  const mime = ext === '.pdf' ? 'application/pdf' : 'text/plain';
-  const result = await processResourceChunks(r.id, filePath, mime);
+  let originalName = r.url?.split('/').pop() ?? 'resource.bin';
+  let mime = path.extname(originalName).toLowerCase() === '.pdf' ? 'application/pdf' : 'text/plain';
+  if (isPrivateBlobReference(filePath)) {
+    const metadata = await verifyPrivateBlob(filePath);
+    originalName = metadata.pathname.split('/').pop() ?? originalName;
+    mime = metadata.contentType ?? mime;
+  }
+  const materialized = await materializeStoredFile(filePath, originalName);
+  const result = await processResourceChunks(r.id, materialized.path, mime).finally(materialized.cleanup);
   if (!result) {
     return res.status(422).json({ error: 'Extraction produced no chunks (parse failure or empty document); previous chunks were preserved' });
   }
@@ -315,6 +395,23 @@ router.get('/serve/:filename', (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
   }
   res.sendFile(resolved);
+});
+
+// Authenticated proxy for immutable private Blob objects.
+router.get('/blob/:id', async (req, res) => {
+  const { rows } = await query('SELECT title, file_path FROM resources WHERE id=$1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  const row = rows[0] as { title: string; file_path: string | null };
+  if (!row.file_path) return res.status(404).json({ error: 'Not found' });
+  const opened = await openStoredFile(row.file_path);
+  if (!opened) return res.status(404).json({ error: 'Not found' });
+  const safeName = path.basename(row.title).replace(/[^\w.\- ]/g, '_');
+  res.setHeader('Content-Type', opened.contentType ?? 'application/octet-stream');
+  res.setHeader('Content-Length', String(opened.size));
+  res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  opened.stream.pipe(res);
 });
 
 // GET /api/resources/:id
@@ -358,8 +455,8 @@ router.post('/', async (req, res) => {
     );
   }
   res.json({ id });
-  generateEntitySummary('resource', id).catch(err => console.error('[summary] resource create:', err));
-  queueEmbeddingUpsert('resource', id).catch(err => console.error('[embedding] resource create:', err));
+  runInBackground(generateEntitySummary('resource', id), 'resource create summary');
+  runInBackground(queueEmbeddingUpsert('resource', id), 'resource create embedding queue');
   if (b.tags_json) {
     import('../services/topicTagSync.js')
       .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('resource', id, parseTags(b.tags_json), 'manual'))
@@ -410,9 +507,9 @@ router.patch('/:id', async (req, res) => {
   const { sets, vals } = buildUpdate(updates);
   await query(`UPDATE resources SET ${sets} WHERE id=$${vals.length + 1}`, [...vals, req.params.id]);
   res.json({ ok: true });
-  generateEntitySummary('resource', req.params.id).catch(err => console.error('[summary] resource update:', err));
-  markEmbeddingStale('resource', req.params.id).catch(() => {});
-  queueEmbeddingUpsert('resource', req.params.id).catch(err => console.error('[embedding] resource update:', err));
+  runInBackground(generateEntitySummary('resource', req.params.id), 'resource update summary');
+  runInBackground(markEmbeddingStale('resource', req.params.id), 'resource update stale embedding');
+  runInBackground(queueEmbeddingUpsert('resource', req.params.id), 'resource update embedding queue');
   // Choice A — tags ARE topics: a user-typed tag matching a topic name/alias
   // joins that topic with full authority.
   if (tags_json !== undefined) {
@@ -447,18 +544,10 @@ router.delete('/:id', async (req, res) => {
     await client.query("UPDATE work_sessions SET resource_id=NULL WHERE resource_id=$1", [resourceId]);
     await client.query('DELETE FROM resources WHERE id=$1', [resourceId]);
   });
-  res.json({ ok: true });
   // Delete physical file after transaction commits (best-effort — DB is canonical)
-  if (filePath) {
-    try {
-      const resolved = path.resolve(filePath);
-      if (resolved.startsWith(path.resolve(UPLOADS_DIR) + path.sep)) {
-        fs.unlink(resolved, err => { if (err && err.code !== 'ENOENT') console.warn('[cleanup] resource file delete:', err); });
-      }
-    } catch { /* ignore */ }
-  }
-  query("DELETE FROM embeddings WHERE entity_type='resource' AND entity_id=$1", [resourceId])
-    .catch(err => console.error('[cleanup] resource embeddings:', err));
+  if (filePath) await deleteStoredFile(filePath).catch(err => console.warn('[cleanup] resource file delete:', err));
+  await query("DELETE FROM embeddings WHERE entity_type='resource' AND entity_id=$1", [resourceId]);
+  res.json({ ok: true });
 });
 
 // GET /api/resources/:id/references
