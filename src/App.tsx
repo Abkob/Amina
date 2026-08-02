@@ -23,6 +23,7 @@ import { GraphView }        from './views/GraphView';
 import { TopicsView }       from './views/TopicsView';
 import { ScheduleView }     from './views/ScheduleView';
 import { TestingView }      from './views/TestingView';
+import { UsageManagerView } from './views/UsageManagerView';
 
 // Modals
 import { NewGoalWizard }    from './modals/NewGoalWizard';
@@ -48,33 +49,69 @@ const queryClient = new QueryClient({
 // that makes every write visible immediately, on every page.
 const URL_INVALIDATION: Array<[RegExp, string[]]> = [
   [/^\/api\/tasks/,             ['tasks', 'goal-tasks', 'goals', 'goals-health', 'schedule-preview', 'data-readiness', 'task-notes', 'graph', 'entity-topics', 'topics']],
-  [/^\/api\/goals/,             ['goals', 'goals-health', 'tasks', 'schedule-preview', 'data-readiness', 'graph']],
-  [/^\/api\/milestones/,        ['milestones', 'tasks', 'goals', 'graph']],
-  [/^\/api\/goal-deadlines/,    ['deadlines', 'goals', 'schedule-preview']],
-  [/^\/api\/journal/,           ['journal', 'journal-links', 'work-sessions', 'proposals', 'ai-proposals', 'graph', 'data-readiness', 'entity-topics', 'topics', 'topic-suggestions']],
+  [/^\/api\/goals/,             ['goals', 'goals-health', 'tasks', 'goal-tasks', 'schedule-preview', 'data-readiness', 'graph']],
+  [/^\/api\/milestones/,        ['milestones', 'tasks', 'goals', 'goals-health', 'schedule-preview', 'graph']],
+  [/^\/api\/goal-deadlines/,    ['deadlines', 'goals', 'goals-health', 'tasks', 'schedule-preview']],
+  [/^\/api\/journal/,           ['journal', 'journal-links', 'work-sessions', 'tasks', 'goals', 'goals-health', 'schedule-preview', 'proposals', 'ai-proposals', 'graph', 'data-readiness', 'entity-topics', 'topics', 'topic-suggestions']],
   [/^\/api\/notes/,             ['notes']],
   [/^\/api\/resources/,         ['resources', 'resource-chunks', 'graph', 'data-readiness', 'entity-topics', 'topics']],
-  [/^\/api\/meetings/,          ['meetings', 'schedule-preview']],
-  [/^\/api\/events/,            ['events']],
-  [/^\/api\/edges/,             ['graph', 'resources', 'tasks']],
+  [/^\/api\/meetings/,          ['meetings', 'meeting-task-links', 'schedule-preview']],
+  [/^\/api\/events/,            ['events', 'event-task-links', 'schedule-preview']],
+  [/^\/api\/edges/,             ['graph', 'resources', 'tasks', 'meeting-task-links', 'meetings', 'schedule-preview']],
   [/^\/api\/topics/,            ['topics', 'topic-suggestions', 'topic-members', 'entity-topics', 'graph-topic-members']],
   [/^\/api\/ai\/proposals/,     ['proposals', 'ai-proposals', 'tasks', 'goals', 'goals-health', 'milestones', 'schedule-preview', 'graph']],
-  [/^\/api\/ai\/schedule/,      ['proposals', 'ai-proposals', 'tasks', 'schedule-preview', 'events', 'event-task-links']],
+  [/^\/api\/ai\/schedule/,      ['proposals', 'ai-proposals', 'tasks', 'goal-tasks', 'goals', 'goals-health', 'schedule-preview', 'events', 'event-task-links']],
   [/^\/api\/ai\/sessions/,      ['chat-sessions', 'proposals', 'ai-proposals']],
-  [/^\/api\/work-sessions/,     ['work-sessions', 'work-session-stats', 'tasks']],
+  [/^\/api\/work-sessions/,     ['work-sessions', 'work-session-stats', 'tasks', 'goals', 'goals-health', 'schedule-preview']],
   [/^\/api\/schedule-prefs/,    ['schedule-prefs', 'schedule-overrides', 'schedule-preview']],
   [/^\/api\/task-note-files/,   ['note-files']],
-  [/^\/api\/event-task-links/,  ['event-task-links', 'events']],
+  [/^\/api\/event-task-links/,  ['event-task-links', 'events', 'schedule-preview']],
   [/^\/api\/entity-aliases/,    ['entity-aliases']],
 ];
 
+const pendingInvalidations = new Map<string, number>();
+let invalidationTimer: number | null = null;
+
+function flushPendingInvalidations() {
+  invalidationTimer = null;
+  const entries = [...pendingInvalidations.entries()];
+  pendingInvalidations.clear();
+
+  for (const [key, queuedAt] of entries) {
+    const queryKey = [key];
+    const alreadyFetching = queryClient.isFetching({ queryKey }) > 0;
+    const updatedSinceQueued = queryClient
+      .getQueryCache()
+      .findAll({ queryKey })
+      .some(query => query.state.dataUpdatedAt >= queuedAt);
+
+    if (alreadyFetching || updatedSinceQueued) continue;
+
+    queryClient.invalidateQueries({
+      queryKey,
+      refetchType: 'active',
+    });
+  }
+}
+
+function queueInvalidation(key: string) {
+  pendingInvalidations.set(key, Date.now());
+  if (invalidationTimer !== null) return;
+  invalidationTimer = window.setTimeout(flushPendingInvalidations, 160);
+}
+
 setMutationListener((_method, url) => {
   const path = url.split('?')[0];
+  const keysToInvalidate = new Set<string>();
   for (const [re, keys] of URL_INVALIDATION) {
     if (re.test(path)) {
-      for (const key of keys) queryClient.invalidateQueries({ queryKey: [key] });
-      return;
+      for (const key of keys) keysToInvalidate.add(key);
     }
+  }
+  if (keysToInvalidate.size === 0) keysToInvalidate.add('schedule-preview');
+
+  for (const key of keysToInvalidate) {
+    queueInvalidation(key);
   }
 });
 
@@ -119,6 +156,7 @@ function AppInner() {
     if (currentTab === 'Schedule')  return <ScheduleView />;
     if (currentTab === 'Gantt')     return <ScheduleView initialPage="timeline" />;
     if (currentTab === 'Testing')   return <TestingView />;
+    if (currentTab === 'Usage')     return <UsageManagerView />;
     if (currentTab === 'Resources') return <ResourcesView />;
     if (currentTab === 'Settings')  return <SettingsView />;
     return null;

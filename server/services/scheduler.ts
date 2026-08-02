@@ -8,6 +8,7 @@ export interface SchedulerTask {
   due_date: string | null;
   priority: 'high' | 'medium' | 'low' | string;
   blocker_ids: string[];
+  max_daily_minutes?: number;
 }
 
 export interface SchedulerMeeting {
@@ -45,6 +46,28 @@ export interface DayAssignment {
   available_minutes: number;
   used_minutes: number;
   task_ids: string[];
+  /** Exact minutes the scheduler allocated to each task on this day. */
+  task_minutes: Record<string, number>;
+}
+
+export interface TaskScheduleDiagnosticDay {
+  date: string;
+  capacity_minutes: number;
+  committed_before_minutes: number;
+  available_before_minutes: number;
+  allocated_minutes: number;
+}
+
+export interface TaskScheduleDiagnostic {
+  task_id: string;
+  outcome: 'fit' | 'overflow' | 'unestimated';
+  required_minutes: number;
+  due_date: string | null;
+  earliest_date: string;
+  available_before_deadline_minutes: number;
+  allocated_minutes: number;
+  shortfall_minutes: number;
+  days: TaskScheduleDiagnosticDay[];
 }
 
 export interface SchedulerResult {
@@ -57,6 +80,8 @@ export interface SchedulerResult {
   unestimated_task_ids: string[];     // flagged separately, not scheduled
   cycle_task_ids: string[];           // tasks involved in dependency cycles
   day_assignments: DayAssignment[];
+  capacity_days: DayAssignment[];     // every work day in the horizon, including unused days
+  task_diagnostics: TaskScheduleDiagnostic[];
   impossible_reason?: string;
 }
 
@@ -218,7 +243,7 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
     }
     avail = Math.max(0, avail);
 
-    days.push({ date: ymd, available_minutes: avail, used_minutes: 0, task_ids: [] });
+    days.push({ date: ymd, available_minutes: avail, used_minutes: 0, task_ids: [], task_minutes: {} });
   }
 
   const totalAvailable = days.reduce((s, d) => s + d.available_minutes, 0);
@@ -236,6 +261,17 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
 
   const tasksFit: string[] = [];
   const tasksOverflow: string[] = [];
+  const taskDiagnostics: TaskScheduleDiagnostic[] = unestimated.map(task => ({
+    task_id: task.id,
+    outcome: 'unestimated',
+    required_minutes: 0,
+    due_date: task.due_date,
+    earliest_date: todayStr,
+    available_before_deadline_minutes: 0,
+    allocated_minutes: 0,
+    shortfall_minutes: 0,
+    days: [],
+  }));
 
   for (const task of sorted) {
     // Earliest possible date: after all blockers are fully scheduled
@@ -254,6 +290,7 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
     let minutesLeft = task.estimated_minutes;
     let lastDayUsed: string | null = null;
     const allocations: Array<{ day: DayAssignment; allocated: number }> = [];
+    const diagnosticDays: TaskScheduleDiagnosticDay[] = [];
 
     for (const day of days) {
       if (minutesLeft <= 0) break;
@@ -263,9 +300,21 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
       const freeMinutes = day.available_minutes - day.used_minutes;
       if (freeMinutes <= 0) continue;
 
-      const allocate = Math.min(freeMinutes, minutesLeft);
+      const allocate = Math.min(
+        freeMinutes,
+        minutesLeft,
+        task.max_daily_minutes ?? Number.POSITIVE_INFINITY,
+      );
+      diagnosticDays.push({
+        date: day.date,
+        capacity_minutes: day.available_minutes,
+        committed_before_minutes: day.used_minutes,
+        available_before_minutes: freeMinutes,
+        allocated_minutes: allocate,
+      });
       day.used_minutes += allocate;
       if (!day.task_ids.includes(task.id)) day.task_ids.push(task.id);
+      day.task_minutes[task.id] = (day.task_minutes[task.id] ?? 0) + allocate;
       minutesLeft -= allocate;
       lastDayUsed = day.date;
       allocations.push({ day, allocated: allocate });
@@ -274,13 +323,37 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
     if (minutesLeft <= 0 && lastDayUsed !== null) {
       taskAssignedDate.set(task.id, lastDayUsed);
       tasksFit.push(task.id);
+      taskDiagnostics.push({
+        task_id: task.id,
+        outcome: 'fit',
+        required_minutes: task.estimated_minutes,
+        due_date: deadline,
+        earliest_date: earliestDate,
+        available_before_deadline_minutes: diagnosticDays.reduce((sum, day) => sum + day.available_before_minutes, 0),
+        allocated_minutes: task.estimated_minutes,
+        shortfall_minutes: 0,
+        days: diagnosticDays,
+      });
     } else {
       // Roll back all partial allocations so other tasks can use this capacity
       for (const { day, allocated } of allocations) {
         day.used_minutes -= allocated;
         day.task_ids = day.task_ids.filter(id => id !== task.id);
+        delete day.task_minutes[task.id];
       }
       tasksOverflow.push(task.id);
+      const allocatedMinutes = allocations.reduce((sum, allocation) => sum + allocation.allocated, 0);
+      taskDiagnostics.push({
+        task_id: task.id,
+        outcome: 'overflow',
+        required_minutes: task.estimated_minutes,
+        due_date: deadline,
+        earliest_date: earliestDate,
+        available_before_deadline_minutes: diagnosticDays.reduce((sum, day) => sum + day.available_before_minutes, 0),
+        allocated_minutes: allocatedMinutes,
+        shortfall_minutes: Math.max(0, minutesLeft),
+        days: diagnosticDays,
+      });
     }
   }
 
@@ -320,6 +393,8 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
     unestimated_task_ids: unestimated.map(t => t.id),
     cycle_task_ids: cycleTaskIds,
     day_assignments: days.filter(d => d.task_ids.length > 0 || d.used_minutes > 0),
+    capacity_days: days.map(day => ({ ...day, task_ids: [...day.task_ids] })),
+    task_diagnostics: taskDiagnostics,
     ...(fullReason ? { impossible_reason: fullReason } : {}),
   };
 }

@@ -15,7 +15,8 @@ export type EdgeRelationship =
   | 'attached_to'    // resource → goal or task
   | 'schedules'      // event → task or goal
   | 'references'     // note → note, or note → resource
-  | 'linked_to';     // generic bidirectional
+  | 'linked_to'      // generic bidirectional
+  | 'blocks';        // prerequisite task -> dependent task
 
 // ─── Goals ──────────────────────────────────────────────────────────────────
 export type PlanStatus = 'not_started' | 'planned' | 'in_progress' | 'paused' | 'blocked' | 'completed';
@@ -69,6 +70,7 @@ export interface DBTask {
   time_rollup_mode?: TaskTimeRollupMode; // additive = extra in parent, inclusive = inside parent estimate
   actual_minutes?: number | null;      // logged after task is completed
   weight_percent?: number | null;      // optional explicit progress weight, 0-100
+  feel_score?: number | null;          // subjective sense of how much this task needs attention, 0-100
   completed: boolean;
   position: number;                    // ordering within sibling tasks
   last_activity_at?: string | null;

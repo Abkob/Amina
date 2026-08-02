@@ -79,6 +79,9 @@ export function fmtTimeStr(startHour: number, durationHours: number): string {
 // sane window. Pure — the caller supplies today's date and the current hour.
 
 export interface PlanWindowParams {
+  task_id?: string;
+  /** Maximum work from the scoped task that may be placed on one day. */
+  max_daily_minutes?: number;
   horizon_days?: number;
   from_date?: string;
   to_date?: string;
@@ -95,7 +98,7 @@ export interface ResolvedPlanWindow {
   endHour?: number;
 }
 
-const MAX_SPAN_DAYS = 35;
+const MAX_SPAN_DAYS = 90;
 
 export function resolvePlanWindow(p: PlanWindowParams, todayStr: string, nowHour: number): ResolvedPlanWindow {
   // "Next N hours": today only, from the next quarter hour on the clock.
@@ -195,7 +198,7 @@ function freeIntervals(workStart: number, workEnd: number, busy: Interval[]): In
 }
 
 export function layoutPlan(opts: {
-  dayAssignments: Array<{ date: string; task_ids: string[] }>;
+  dayAssignments: Array<{ date: string; task_ids: string[]; task_minutes?: Record<string, number> }>;
   tasks: PlanTaskInfo[];
   workStart: number;
   workEnd: number;
@@ -229,7 +232,8 @@ export function layoutPlan(opts: {
 
     for (const taskId of day.task_ids) {
       let left = remaining.get(taskId) ?? 0;
-      while (left > 0 && intervalIdx < free.length) {
+      let dayBudget = Math.min(left, day.task_minutes?.[taskId] ?? left);
+      while (left > 0 && dayBudget > 0 && intervalIdx < free.length) {
         const iv = free[intervalIdx];
         if (cursor < iv.start) cursor = iv.start;
         const roomMin = Math.round((iv.end - cursor) * 60);
@@ -238,7 +242,7 @@ export function layoutPlan(opts: {
           cursor = intervalIdx < free.length ? free[intervalIdx].start : cursor;
           continue;
         }
-        const chunk = Math.min(left, roomMin);
+        const chunk = Math.min(left, dayBudget, roomMin);
         blocks.push({
           task_id: taskId,
           title: titleOf.get(taskId) ?? taskId,
@@ -248,6 +252,7 @@ export function layoutPlan(opts: {
           planned_minutes: chunk,
         });
         left -= chunk;
+        dayBudget -= chunk;
         cursor += chunk / 60;
       }
       remaining.set(taskId, left);

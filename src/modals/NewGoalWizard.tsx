@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Plus, Trash2, ChevronRight, ChevronDown, Sparkles, Rocket, CheckCircle2 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { NeedsImplementationBadge } from '../components/NeedsImplementationBadge';
+import { ModalFrame } from '../components/ModalFrame';
 import { createGoal } from '../db/queries/goals';
 import { createTask } from '../db/queries/tasks';
 import { generateSuggestions } from '../utils/subtaskSuggestions';
@@ -221,22 +222,24 @@ export function NewGoalWizard() {
   const totalSubtasks = Object.values(subtasks).reduce((n, arr) => n + arr.length, 0);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.97, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.97, y: 8 }}
-        transition={{ duration: 0.2 }}
-        className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-      >
+    <ModalFrame
+      onClose={closeNewGoalModal}
+      titleId="new-goal-title"
+      overlayClassName="bg-black/50"
+      className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+    >
         {/* Header */}
         <div className="px-6 pt-6 pb-0 shrink-0">
           <div className="flex justify-between items-start mb-4">
             <div>
-              <h2 className="font-headline text-xl font-black text-gray-900">New Goal</h2>
+              <h2 id="new-goal-title" className="font-headline text-xl font-black text-gray-900">New Goal</h2>
               <p className="text-xs text-gray-400 mt-0.5">Define your objective and break it into milestones</p>
             </div>
-            <button onClick={closeNewGoalModal} className="text-gray-400 hover:text-gray-700 transition-colors p-1 rounded-lg hover:bg-gray-100">
+            <button
+              onClick={closeNewGoalModal}
+              aria-label="Close new goal dialog"
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+            >
               <X size={18} />
             </button>
           </div>
@@ -489,7 +492,6 @@ export function NewGoalWizard() {
             </button>
           )}
         </div>
-      </motion.div>
-    </div>
+    </ModalFrame>
   );
 }

@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import type { DBTask } from '../../db/schema';
+import type { DBGoal, DBTask } from '../../db/schema';
 import {
   getCountableGoalTasks,
   calculateGoalTaskMetrics,
+  computeGoalStatus,
   normalizeTaskWeight,
 } from '../goalTaskMetrics';
 
@@ -131,6 +132,30 @@ describe('calculateGoalTaskMetrics — progress', () => {
     const tasks = [makeTask({ status: 'done' }), makeTask()];
     expect(calculateGoalTaskMetrics(tasks).progress).toBe(50);
   });
+
+  it('never reaches 100 while a zero-weight task is not started', () => {
+    const tasks = [
+      makeTask({ weight_percent: 100, completed: true }),
+      makeTask({ weight_percent: 0, status: 'not_started' }),
+    ];
+    expect(calculateGoalTaskMetrics(tasks).progress).toBe(99);
+  });
+
+  it('never reaches 100 while an untimed task is in progress', () => {
+    const tasks = [
+      makeTask({ estimated_minutes: 60, completed: true }),
+      makeTask({ estimated_minutes: null, status: 'in_progress' }),
+    ];
+    expect(calculateGoalTaskMetrics(tasks).progress).toBe(99);
+  });
+
+  it('never reaches 100 while any milestone task is unfinished', () => {
+    const tasks = [
+      makeTask({ completed: true }),
+      makeTask({ kind: 'critical_path', status: 'not_started' }),
+    ];
+    expect(calculateGoalTaskMetrics(tasks).progress).toBe(99);
+  });
 });
 
 describe('calculateGoalTaskMetrics — counts', () => {
@@ -166,5 +191,23 @@ describe('calculateGoalTaskMetrics — activityLevel', () => {
     ];
     const { activityLevel } = calculateGoalTaskMetrics(tasks, now);
     expect(activityLevel).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('computeGoalStatus task deadlines', () => {
+  const goal = {
+    id: 'g1', title: 'Goal', description: '', category: 'Work', status: 'Safe',
+    progress: 0, deadline: null, overdue: false, activity_level: 1, archived_at: null,
+    created_at: '2026-07-01T00:00:00.000Z', updated_at: '2026-07-01T00:00:00.000Z',
+  } satisfies DBGoal;
+  const now = new Date('2026-07-14T12:00:00.000Z');
+
+  it('returns Watch when an unfinished task has any deadline within a week', () => {
+    expect(computeGoalStatus(goal, [makeTask({ hard_deadline: '2026-07-20' })], now)).toBe('Watch');
+  });
+
+  it('ignores approaching deadlines on completed tasks', () => {
+    const task = makeTask({ due_date: '2026-07-15', completed: true, status: 'done' });
+    expect(computeGoalStatus(goal, [task], now)).toBe('Safe');
   });
 });

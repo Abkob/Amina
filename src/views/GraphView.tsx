@@ -137,7 +137,7 @@ export function GraphView() {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4 bg-gray-950">
         <p className="text-sm text-red-400 font-mono">Failed to load: {error}</p>
-        <button onClick={() => refetch()} className="px-4 py-2 text-xs font-mono bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg">Retry</button>
+        <button onClick={() => refetch()} className="px-4 py-2 text-xs font-mono bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg" aria-label="Retry loading connections graph">Retry</button>
       </div>
     );
   }
@@ -153,18 +153,20 @@ export function GraphView() {
         <div className="relative flex-1 min-w-[220px] max-w-md">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600" />
           <input
+            aria-label="Filter connections"
             value={query}
             onChange={e => { setQuery(e.target.value); setFocusId(null); }}
             placeholder="Filter the web — type a task, resource, milestone…"
             className="w-full bg-gray-900 border border-gray-800 rounded-lg pl-7 pr-7 py-1.5 text-[11px] text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-indigo-500"
           />
           {query && (
-            <button onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-300"><X size={11} /></button>
+            <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-gray-600 hover:bg-gray-800 hover:text-gray-300" aria-label="Clear graph search"><X size={11} /></button>
           )}
         </div>
 
         {(query.trim() || focusId) && (
           <select
+            aria-label="Connection expansion depth"
             value={depth}
             onChange={e => setDepth(Number(e.target.value) as 1 | 2)}
             className="bg-gray-900 border border-gray-800 text-[10px] font-mono text-gray-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -176,6 +178,7 @@ export function GraphView() {
         )}
 
         <select
+          aria-label="Filter graph by topic"
           value={topicId}
           onChange={e => setTopicId(e.target.value)}
           className="bg-gray-900 border border-gray-800 text-[10px] font-mono text-gray-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -188,6 +191,7 @@ export function GraphView() {
         <div className="flex rounded-lg border border-gray-800 bg-gray-900 p-0.5 shrink-0">
           <button
             onClick={() => setMode('web')}
+            aria-pressed={mode === 'web'}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-mono uppercase ${mode === 'web' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
             title="Force-directed web (Obsidian-style)"
           >
@@ -195,6 +199,7 @@ export function GraphView() {
           </button>
           <button
             onClick={() => setMode('board')}
+            aria-pressed={mode === 'board'}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-mono uppercase ${mode === 'board' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
             title="Grouped board — everything by name"
           >
@@ -202,7 +207,7 @@ export function GraphView() {
           </button>
         </div>
 
-        <button onClick={() => setShowHelp(h => !h)} className="text-gray-600 hover:text-gray-300 shrink-0" title="How to read this">
+        <button onClick={() => setShowHelp(h => !h)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-900 hover:text-gray-300" title="How to read this" aria-label="Toggle graph help" aria-expanded={showHelp}>
           <HelpCircle size={14} />
         </button>
       </div>
@@ -213,6 +218,7 @@ export function GraphView() {
           <button
             key={t}
             onClick={() => toggleType(t)}
+            aria-pressed={visibleTypes.has(t)}
             className={`px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider rounded-full border transition-colors ${
               visibleTypes.has(t) ? 'text-gray-950 font-bold border-transparent' : 'text-gray-600 border-gray-800'
             }`}
@@ -226,6 +232,7 @@ export function GraphView() {
           <button
             key={r}
             onClick={() => toggleRel(r)}
+            aria-pressed={relFilter.has(r)}
             title={relFilter.size === 0 ? 'Click to show ONLY this kind of link' : relFilter.has(r) ? 'Remove from selection' : 'Add to selection'}
             className={`px-2 py-0.5 text-[9px] font-mono rounded-full border transition-colors ${
               relFilter.has(r)
@@ -239,7 +246,7 @@ export function GraphView() {
           </button>
         ))}
         {isNarrowed && (
-          <button onClick={clearAll} className="ml-auto flex items-center gap-1 text-[10px] font-mono text-amber-400 hover:text-amber-300">
+          <button onClick={clearAll} className="ml-auto flex items-center gap-1 text-[10px] font-mono text-amber-400 hover:text-amber-300" aria-label="Clear all graph filters">
             <X size={10} /> clear filters ({filtered?.nodes.length ?? 0}/{data?.nodes.length ?? 0} shown)
           </button>
         )}
@@ -251,7 +258,7 @@ export function GraphView() {
           <span className="text-[11px] text-indigo-200">
             Focused on <b>{focusNode.label}</b> — showing its {depth === 1 ? 'direct connections' : '2-hop neighborhood'}
           </span>
-          <button onClick={() => setFocusId(null)} className="ml-auto text-gray-500 hover:text-gray-300"><X size={11} /></button>
+          <button onClick={() => setFocusId(null)} className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-900 hover:text-gray-300" aria-label="Clear focused graph node"><X size={11} /></button>
         </div>
       )}
 
@@ -266,7 +273,7 @@ export function GraphView() {
             relationship — e.g. select “mentions” to see what your journals touch. <b className="text-gray-300">Hover</b> lights
             neighbors; <b className="text-gray-300">click</b> opens; node size = how connected it is.
           </p>
-          <button onClick={() => setShowHelp(false)} className="text-gray-600 hover:text-gray-300 shrink-0"><X size={12} /></button>
+          <button onClick={() => setShowHelp(false)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-600 hover:bg-gray-900 hover:text-gray-300" aria-label="Close graph help"><X size={12} /></button>
         </div>
       )}
 

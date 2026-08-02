@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   time_rollup_mode     TEXT    NOT NULL DEFAULT 'additive' CHECK (time_rollup_mode IN ('additive','inclusive')),
   actual_minutes       INTEGER,
   weight_percent       REAL,
+  feel_score           INTEGER CHECK (feel_score BETWEEN 0 AND 100),
   completed            BOOLEAN NOT NULL DEFAULT false,
   position             INTEGER NOT NULL DEFAULT 0,
   last_activity_at     TEXT,
@@ -227,6 +228,42 @@ CREATE TABLE IF NOT EXISTS resource_logs (
   created_at  TEXT NOT NULL,
   FOREIGN KEY (resource_id) REFERENCES resources(id) ON DELETE CASCADE
 );
+
+-- Research knowledge layer. Papers remain resources (and reuse resource_chunks /
+-- embeddings); these tables add scholarly metadata and claim-level provenance.
+CREATE TABLE IF NOT EXISTS research_papers (
+  id             TEXT PRIMARY KEY,
+  resource_id    TEXT NOT NULL UNIQUE,
+  doi            TEXT,
+  authors_json   TEXT NOT NULL DEFAULT '[]',
+  publication_year INTEGER,
+  venue          TEXT,
+  abstract       TEXT,
+  ingestion_status TEXT NOT NULL DEFAULT 'indexed',
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  FOREIGN KEY (resource_id) REFERENCES resources(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS research_claims (
+  id              TEXT PRIMARY KEY,
+  paper_id        TEXT NOT NULL,
+  claim_type      TEXT NOT NULL DEFAULT 'finding',
+  claim_text      TEXT NOT NULL,
+  source_chunk_id TEXT,
+  page_start      INTEGER,
+  page_end        INTEGER,
+  confidence      REAL NOT NULL DEFAULT 0.0,
+  verification_status TEXT NOT NULL DEFAULT 'unreviewed',
+  created_by      TEXT NOT NULL DEFAULT 'ai',
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  FOREIGN KEY (paper_id) REFERENCES research_papers(id) ON DELETE CASCADE,
+  FOREIGN KEY (source_chunk_id) REFERENCES resource_chunks(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_claims_paper ON research_claims(paper_id);
+CREATE INDEX IF NOT EXISTS idx_research_claims_chunk ON research_claims(source_chunk_id);
 
 -- ─── Graph edges ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS edges (
@@ -750,6 +787,41 @@ CREATE INDEX IF NOT EXISTS idx_topic_memberships_status ON topic_memberships(sta
 -- feasibility, citations) so reloading a conversation restores its cards.
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS metadata_json TEXT;
 
+-- M-022: append-only agent execution ledger. Agent runs are durable summaries;
+-- events are the ordered audit trail used by the UI and Obsidian projection.
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id                 TEXT PRIMARY KEY,
+  source             TEXT NOT NULL DEFAULT 'copilot',
+  agent_kind         TEXT NOT NULL DEFAULT 'semantic_planner',
+  session_id         TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+  user_message       TEXT NOT NULL DEFAULT '',
+  intent             TEXT,
+  intent_confidence  REAL CHECK (intent_confidence BETWEEN 0 AND 1 OR intent_confidence IS NULL),
+  model              TEXT,
+  status             TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','completed','failed','cancelled')),
+  summary            TEXT,
+  error              TEXT,
+  started_at         TEXT NOT NULL,
+  finished_at        TEXT,
+  metadata_json      TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_started ON agent_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+  id            TEXT PRIMARY KEY,
+  run_id        TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+  sequence      INTEGER NOT NULL,
+  event_type    TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  detail        TEXT,
+  status        TEXT NOT NULL DEFAULT 'recorded',
+  data_json     TEXT NOT NULL DEFAULT '{}',
+  created_at    TEXT NOT NULL,
+  UNIQUE (run_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_run ON agent_events(run_id, sequence);
+
 -- M-020: journal entries created from a Capture note remember their source so
 -- re-logging the same note UPDATES the entry (and re-ingests) instead of
 -- creating a duplicate.
@@ -779,6 +851,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduling_enabled BOOLEAN NOT NULL D
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS flexibility TEXT CHECK (flexibility IN ('flexible','fixed','urgent') OR flexibility IS NULL);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS can_split BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS min_session_minutes INTEGER;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS feel_score INTEGER CHECK (feel_score BETWEEN 0 AND 100);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS time_rollup_mode TEXT NOT NULL DEFAULT 'additive'
   CHECK (time_rollup_mode IN ('additive','inclusive'));
 

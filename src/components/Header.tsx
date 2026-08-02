@@ -69,14 +69,21 @@ function GlobalSearch() {
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
       <input
         type="text"
+        aria-label="Search everything"
         placeholder="Search everything…"
         value={q}
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onFocus={() => q && setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            setOpen(false);
+            setQ('');
+          }
+        }}
         className="bg-[#f3f4f5] border-none rounded-full py-1.5 pl-9 pr-4 font-mono text-[11px] text-black placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-300 transition-all w-40 group-focus-within:w-64"
       />
       {open && debouncedQ.trim() && (
-        <div className="absolute top-9 right-0 w-80 max-h-96 overflow-y-auto bg-white shadow-2xl rounded-xl border border-gray-200 py-1.5 z-50">
+        <div role="listbox" aria-label="Search results" className="absolute top-9 right-0 w-80 max-h-96 overflow-y-auto bg-white shadow-2xl rounded-xl border border-gray-200 py-1.5 z-50">
           {isFetching && <p className="px-3 py-2 text-[11px] text-gray-400 font-mono">Searching…</p>}
           {!isFetching && results.length === 0 && (
             <p className="px-3 py-2 text-[11px] text-gray-400 font-mono">No matches for “{debouncedQ}”</p>
@@ -92,6 +99,8 @@ function GlobalSearch() {
               <button
                 key={`${r.entity_type}-${r.entity_id ?? i}`}
                 onClick={() => goTo(r)}
+                role="option"
+                aria-selected="false"
                 className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-start gap-2.5"
               >
                 <Icon size={13} className="text-gray-400 mt-0.5 shrink-0" />
@@ -138,6 +147,7 @@ function SystemStatusButton() {
     <button
       onClick={showDetails}
       title="System status"
+      aria-label="Show system status"
       className="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 relative"
     >
       <Zap size={15} />
@@ -152,6 +162,15 @@ export function Header() {
   } = useAppStore();
   const { data: inbox } = useOrgInbox();
   const inboxTotal = inbox?.total ?? 0;
+
+  useEffect(() => {
+    if (!isNotificationOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsNotificationOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isNotificationOpen, setIsNotificationOpen]);
 
   return (
     <>
@@ -173,6 +192,8 @@ export function Header() {
             onClick={() => setIsNotificationOpen(!isNotificationOpen)}
             className="text-gray-400 hover:text-black transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 relative"
             title="Organization inbox"
+            aria-label={`Organization inbox${inboxTotal ? `, ${inboxTotal} items` : ''}`}
+            aria-expanded={isNotificationOpen}
           >
             <Bell size={15} />
             {inboxTotal > 0 && (
@@ -193,10 +214,14 @@ export function Header() {
 
       {/* Notification panel — real organization inbox, not canned content */}
       {isNotificationOpen && (
-        <div className="fixed top-16 right-4 w-80 bg-white/95 backdrop-blur shadow-2xl rounded-xl border border-gray-200 p-4 z-50 animate-fade-in text-xs">
+        <div role="dialog" aria-label="Organization inbox" className="fixed top-16 right-4 w-80 bg-white/95 backdrop-blur shadow-2xl rounded-xl border border-gray-200 p-4 z-50 animate-fade-in text-xs">
           <div className="flex justify-between items-center gap-2 mb-3 text-black font-bold uppercase font-mono tracking-wider border-b border-gray-100 pb-2">
             <span>Organization Inbox{inboxTotal ? ` (${inboxTotal})` : ''}</span>
-            <button onClick={() => setIsNotificationOpen(false)} className="text-gray-400 hover:text-black">
+            <button
+              onClick={() => setIsNotificationOpen(false)}
+              aria-label="Close organization inbox"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-black"
+            >
               <X size={14} />
             </button>
           </div>

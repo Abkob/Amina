@@ -4,8 +4,15 @@ import { initSchema } from './db.js';
 import { seedIfEmpty } from './seed.js';
 import { ensureDefaultSchedulePrefs } from './routes/schedule-prefs.js';
 import { processEmbeddingJobs, reclaimExpiredJobs } from './services/embeddingWorker.js';
+import { scheduleObsidianVaultSync } from './services/obsidianVaultSync.js';
 import { EMBED_DIMENSION, EMBED_MODEL } from './embeddingProvider.js';
-import { CHAT_HOST, CHAT_MODEL_PRIMARY, CHAT_MODEL_FALLBACK, isCloudChatModel } from './config/providers.js';
+import {
+  CHAT_HOST,
+  CHAT_MODEL_PRIMARY,
+  CHAT_MODEL_FALLBACK,
+  NVIDIA_FALLBACK_MODEL,
+  isCloudChatModel,
+} from './config/providers.js';
 
 const PORT = 3001;
 
@@ -36,10 +43,15 @@ async function startServer() {
       // vars — the old line read OLLAMA_MODEL with a stale default and lied.
       console.log(
         `[server] Chat: ${CHAT_MODEL_PRIMARY}${isCloudChatModel(CHAT_MODEL_PRIMARY) ? ' (cloud)' : ''}` +
+        (process.env.NVIDIA_API_KEY && NVIDIA_FALLBACK_MODEL !== CHAT_MODEL_PRIMARY
+          ? ` Â· fallback ${NVIDIA_FALLBACK_MODEL} (NVIDIA cloud)`
+          : '') +
         ` · fallback ${CHAT_MODEL_FALLBACK}${isCloudChatModel(CHAT_MODEL_FALLBACK) ? ' (cloud)' : ' (local)'}` +
         ` · via ${CHAT_HOST}`,
       );
       console.log(`[server] Embeddings: ${EMBED_MODEL} (${EMBED_DIMENSION} dimensions)`);
+      const vault = scheduleObsidianVaultSync('startup');
+      if (vault.enabled) console.log(`[obsidian-vault] sync enabled: ${vault.vault_dir}`);
 
       // Reclaim any 'processing' jobs left by a prior crash
       reclaimExpiredJobs().then(n => {

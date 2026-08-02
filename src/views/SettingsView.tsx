@@ -142,7 +142,9 @@ function PrefsAIAdjuster({ onApplied }: { onApplied: () => void }) {
         and review the proposed changes before anything saves.
       </p>
       <div className="flex gap-2">
+        <label htmlFor="settings-ai-adjuster" className="sr-only">Describe schedule preference changes</label>
         <input
+          id="settings-ai-adjuster"
           value={msg}
           onChange={e => setMsg(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && msg.trim() && !busy && ask()}
@@ -152,6 +154,7 @@ function PrefsAIAdjuster({ onApplied }: { onApplied: () => void }) {
         <button
           onClick={ask}
           disabled={!msg.trim() || busy}
+          aria-label="Suggest schedule preference changes"
           className="px-3 py-2 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
         >
           {busy ? <RefreshCw size={11} className="animate-spin" /> : null}
@@ -224,6 +227,8 @@ function EntityAliasesSection() {
       </p>
       {aliases.length > 6 && (
         <input
+          id="settings-alias-filter"
+          aria-label="Filter AI-learned aliases"
           value={filter}
           onChange={e => setFilter(e.target.value)}
           placeholder="Filter aliases..."
@@ -246,7 +251,8 @@ function EntityAliasesSection() {
               <button
                 onClick={() => deleteAlias.mutate(a.id)}
                 disabled={deleteAlias.isPending}
-                className="text-gray-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                aria-label={`Delete alias ${a.alias}`}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-200 opacity-0 transition-colors hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 focus:opacity-100"
                 title="Delete alias"
               >
                 <Trash2 size={12} />
@@ -340,9 +346,10 @@ function SchedulePrefsSection({ onSave }: { onSave: (msg: string) => void }) {
               const val = i + 1;
               return (
                 <button
-                  key={val}
-                  onClick={() => toggleDay(val)}
-                  className={`px-2.5 py-1 text-[10px] font-mono uppercase rounded-lg border transition-colors ${
+                key={val}
+                onClick={() => toggleDay(val)}
+                aria-pressed={workDays.includes(val)}
+                className={`px-2.5 py-1 text-[10px] font-mono uppercase rounded-lg border transition-colors ${
                     workDays.includes(val)
                       ? 'bg-indigo-600 text-white border-indigo-600'
                       : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'
@@ -358,13 +365,13 @@ function SchedulePrefsSection({ onSave }: { onSave: (msg: string) => void }) {
         {/* Work hours */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Start Time</label>
-            <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
+            <label htmlFor="settings-work-start" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Start Time</label>
+            <input id="settings-work-start" type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
               className="w-full text-xs font-mono border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400" />
           </div>
           <div>
-            <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">End Time</label>
-            <input type="time" value={workEnd} onChange={e => setWorkEnd(e.target.value)}
+            <label htmlFor="settings-work-end" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">End Time</label>
+            <input id="settings-work-end" type="time" value={workEnd} onChange={e => setWorkEnd(e.target.value)}
               className="w-full text-xs font-mono border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400" />
           </div>
         </div>
@@ -372,41 +379,42 @@ function SchedulePrefsSection({ onSave }: { onSave: (msg: string) => void }) {
         {/* Deep work window */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Deep Work Start</label>
-            <input type="time" value={deepStart} onChange={e => setDeepStart(e.target.value)}
+            <label htmlFor="settings-deep-start" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Deep Work Start</label>
+            <input id="settings-deep-start" type="time" value={deepStart} onChange={e => setDeepStart(e.target.value)}
               className="w-full text-xs font-mono border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400" />
           </div>
           <div>
-            <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Deep Work End</label>
-            <input type="time" value={deepEnd} onChange={e => setDeepEnd(e.target.value)}
+            <label htmlFor="settings-deep-end" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Deep Work End</label>
+            <input id="settings-deep-end" type="time" value={deepEnd} onChange={e => setDeepEnd(e.target.value)}
               className="w-full text-xs font-mono border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400" />
           </div>
         </div>
 
         {/* Daily capacity */}
         <div>
-          <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">
+          <label htmlFor="settings-daily-capacity" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">
             Daily Capacity — {capacity} min ({(capacity / 60).toFixed(1)} hrs)
           </label>
-          <input type="number" min={60} max={720} step={30} value={capacity}
+          <input id="settings-daily-capacity" type="number" min={60} max={720} step={30} value={capacity}
             onChange={e => setCapacity(Number(e.target.value))}
             className="w-full text-xs font-mono border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400" />
         </div>
 
         {/* Buffer ratio */}
         <div>
-          <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">
+          <label htmlFor="settings-buffer" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">
             Buffer — {buffer}% · Effective capacity: <strong>{effective} min</strong> ({(effective / 60).toFixed(1)} hrs)
           </label>
-          <input type="range" min={0} max={50} step={5} value={buffer}
+          <input id="settings-buffer" type="range" min={0} max={50} step={5} value={buffer}
             onChange={e => setBuffer(Number(e.target.value))}
             className="w-full accent-indigo-600" />
         </div>
 
         {/* Timezone */}
         <div>
-          <label className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Timezone (IANA)</label>
+          <label htmlFor="settings-timezone" className="text-xs text-gray-500 font-mono uppercase tracking-wider block mb-1">Timezone (IANA)</label>
           <input
+            id="settings-timezone"
             type="text"
             value={timezone}
             onChange={e => setTimezone(e.target.value)}
@@ -479,27 +487,28 @@ function ScheduleOverridesSection({ onSave }: { onSave: (msg: string, type?: 'su
       </p>
 
       {/* Add form */}
-      <div className="grid grid-cols-[1fr_auto_1fr_auto] gap-2 mb-4 items-end">
+      <div className="grid grid-cols-1 gap-2 mb-4 items-end sm:grid-cols-[1fr_auto_1fr_auto]">
         <div>
-          <label className="text-[10px] font-mono text-gray-400 uppercase tracking-wider block mb-1">Date</label>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+          <label htmlFor="settings-override-date" className="text-[10px] font-mono text-gray-400 uppercase tracking-wider block mb-1">Date</label>
+          <input id="settings-override-date" type="date" value={date} onChange={e => setDate(e.target.value)}
             className="w-full text-xs font-mono border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-indigo-400" />
         </div>
         <div>
-          <label className="text-[10px] font-mono text-gray-400 uppercase tracking-wider block mb-1">Avail. Min</label>
-          <input type="number" min={0} max={1440} step={30} placeholder="480"
+          <label htmlFor="settings-override-minutes" className="text-[10px] font-mono text-gray-400 uppercase tracking-wider block mb-1">Avail. Min</label>
+          <input id="settings-override-minutes" type="number" min={0} max={1440} step={30} placeholder="480"
             value={minutes} onChange={e => setMinutes(e.target.value)}
-            className="w-20 text-xs font-mono border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-indigo-400" />
+            className="w-full text-xs font-mono border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-indigo-400 sm:w-24" />
         </div>
         <div>
-          <label className="text-[10px] font-mono text-gray-400 uppercase tracking-wider block mb-1">Note</label>
-          <input type="text" placeholder="e.g. vacation" value={note} onChange={e => setNote(e.target.value)}
+          <label htmlFor="settings-override-note" className="text-[10px] font-mono text-gray-400 uppercase tracking-wider block mb-1">Note</label>
+          <input id="settings-override-note" type="text" placeholder="e.g. vacation" value={note} onChange={e => setNote(e.target.value)}
             className="w-full text-xs font-mono border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-indigo-400" />
         </div>
         <button
           onClick={handleAdd}
           disabled={adding}
           className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition-colors self-end"
+          aria-label="Add schedule day override"
         >
           {adding ? '…' : 'Add'}
         </button>
@@ -519,8 +528,9 @@ function ScheduleOverridesSection({ onSave }: { onSave: (msg: string, type?: 'su
               </span>
               <button
                 onClick={() => handleDelete(o.date)}
-                className="ml-auto text-gray-300 hover:text-red-500 transition-colors"
+                className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
                 title="Remove override"
+                aria-label={`Remove schedule override for ${o.date}`}
               >
                 <Trash2 size={11} />
               </button>
@@ -550,7 +560,7 @@ function DataReadinessSection() {
               {data.ok ? '✓ All clear' : `${data.total_gaps} gaps`}
             </span>
           )}
-          <button onClick={() => refetch()} className="text-[10px] text-gray-400 hover:text-gray-600 transition-colors">Refresh</button>
+          <button onClick={() => refetch()} className="text-[10px] text-gray-400 hover:text-gray-600 transition-colors" aria-label="Refresh data readiness">Refresh</button>
         </div>
       </div>
       <p className="text-xs text-gray-400 mb-3">Planning gaps that may reduce AI accuracy — these are informational, not errors.</p>
@@ -629,10 +639,11 @@ function BackupsSection() {
     <div className="bg-white border border-gray-200 p-5 rounded-xl shadow-sm">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black">Database Backups</h3>
-        <button
-          onClick={createNow}
-          disabled={busy || data?.pg_dump_available === false}
-          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
+            <button
+              onClick={createNow}
+              disabled={busy || data?.pg_dump_available === false}
+              aria-label="Create database backup now"
+              className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
         >
           {busy ? <RefreshCw size={11} className="animate-spin" /> : null}
           Back up now
@@ -662,7 +673,7 @@ function BackupsSection() {
             >
               download
             </a>
-            <button onClick={() => remove(b.name)} className="text-gray-300 hover:text-red-500 shrink-0" title="Delete backup">
+            <button onClick={() => remove(b.name)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500" title="Delete backup" aria-label={`Delete backup ${b.name}`}>
               <Trash2 size={11} />
             </button>
           </div>
@@ -700,6 +711,7 @@ function DBInventorySection() {
         <button
           onClick={refresh}
           disabled={loading}
+          aria-label="Refresh database inventory"
           className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-40"
         >
           <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
@@ -840,7 +852,9 @@ export function SettingsView() {
           <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black mb-3">Goal Umbrellas</h3>
 
           <form onSubmit={handleAddCategory} className="flex gap-2 mb-4">
+            <label htmlFor="settings-new-umbrella" className="sr-only">New goal umbrella</label>
             <input
+              id="settings-new-umbrella"
               value={categoryInput}
               onChange={(e) => setCategoryInput(e.target.value)}
               placeholder="New umbrella"
@@ -850,6 +864,7 @@ export function SettingsView() {
               type="submit"
               className="bg-black text-white rounded-lg px-3 flex items-center justify-center hover:opacity-90 active:scale-95 transition-all"
               title="Add umbrella"
+              aria-label="Add goal umbrella"
             >
               <Plus size={15} />
             </button>
@@ -865,9 +880,10 @@ export function SettingsView() {
                 <button
                   type="button"
                   onClick={() => handleRemoveCategory(category)}
-                  className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-30 disabled:hover:text-gray-300"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-300"
                   disabled={goalCategories.length <= 1}
                   title="Remove umbrella"
+                  aria-label={`Remove umbrella ${category}`}
                 >
                   <Trash2 size={11} />
                 </button>

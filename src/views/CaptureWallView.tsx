@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, Trash2, ScrollText, ChevronLeft, ChevronRight, StickyNote } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -66,6 +66,18 @@ export function CaptureWallView() {
   );
 
   const openNote = wallNotes.find(n => n.id === openId) ?? null;
+
+  useEffect(() => {
+    if (!openNote) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        void saveEditor();
+        setOpenId(null);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [openNote, editText]);
 
   const addQuick = async () => {
     const text = quick.trim();
@@ -150,15 +162,15 @@ export function CaptureWallView() {
           </p>
         </div>
         <div className="flex gap-1 border border-gray-200 rounded-lg p-0.5 bg-[#f8f9fa]">
-          <button onClick={() => setDayOffset(o => o - 1)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="Previous day">
+          <button onClick={() => setDayOffset(o => o - 1)} className="flex h-8 w-8 items-center justify-center rounded text-gray-600 hover:bg-gray-100" title="Previous day" aria-label="Previous capture day">
             <ChevronLeft size={14} />
           </button>
           {!isToday && (
-            <button onClick={() => setDayOffset(0)} className="px-2 py-1 hover:bg-gray-100 rounded font-mono text-[9px] font-bold text-gray-500 uppercase">
+            <button onClick={() => setDayOffset(0)} className="flex h-8 items-center rounded px-2 font-mono text-[9px] font-bold uppercase text-gray-500 hover:bg-gray-100" aria-label="Return to today">
               Today
             </button>
           )}
-          <button onClick={() => setDayOffset(o => Math.min(0, o + 1))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600 disabled:opacity-30" disabled={isToday} title="Next day">
+          <button onClick={() => setDayOffset(o => Math.min(0, o + 1))} className="flex h-8 w-8 items-center justify-center rounded text-gray-600 hover:bg-gray-100 disabled:opacity-30" disabled={isToday} title="Next day" aria-label="Next capture day">
             <ChevronRight size={14} />
           </button>
         </div>
@@ -168,6 +180,7 @@ export function CaptureWallView() {
       {isToday && (
         <div className="flex gap-2 mb-6">
           <textarea
+            aria-label="Quick capture note"
             value={quick}
             onChange={e => setQuick(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addQuick(); } }}
@@ -178,6 +191,7 @@ export function CaptureWallView() {
           <button
             onClick={addQuick}
             disabled={!quick.trim() || busy}
+            aria-label="Add quick note"
             className="px-4 rounded-xl bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 shadow-sm"
           >
             <Plus size={16} />
@@ -205,6 +219,7 @@ export function CaptureWallView() {
                   exit={{ opacity: 0, scale: 0.7 }}
                   whileHover={{ scale: 1.045, rotate: 0, zIndex: 5 }}
                   onClick={() => openEditor(n)}
+                  aria-label={`Open note ${stripHtml(n.content) || n.title}`}
                   className={`relative text-left rounded-sm border p-3.5 pt-4 shadow-[2px_4px_10px_rgba(0,0,0,0.10)] min-h-[128px] flex flex-col ${tintOf(n.id)}`}
                   style={{ transformOrigin: 'center' }}
                 >
@@ -244,6 +259,9 @@ export function CaptureWallView() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-6"
             onClick={() => { saveEditor(); setOpenId(null); }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Edit capture note"
           >
             <motion.div
               layoutId={`sticky-${openNote.id}`}
@@ -259,20 +277,23 @@ export function CaptureWallView() {
                 )}
                 <button
                   onClick={() => removeNote(openNote)}
-                  className="ml-auto text-gray-400 hover:text-red-500"
+                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500"
                   title="Delete this note"
+                  aria-label="Delete this note"
                 >
                   <Trash2 size={14} />
                 </button>
                 <button
                   onClick={() => { saveEditor(); setOpenId(null); }}
-                  className="text-gray-400 hover:text-gray-700"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-black/5 hover:text-gray-700"
                   title="Save & close"
+                  aria-label="Save and close note"
                 >
                   <X size={16} />
                 </button>
               </div>
               <textarea
+                aria-label="Capture note content"
                 value={editText}
                 onChange={e => setEditText(e.target.value)}
                 rows={8}
@@ -284,6 +305,7 @@ export function CaptureWallView() {
                 <button
                   onClick={logAsJournal}
                   disabled={busy || !editText.trim()}
+                  aria-label="Log note as journal entry"
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-black/80 text-white hover:bg-black disabled:opacity-40"
                   title="Bind this note into the journal now (AI extracts tasks, links, time)"
                 >

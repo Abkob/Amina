@@ -14,7 +14,7 @@ import { useAppStore } from '../store/useAppStore';
 import type { DBTask, DBTaskNote, DBTaskNoteFile } from '../db/schema';
 import { addTaskNote, deleteTaskNote, toggleTask, touchTask } from '../db/queries/tasks';
 import { addNoteFile, deleteNoteFile } from '../db/queries/noteFiles';
-import { formatTaskTime, getTaskEstimatedMinutes } from '../utils/taskTime';
+import { formatTaskTime, getRolledUpActualTime, getRolledUpTime } from '../utils/taskTime';
 import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
 
 const TIMER_KEY = 'marina-work-active-timer';
@@ -64,10 +64,11 @@ function FileChip({ file, onView }: { file: DBTaskNoteFile; onView: () => void }
         onClick={isViewable ? onView : undefined}
         className={`min-w-0 truncate font-medium ${isViewable ? 'text-gray-700 hover:text-[#4648d4]' : 'text-gray-500'}`}
         title={file.name}
+        aria-label={isViewable ? `Open file ${file.name}` : file.name}
       >
         {file.name}
       </button>
-      <button onClick={remove} className="text-gray-300 opacity-0 transition-opacity hover:text-red-400 group-hover/file:opacity-100">
+      <button onClick={remove} className="flex h-6 w-6 items-center justify-center rounded-md text-gray-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-400 group-hover/file:opacity-100 focus:opacity-100" aria-label={`Remove file ${file.name}`}>
         <X size={10} />
       </button>
     </span>
@@ -91,7 +92,7 @@ function WorkNoteItem({
         <time className="font-mono text-[9px] uppercase tracking-widest text-gray-300">
           {formatSessionDate(note.created_at)} {new Date(note.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
         </time>
-        <button onClick={onDelete} className="text-gray-200 opacity-0 transition-opacity hover:text-red-400 group-hover/note:opacity-100">
+        <button onClick={onDelete} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-200 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-400 group-hover/note:opacity-100 focus:opacity-100" aria-label="Delete work note">
           <Trash2 size={12} />
         </button>
       </div>
@@ -178,9 +179,11 @@ export function WorkView() {
   const currentGoal = currentTask?.goal_id ? goalById.get(currentTask.goal_id) ?? null : null;
   const effectiveDueDate = currentTask ? getEffectiveTaskDueDate(currentTask, allTasks) : null;
   const inheritedDueDate = currentTask ? getInheritedTaskDueDate(currentTask, allTasks) : null;
-  const totalLogged = sessions.reduce((sum, s) => sum + (s.minutes ?? 0), 0);
-  const estimated = currentTask ? getTaskEstimatedMinutes(currentTask) : null;
-  const progress = estimated ? Math.min(100, Math.round((totalLogged / estimated) * 100)) : null;
+  const directLogged = sessions.reduce((sum, s) => sum + (s.minutes ?? 0), 0);
+  const actualRollup = currentTask ? getRolledUpActualTime(currentTask, allTasks) : null;
+  const totalLogged = actualRollup?.minutes ?? directLogged;
+  const estimated = currentTask ? getRolledUpTime(currentTask, allTasks).minutes : null;
+  const progress = estimated ? Math.round((totalLogged / estimated) * 100) : null;
 
   const startTimer = async () => {
     if (!currentTask || activeTimer) return;
@@ -293,6 +296,7 @@ export function WorkView() {
             </div>
             <button
               onClick={stopTimer}
+              aria-label="Stop active timer and log time"
               className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-gray-950 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-gray-800"
             >
               <Square size={12} /> Stop
@@ -329,7 +333,7 @@ export function WorkView() {
                       {currentGoal?.title ?? 'Standalone task'}
                     </p>
                     <div className="flex items-start gap-2">
-                      <button onClick={toggleDone} className="mt-1 text-gray-300 hover:text-emerald-500">
+                      <button onClick={toggleDone} className="mt-1 flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 hover:bg-emerald-50 hover:text-emerald-500" aria-label={currentTask.completed ? 'Reopen task' : 'Mark task complete'} aria-pressed={currentTask.completed}>
                         {currentTask.completed ? <CheckCircle2 size={20} className="text-emerald-500" /> : <Circle size={20} />}
                       </button>
                       <div className="min-w-0 flex-1">
@@ -344,8 +348,10 @@ export function WorkView() {
                             </span>
                           )}
                           {estimated && <span>{formatTaskTime(estimated)} est</span>}
-                          <span>{formatTaskTime(totalLogged)} logged</span>
-                          {progress !== null && <span>{progress}% time</span>}
+                          <span title={actualRollup?.childrenMinutes ? `${formatTaskTime(actualRollup.childrenMinutes)} logged on child tasks` : undefined}>
+                            {totalLogged === 0 ? '0m' : formatTaskTime(totalLogged)} logged{actualRollup?.childrenMinutes ? ' incl. children' : ''}
+                          </span>
+                          {progress !== null && <span className={progress > 100 ? 'text-amber-600' : undefined}>{progress}% time</span>}
                         </div>
                         <div className="mt-3">
                           <EntityTopicChips entityType="task" entityId={currentTask.id} />
@@ -357,6 +363,7 @@ export function WorkView() {
                     {!activeTimer ? (
                       <>
                         <input
+                          aria-label="Timer note"
                           value={timerNotes}
                           onChange={e => setTimerNotes(e.target.value)}
                           placeholder="Timer note"
@@ -365,6 +372,7 @@ export function WorkView() {
                         <button
                           onClick={startTimer}
                           disabled={currentTask.completed}
+                          aria-label="Start timer for selected task"
                           className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#4648d4] px-4 py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-[#3436b0] disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Play size={14} /> Start
@@ -373,6 +381,7 @@ export function WorkView() {
                     ) : activeTimer.taskId === currentTask.id ? (
                       <button
                         onClick={stopTimer}
+                        aria-label="Stop timer and log time"
                         className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-950 px-4 py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-gray-800"
                       >
                         <Square size={14} /> Stop & Log
@@ -395,6 +404,7 @@ export function WorkView() {
                     </div>
                     <button
                       onClick={() => fileInputRef.current?.click()}
+                      aria-label="Attach files to work note"
                       className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-50"
                     >
                       <Upload size={12} /> Files
@@ -417,6 +427,7 @@ export function WorkView() {
                     onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
                   >
                     <textarea
+                      aria-label="Work journal note"
                       value={journalDraft}
                       onChange={e => setJournalDraft(e.target.value)}
                       onKeyDown={e => {
@@ -431,7 +442,7 @@ export function WorkView() {
                           <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px]">
                             <Paperclip size={10} className="shrink-0 text-gray-400" />
                             <span className="truncate">{file.name}</span>
-                            <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== index))} className="text-gray-300 hover:text-red-400">
+                            <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== index))} className="flex h-6 w-6 items-center justify-center rounded-md text-gray-300 hover:bg-red-50 hover:text-red-400" aria-label={`Remove pending file ${file.name}`}>
                               <X size={10} />
                             </button>
                           </span>
@@ -442,6 +453,7 @@ export function WorkView() {
                       <button
                         onClick={submitJournal}
                         disabled={!journalDraft.trim() && pendingFiles.length === 0}
+                        aria-label="Save work note"
                         className="inline-flex items-center gap-1.5 rounded-lg bg-gray-950 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Plus size={12} /> Save Note
@@ -474,7 +486,9 @@ export function WorkView() {
                       <h3 className="font-headline text-sm font-bold text-gray-900">Add Time</h3>
                     </div>
                     <div className="space-y-2">
+                      <label htmlFor="work-manual-minutes" className="sr-only">Minutes to log</label>
                       <input
+                        id="work-manual-minutes"
                         type="number"
                         min={1}
                         step={5}
@@ -483,13 +497,17 @@ export function WorkView() {
                         placeholder="Minutes"
                         className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#4648d4]"
                       />
+                      <label htmlFor="work-manual-when" className="sr-only">Time log start</label>
                       <input
+                        id="work-manual-when"
                         type="datetime-local"
                         value={manualWhen}
                         onChange={e => setManualWhen(e.target.value)}
                         className="w-full rounded-lg border border-gray-200 px-3 py-2 text-xs outline-none focus:border-[#4648d4]"
                       />
+                      <label htmlFor="work-manual-note" className="sr-only">Manual time note</label>
                       <textarea
+                        id="work-manual-note"
                         value={manualNote}
                         onChange={e => setManualNote(e.target.value)}
                         placeholder="What got done?"
@@ -498,6 +516,7 @@ export function WorkView() {
                       <button
                         onClick={logManualTime}
                         disabled={!manualMinutes || Number(manualMinutes) <= 0}
+                        aria-label="Log manual time"
                         className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#4648d4] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-[#3436b0] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Plus size={12} /> Log Time
@@ -508,7 +527,7 @@ export function WorkView() {
                   <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <h3 className="font-headline text-sm font-bold text-gray-900">Session Log</h3>
-                      <span className="font-mono text-[9px] uppercase tracking-widest text-gray-400">{formatTaskTime(totalLogged)}</span>
+                      <span className="font-mono text-[9px] uppercase tracking-widest text-gray-400">{directLogged === 0 ? '0m' : formatTaskTime(directLogged)}</span>
                     </div>
                     <div className="max-h-[360px] space-y-2 overflow-y-auto">
                       {sessions.length > 0 ? sessions.map(session => (
@@ -521,7 +540,7 @@ export function WorkView() {
                               </p>
                               {session.notes && <p className="mt-1 text-xs text-gray-500">{session.notes}</p>}
                             </div>
-                            <button onClick={() => deleteWorkSession(session.id)} className="text-gray-200 opacity-0 transition-opacity hover:text-red-400 group-hover/session:opacity-100">
+                            <button onClick={() => deleteWorkSession(session.id)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-200 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-400 group-hover/session:opacity-100 focus:opacity-100" aria-label={`Delete ${formatTaskTime(session.minutes ?? 0)} time log`}>
                               <Trash2 size={12} />
                             </button>
                           </div>

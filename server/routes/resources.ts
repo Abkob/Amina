@@ -102,6 +102,13 @@ function validateMagicBytes(filePath: string, mimeType: string): boolean {
 
 const router = Router();
 
+async function attachmentTargetExists(targetId: string, targetType: string): Promise<boolean> {
+  if (!['task', 'goal'].includes(targetType)) return false;
+  const table = targetType === 'task' ? 'tasks' : 'goals';
+  const { rows } = await query(`SELECT id FROM ${table} WHERE id=$1`, [targetId]);
+  return rows.length > 0;
+}
+
 // GET /api/resources?goal_id=...  or  ?task_id=...  or  ?task_ids=id1,id2,...  or bare (all)
 router.get('/', async (req, res) => {
   const { goal_id, task_id, task_ids } = req.query;
@@ -205,6 +212,13 @@ router.post('/upload', (req, res, next) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
+  const attachToId = typeof req.body.attach_to_id === 'string' ? req.body.attach_to_id : null;
+  const attachToType = typeof req.body.attach_to_type === 'string' ? req.body.attach_to_type : 'goal';
+  if (attachToId && !(await attachmentTargetExists(attachToId, attachToType))) {
+    try { fs.unlinkSync(file.path); } catch {}
+    return res.status(400).json({ error: 'Attachment target does not exist or has an invalid type' });
+  }
+
   // Magic-byte check: file content must match its declared MIME type
   if (!validateMagicBytes(file.path, file.mimetype)) {
     fs.unlinkSync(file.path);
@@ -221,6 +235,13 @@ router.post('/upload', (req, res, next) => {
     'INSERT INTO resources (id,title,url,type,info,file_path,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
     [id, base, url, type, `Uploaded ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, file.path, now],
   );
+  if (attachToId) {
+    await query(
+      `INSERT INTO edges (id,source_id,source_type,target_id,target_type,relationship,metadata,created_at)
+       VALUES ($1,$2,'resource',$3,$4,'attached_to',NULL,$5) ON CONFLICT DO NOTHING`,
+      [crypto.randomUUID(), id, attachToId, attachToType, now],
+    );
+  }
   res.json({ id });
   generateEntitySummary('resource', id).catch(err => console.error('[summary] resource upload:', err));
   queueEmbeddingUpsert('resource', id).catch(err => console.error('[embedding] resource upload:', err));
@@ -308,6 +329,9 @@ router.post('/', async (req, res) => {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const b = req.body;
+  if (b.attach_to_id && !(await attachmentTargetExists(b.attach_to_id, b.attach_to_type ?? 'goal'))) {
+    return res.status(400).json({ error: 'Attachment target does not exist or has an invalid type' });
+  }
   await query(
     `INSERT INTO resources (id,title,url,type,info,description,read_state,next_action,tags_json,estimated_minutes,created_at,updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
@@ -341,6 +365,22 @@ router.post('/', async (req, res) => {
       .then(({ syncTagsToTopics, parseTags }) => syncTagsToTopics('resource', id, parseTags(b.tags_json), 'manual'))
       .catch(err => console.warn('[resources] tag→topic sync:', err));
   }
+});
+
+// Remove only this attachment. The resource remains available in the library
+// and any other task mentions/backlinks remain intact.
+router.delete('/:id/attachments/:targetType/:targetId', async (req, res) => {
+  const { id, targetType, targetId } = req.params;
+  if (!['task', 'goal'].includes(targetType)) {
+    return res.status(400).json({ error: 'targetType must be task or goal' });
+  }
+  await query(
+    `DELETE FROM edges
+     WHERE source_id=$1 AND source_type='resource'
+       AND target_id=$2 AND target_type=$3 AND relationship='attached_to'`,
+    [id, targetId, targetType],
+  );
+  res.json({ ok: true });
 });
 
 // PATCH /api/resources/:id

@@ -3,6 +3,8 @@ import { useDraggable } from '@dnd-kit/core';
 import { CalendarCheck2, ChevronRight, GripVertical, Search } from 'lucide-react';
 import type { DBGoal, DBTask } from '../db/schema';
 import { buildTaskForest, filterForest, type TaskTreeNode } from '../utils/taskTree';
+import { useAppStore } from '../store/useAppStore';
+import { getRolledUpActualTime, getRolledUpTime } from '../utils/taskTime';
 
 /**
  * The one way tasks are found: goals as collapsible sections, tasks nested
@@ -33,7 +35,7 @@ function fmtMins(mins: number): string {
   return `${h}h${m ? ` ${m}m` : ''}`;
 }
 
-function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, muted, mutedReason }: {
+function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, muted, mutedReason, estimatedMinutes, loggedMinutes }: {
   task: DBTask;
   depth: number;
   hasChildren: boolean;
@@ -42,6 +44,8 @@ function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, mute
   scheduledOn?: string;
   muted: boolean;
   mutedReason?: string;
+  estimatedMinutes: number | null;
+  loggedMinutes: number;
 }) {
   return (
     <>
@@ -69,25 +73,43 @@ function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, mute
           <CalendarCheck2 size={9} />{scheduledOn.slice(5)}
         </span>
       )}
-      {task.estimated_minutes ? (
-        <span className="shrink-0 font-mono text-[9px] text-gray-400">{fmtMins(task.estimated_minutes)}</span>
+      {estimatedMinutes ? (
+        <span className="shrink-0 font-mono text-[9px] text-gray-400" title="Estimated time, including child-task estimate rules">{fmtMins(estimatedMinutes)} est</span>
       ) : !muted ? (
         <span className="shrink-0 font-mono text-[9px] text-amber-500" title="No time estimate yet — add one in its goal">?</span>
       ) : null}
+      {loggedMinutes > 0 && (
+        <span className="shrink-0 font-mono text-[9px] text-emerald-600" title="Logged time, including child tasks">{fmtMins(loggedMinutes)} log</span>
+      )}
     </>
   );
 }
 
 function DraggableRow(props: Parameters<typeof RowBody>[0] & { draggable: boolean }) {
+  const { navigateToGoal, setTaskSpotlight, triggerToast } = useAppStore();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: props.task.id,
     disabled: !props.draggable,
   });
+
+  const openGoalFromAltClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!props.task.goal_id) {
+      triggerToast('This task is not attached to a goal yet.', 'info');
+      return;
+    }
+    setTaskSpotlight(props.task.id);
+    navigateToGoal(props.task.goal_id);
+  };
+
   return (
     <div
       ref={setNodeRef}
       {...listeners}
       {...attributes}
+      onClick={openGoalFromAltClick}
       className={`flex w-full items-center gap-1 rounded px-1.5 py-1 select-none
         ${props.draggable ? 'cursor-grab hover:bg-indigo-50/60 active:cursor-grabbing' : 'cursor-default'}
         ${isDragging ? 'opacity-30' : ''}`}
@@ -102,13 +124,21 @@ function DraggableRow(props: Parameters<typeof RowBody>[0] & { draggable: boolea
 
 function SelectableRow(props: Parameters<typeof RowBody>[0] & { selected: boolean; onSelect: () => void }) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={props.onSelect}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          props.onSelect();
+        }
+      }}
       className={`flex w-full items-center gap-1 rounded px-1.5 py-1 text-left
         ${props.selected ? 'bg-[#EEF2FF] ring-1 ring-[#4648d4]/30' : 'hover:bg-gray-50'}`}
     >
       <RowBody {...props} />
-    </button>
+    </div>
   );
 }
 
@@ -143,6 +173,8 @@ export function TaskTree({ tasks, goals, mode, selectedTaskId, onSelect, draggab
       mutedReason: muted
         ? (hasChildren ? `${task.title} — plan its subtasks instead` : `${task.title} — kept out of scheduling`)
         : undefined,
+      estimatedMinutes: getRolledUpTime(task, tasks).minutes,
+      loggedMinutes: getRolledUpActualTime(task, tasks).minutes,
     };
     return (
       <div key={task.id}>

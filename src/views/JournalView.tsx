@@ -56,6 +56,7 @@ function ManualLinkAdder({ entryId, onLinked }: { entryId: string; onLinked: () 
       <div className="flex items-center gap-2">
         <Link2 size={11} className="text-gray-500 shrink-0" />
         <input
+          aria-label="Search entities to link to this journal entry"
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="Link manually: search goals, tasks, resources…"
@@ -68,6 +69,7 @@ function ManualLinkAdder({ entryId, onLinked }: { entryId: string; onLinked: () 
             <button
               key={`${r.entity_type}-${r.entity_id}`}
               onClick={() => link(r.entity_type, r.entity_id, r.title)}
+              aria-label={`Link ${r.title} to journal entry`}
               className="w-full text-left text-[11px] px-2 py-1 rounded hover:bg-gray-800 text-gray-300 flex items-center gap-2"
             >
               <span className="font-mono text-[9px] uppercase text-indigo-400">{r.entity_type}</span>
@@ -127,7 +129,8 @@ function EntryLinks({ entryId }: { entryId: string }) {
                     <button
                       onClick={() => removeLink(l.id)}
                       title="Remove link"
-                      className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-opacity"
+                      aria-label={`Remove link to ${l.target_title ?? l.target_id}`}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-gray-600 opacity-0 transition-opacity hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 focus:opacity-100"
                     >
                       <X size={11} />
                     </button>
@@ -175,10 +178,10 @@ function EntryTaskCandidates({ entryId }: { entryId: string }) {
             <div key={p.id} className="flex items-center gap-2 bg-gray-900/60 border border-gray-800 rounded-lg px-2.5 py-1.5">
               <span className="text-[10px] font-mono text-indigo-400 shrink-0 uppercase">{p.action_type.replace('create_', '+')}</span>
               <span className="flex-1 text-[11px] text-gray-300 truncate">{title}</span>
-              <button onClick={() => decide(p.id, 'apply')} className="w-6 h-6 rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 flex items-center justify-center" title="Create it">
+              <button onClick={() => decide(p.id, 'apply')} className="w-6 h-6 rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 flex items-center justify-center" title="Create it" aria-label={`Create extracted action ${title}`}>
                 <Check size={11} />
               </button>
-              <button onClick={() => decide(p.id, 'reject')} className="w-6 h-6 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center" title="Dismiss (persists)">
+              <button onClick={() => decide(p.id, 'reject')} className="w-6 h-6 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center" title="Dismiss (persists)" aria-label={`Dismiss extracted action ${title}`}>
                 <X size={11} />
               </button>
             </div>
@@ -256,9 +259,19 @@ function EntryCard({ entry }: { entry: DBJournalEntry }) {
 
   return (
     <div className="bg-surface rounded-xl border border-gray-800 overflow-hidden">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen(v => !v)}
-        className="w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-gray-900/30 transition-colors"
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen(v => !v);
+          }
+        }}
+        aria-expanded={open}
+        aria-label={`${open ? 'Collapse' : 'Expand'} journal entry ${entry.entry_date}`}
+        className="w-full cursor-pointer text-left px-4 py-3 flex items-start gap-3 hover:bg-gray-900/30 transition-colors focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
       >
         <span className="mt-0.5 text-gray-600 shrink-0">
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -277,6 +290,7 @@ function EntryCard({ entry }: { entry: DBJournalEntry }) {
               onClick={handleRetry}
               disabled={busy}
               title="Retry AI ingestion"
+              aria-label="Retry AI ingestion"
               className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-400/10 transition-colors disabled:opacity-40"
             >
               <RefreshCw size={12} className={busy ? 'animate-spin' : ''} />
@@ -286,12 +300,13 @@ function EntryCard({ entry }: { entry: DBJournalEntry }) {
             onClick={handleDelete}
             disabled={busy}
             title="Delete entry"
+            aria-label={`Delete journal entry ${entry.entry_date}`}
             className="p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-400/10 transition-colors disabled:opacity-40"
           >
             <Trash2 size={12} />
           </button>
         </div>
-      </button>
+      </div>
 
       {open && (
         <div className="px-4 pb-4 border-t border-gray-800 pt-3 space-y-4">
@@ -383,6 +398,7 @@ export function JournalView() {
       {/* Composer — supports backdating */}
       <div className="bg-surface rounded-xl border border-gray-700 p-4 space-y-3">
         <textarea
+          aria-label="Journal entry text"
           value={text}
           onChange={e => setText(e.target.value)}
           placeholder="What did you work on? (e.g. 'Spent 45 minutes on the ECG paper draft…')"
@@ -393,6 +409,7 @@ export function JournalView() {
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <input
+              aria-label="Journal entry date"
               type="date"
               value={entryDate}
               max={localToday()}
@@ -401,13 +418,14 @@ export function JournalView() {
               title="Log for a different day (backdate)"
             />
             {entryDate !== localToday() && (
-              <button onClick={() => setEntryDate(localToday())} className="text-[10px] font-mono text-indigo-400 hover:underline">today</button>
+              <button onClick={() => setEntryDate(localToday())} className="text-[10px] font-mono text-indigo-400 hover:underline" aria-label="Set journal date to today">today</button>
             )}
             <span className="text-[10px] font-mono text-gray-600 hidden sm:inline">Cmd+Enter to log</span>
           </div>
           <button
             onClick={handleSubmit}
             disabled={!text.trim() || submitting}
+            aria-label="Log journal entry"
             className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors"
           >
             {submitting ? 'Logging…' : 'Log entry'}
@@ -421,6 +439,7 @@ export function JournalView() {
           <button
             key={r}
             onClick={() => { setRange(r); setJumpDate(''); }}
+            aria-pressed={range === r && !jumpDate}
             className={`px-2.5 py-1 rounded-full text-[10px] font-mono uppercase border transition-colors ${
               range === r && !jumpDate ? 'bg-indigo-600 text-white border-indigo-600' : 'text-gray-500 border-gray-700 hover:text-gray-300'
             }`}
@@ -429,6 +448,7 @@ export function JournalView() {
           </button>
         ))}
         <input
+          aria-label="Jump to journal date"
           type="date"
           value={jumpDate}
           onChange={e => setJumpDate(e.target.value)}
@@ -436,17 +456,18 @@ export function JournalView() {
           title="Jump to one specific day"
         />
         {jumpDate && (
-          <button onClick={() => setJumpDate('')} className="text-gray-500 hover:text-gray-300"><X size={12} /></button>
+          <button onClick={() => setJumpDate('')} className="flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-900 hover:text-gray-300" aria-label="Clear journal date filter"><X size={12} /></button>
         )}
         <div className="relative flex-1 min-w-[160px]">
           <input
+            aria-label="Search journal entries"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search entries…"
             className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2.5 py-1 text-[11px] text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-indigo-500"
           />
           {search && (
-            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-300"><X size={11} /></button>
+            <button onClick={() => setSearch('')} className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-gray-600 hover:bg-gray-900 hover:text-gray-300" aria-label="Clear journal search"><X size={11} /></button>
           )}
         </div>
       </div>

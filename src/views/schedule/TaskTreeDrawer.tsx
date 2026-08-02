@@ -1,25 +1,123 @@
 import { useMemo, useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, FolderTree, PanelLeftClose } from 'lucide-react';
+import { ArrowLeft, ChevronRight, FolderTree, PanelLeftClose, Plus, X } from 'lucide-react';
 import { TaskTree } from '../../components/TaskTree';
 import { buildTaskForest } from '../../utils/taskTree';
+import { parseTaskTimeInput } from '../../utils/taskTime';
 import type { DBGoal, DBTask } from '../../db/schema';
+
+export interface OneOffTaskDraft {
+  title: string;
+  estimatedMinutes: number | null;
+  dueDate: string | null;
+}
+
+export function OneOffTaskComposer({ onCreate, onCancel }: {
+  onCreate: (draft: OneOffTaskDraft) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [estimate, setEstimate] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      setError('Give the task a title.');
+      return;
+    }
+    const estimatedMinutes = parseTaskTimeInput(estimate);
+    if (estimate.trim() && !estimatedMinutes) {
+      setError('Use a time like 30m, 1h, or 1h 30m.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await onCreate({
+        title: cleanTitle,
+        estimatedMinutes,
+        dueDate: dueDate || null,
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not create the task.');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="border-b border-indigo-100 bg-indigo-50/50 p-3">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[11px] font-bold text-[#33359c]">New one-off task</p>
+          <p className="text-[9px] leading-snug text-indigo-400">Standalone — no goal and no parent task.</p>
+        </div>
+        <button type="button" onClick={onCancel} className="rounded p-0.5 text-indigo-300 hover:bg-white hover:text-indigo-600" aria-label="Cancel one-off task">
+          <X size={13} />
+        </button>
+      </div>
+      <label className="block">
+        <span className="sr-only">Task title</span>
+        <input
+          autoFocus
+          value={title}
+          onChange={event => setTitle(event.target.value)}
+          placeholder="What needs doing?"
+          className="h-8 w-full rounded-lg border border-indigo-100 bg-white px-2.5 text-xs text-gray-800 outline-none focus:border-[#4648d4]"
+        />
+      </label>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-1 block font-mono text-[8px] font-bold uppercase tracking-wide text-indigo-400">Estimate</span>
+          <input
+            value={estimate}
+            onChange={event => setEstimate(event.target.value.replace(/[^\d.hm\s]/gi, ''))}
+            placeholder="e.g. 30m"
+            className="h-8 w-full rounded-lg border border-indigo-100 bg-white px-2 text-[10px] text-gray-700 outline-none focus:border-[#4648d4]"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block font-mono text-[8px] font-bold uppercase tracking-wide text-indigo-400">Due date</span>
+          <input
+            type="date"
+            value={dueDate}
+            onChange={event => setDueDate(event.target.value)}
+            className="h-8 w-full rounded-lg border border-indigo-100 bg-white px-2 text-[10px] text-gray-700 outline-none focus:border-[#4648d4]"
+          />
+        </label>
+      </div>
+      {error && <p role="alert" className="mt-2 text-[10px] text-red-600">{error}</p>}
+      <button
+        type="submit"
+        disabled={saving}
+        className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-lg bg-[#4648d4] font-mono text-[9px] font-bold uppercase tracking-wider text-white hover:opacity-90 disabled:opacity-50"
+      >
+        <Plus size={11} /> {saving ? 'Creating…' : 'Create one-off'}
+      </button>
+    </form>
+  );
+}
 
 /**
  * Left drawer of the Schedule, goal-first: pick a goal, get that goal's task
  * tree, drag tasks onto the calendar (a card asks how long). Dropping
  * anything back here unschedules it.
  */
-export function TaskTreeDrawer({ tasks, goals, draggableIds, scheduledDates, onCollapse }: {
+export function TaskTreeDrawer({ tasks, goals, draggableIds, scheduledDates, onCollapse, onCreateOneOff }: {
   tasks: DBTask[];
   goals: DBGoal[];
   draggableIds: Set<string>;
   scheduledDates: Map<string, string>;
   onCollapse: () => void;
+  onCreateOneOff: (draft: OneOffTaskDraft) => Promise<void>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: 'backlog' });
   const [goalId, setGoalId] = useState<string | null | undefined>(undefined); // undefined = goal list
+  const [creatingOneOff, setCreatingOneOff] = useState(false);
 
   const groups = useMemo(() => buildTaskForest(tasks, goals), [tasks, goals]);
   const active = goalId === undefined ? undefined : groups.find(g => g.goalId === goalId);
@@ -55,10 +153,33 @@ export function TaskTreeDrawer({ tasks, goals, draggableIds, scheduledDates, onC
             </>
           )}
         </p>
-        <button onClick={onCollapse} className="rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600" title="Hide the task drawer">
-          <PanelLeftClose size={13} />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => setCreatingOneOff(value => !value)}
+            className={`rounded p-1 transition-colors ${creatingOneOff ? 'bg-indigo-50 text-[#4648d4]' : 'text-gray-300 hover:bg-indigo-50 hover:text-[#4648d4]'}`}
+            title="Create a one-off task with no goal or parent"
+            aria-label="Create one-off task"
+            aria-pressed={creatingOneOff}
+          >
+            <Plus size={13} />
+          </button>
+          <button onClick={onCollapse} className="rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600" title="Hide the task drawer">
+            <PanelLeftClose size={13} />
+          </button>
+        </div>
       </div>
+
+      {creatingOneOff && (
+        <OneOffTaskComposer
+          onCancel={() => setCreatingOneOff(false)}
+          onCreate={async draft => {
+            await onCreateOneOff(draft);
+            setGoalId(null);
+            setCreatingOneOff(false);
+          }}
+        />
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <AnimatePresence mode="wait" initial={false}>

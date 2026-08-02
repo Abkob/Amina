@@ -117,6 +117,7 @@ function SuggestionInbox() {
                 disabled={decide.isPending}
                 className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center justify-center disabled:opacity-50"
                 title="Accept"
+                aria-label={`Accept topic suggestion for ${s.entity_title ?? s.entity_id}`}
               >
                 <Check size={13} />
               </button>
@@ -125,6 +126,7 @@ function SuggestionInbox() {
                 disabled={decide.isPending}
                 className="w-7 h-7 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 flex items-center justify-center disabled:opacity-50"
                 title="Reject (won't reappear)"
+                aria-label={`Reject topic suggestion for ${s.entity_title ?? s.entity_id}`}
               >
                 <X size={13} />
               </button>
@@ -175,8 +177,9 @@ function TopicMembers({ topic }: { topic: Topic }) {
             </span>
             <button
               onClick={() => remove.mutate(m.id)}
-              className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 focus:opacity-100"
               title={m.source === 'manual' ? 'Remove' : 'Remove (rejects future re-suggestion)'}
+              aria-label={`Remove ${m.entity_title ?? m.entity_id} from ${topic.name}`}
             >
               <Trash2 size={12} />
             </button>
@@ -254,6 +257,7 @@ export function TopicsView() {
         <button
           onClick={() => generate.mutate()}
           disabled={generate.isPending || topics.length === 0}
+          aria-label="Find topic membership candidates"
           className="p-2 px-3 bg-[#EEF2FF] hover:bg-[#c0c1ff]/20 text-[#4648d4] border border-[#c0c1ff] rounded-lg font-sans font-bold text-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
           title={topics.length === 0 ? 'Create a topic first' : 'Generate explainable membership suggestions'}
         >
@@ -281,7 +285,9 @@ export function TopicsView() {
             onSubmit={(e) => { e.preventDefault(); if (newName.trim()) createTopic.mutate(newName.trim()); }}
             className="flex gap-2"
           >
+            <label htmlFor="new-topic-name" className="sr-only">New topic name</label>
             <input
+              id="new-topic-name"
               value={newName}
               onChange={e => setNewName(e.target.value)}
               placeholder="New topic name…"
@@ -290,6 +296,7 @@ export function TopicsView() {
             <button
               type="submit"
               disabled={!newName.trim() || createTopic.isPending}
+              aria-label="Create topic"
               className="px-3 py-2 bg-black text-white rounded-lg disabled:opacity-40"
             >
               <Plus size={13} />
@@ -306,7 +313,17 @@ export function TopicsView() {
           {topics.map(t => (
             <div
               key={t.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={t.id === selectedTopicId}
+              aria-label={`${t.id === selectedTopicId ? 'Collapse' : 'Open'} topic ${t.name}`}
               onClick={() => setSelectedTopicId(t.id === selectedTopicId ? null : t.id)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedTopicId(t.id === selectedTopicId ? null : t.id);
+                }
+              }}
               className={`group w-full text-left bg-white border rounded-xl p-3.5 transition-all cursor-pointer ${
                 t.id === selectedTopicId ? 'border-[#4648d4] ring-1 ring-[#4648d4]/30' : 'border-gray-200 hover:border-gray-300'
               }`}
@@ -327,8 +344,9 @@ export function TopicsView() {
                       () => deleteTopic.mutate(t.id),
                     );
                   }}
-                  className="text-gray-300 hover:text-red-500 transition-colors shrink-0"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
                   title="Delete this topic"
+                  aria-label={`Delete topic ${t.name}`}
                 >
                   <Trash2 size={13} />
                 </button>

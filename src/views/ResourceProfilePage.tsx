@@ -103,7 +103,7 @@ export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
     return (
       <div data-testid="resource-profile-page" className="flex flex-col items-center justify-center py-32">
         <p className="text-lg font-bold text-gray-400">Resource not found</p>
-        <button onClick={() => setFocusedResourceId(null)} className="mt-4 text-sm text-[#4648d4] hover:underline">
+        <button onClick={() => setFocusedResourceId(null)} className="mt-4 text-sm text-[#4648d4] hover:underline" aria-label="Back to resource library">
           ← Back to library
         </button>
       </div>
@@ -139,6 +139,7 @@ export function ResourceProfilePage({ resourceId }: { resourceId: string }) {
           )}
           className="ml-auto inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest
             text-gray-400 hover:text-red-500 transition-colors"
+          aria-label={`Delete resource ${resource?.title ?? ''}`}
         >
           <Trash2 size={12} />
           Delete resource

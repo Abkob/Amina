@@ -123,6 +123,13 @@ export function calculateGoalTaskMetrics(tasks: DBTask[], now = new Date()): Goa
     }
   }
 
+  // A goal may only be 100% when every task is explicitly complete. Weighting
+  // and time estimates can otherwise round to 100 while a zero-weight,
+  // untimed, parent, or milestone task is still not started/in progress.
+  if (tasks.some(task => !isDone(task))) {
+    progress = Math.min(progress, 99);
+  }
+
   const recentCutoff = now.getTime() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const recentlyTouched = tasks.filter(task => parseTime(task.updated_at) >= recentCutoff).length;
   const recentlyCompleted = tasks.filter(task => isDone(task) && parseTime(task.updated_at) >= recentCutoff).length;
@@ -172,6 +179,20 @@ export function computeGoalStatus(
   const deadlineDate = goal.deadline
     ? (() => { const d = new Date(goal.deadline.slice(0, 10) + 'T23:59:59'); return isNaN(d.getTime()) ? null : d; })()
     : null;
+
+  const taskDeadlineDays = tasks
+    .filter(task => !isDone(task))
+    .flatMap(task => [task.hard_deadline, task.due_date, task.target_date])
+    .filter((value): value is string => Boolean(value))
+    .map(value => new Date(value.slice(0, 10) + 'T23:59:59'))
+    .filter(date => !Number.isNaN(date.getTime()))
+    .map(date => (date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+  // An unfinished task with any overdue deadline makes the goal risky. Any
+  // deadline due within the next week puts it on Watch, even if the goal itself
+  // has no deadline or would otherwise look Safe.
+  if (taskDeadlineDays.some(days => days < 0)) return 'Risky';
+  if (taskDeadlineDays.some(days => days <= 7)) return 'Watch';
 
   if (!deadlineDate) {
     // No parseable deadline — base purely on progress

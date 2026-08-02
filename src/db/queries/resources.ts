@@ -32,6 +32,19 @@ export async function createResource(
   return id;
 }
 
+export async function uploadResource(file: File, goalId: string, taskId?: string): Promise<string> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('attach_to_id', taskId ?? goalId);
+  form.append('attach_to_type', taskId ? 'task' : 'goal');
+  const { id } = await apiFetch<{ id: string }>(`${API}/resources/upload`, { method: 'POST', body: form });
+  return id;
+}
+
+export async function detachResource(resourceId: string, targetType: 'task' | 'goal', targetId: string): Promise<void> {
+  await apiDelete(`${API}/resources/${resourceId}/attachments/${targetType}/${targetId}`);
+}
+
 export async function getAllResourcesGrouped(
   goalId: string,
   taskIds: string[],

@@ -5,6 +5,7 @@ import { query, buildUpdate, transaction } from '../db.js';
 import { chat, parseJSON } from '../ollama.js';
 import { generateJournalDigestSummary } from '../services/summaryGenerator.js';
 import { markEmbeddingStale } from '../services/embeddingLifecycle.js';
+import { scheduleObsidianVaultSync } from '../services/obsidianVaultSync.js';
 import { sanitizeEntityTitle } from '../utils/sanitize.js';
 import { localDateStr } from '../utils/localDate.js';
 import { log, newCid } from '../utils/logger.js';
@@ -570,6 +571,7 @@ ${entry.raw_text}
     facts: parsed.facts.length,
     sessions: parsed.work_sessions.filter(w => w.minutes).length,
   }, cid);
+  scheduleObsidianVaultSync(`journal ingestion ${entryId}`);
 
   // Convert task_candidate / meeting_candidate facts into durable AI proposals.
   // Delete stale pending proposals from prior ingestion of this entry first so

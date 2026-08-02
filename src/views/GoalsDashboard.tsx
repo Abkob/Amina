@@ -102,6 +102,8 @@ function GoalCard({
     );
   };
 
+  const openGoal = () => setSelectedGoalId(goal.id);
+
   return (
     <motion.div
       layout
@@ -110,8 +112,17 @@ function GoalCard({
       exit={{ opacity: 0, y: 8 }}
       whileHover={{ y: -3 }}
       transition={{ duration: 0.2 }}
-      onClick={() => setSelectedGoalId(goal.id)}
-      className={`bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 shadow-card hover:shadow-card-hover relative overflow-hidden group cursor-pointer flex flex-col h-full ${isArchived ? 'opacity-75' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open goal ${goal.title}`}
+      onClick={openGoal}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openGoal();
+        }
+      }}
+      className={`bg-white rounded-xl p-5 border border-gray-100 hover:border-gray-200 shadow-card hover:shadow-card-hover relative overflow-hidden group cursor-pointer flex flex-col h-full focus:outline-none focus:ring-2 focus:ring-[#4648d4]/30 ${isArchived ? 'opacity-75' : ''}`}
     >
       <div className={`absolute top-0 left-0 w-full h-1 ${STATUS_BG[status]}`} />
 
@@ -131,16 +142,18 @@ function GoalCard({
           {isArchived && (
             <button
               onClick={handleDelete}
-              className="text-gray-300 hover:text-red-400 transition-colors"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 transition-colors hover:bg-red-50 hover:text-red-400"
               title="Delete goal permanently"
+              aria-label={`Delete goal ${goal.title} permanently`}
             >
               <Trash2 size={13} />
             </button>
           )}
           <button
             onClick={handleArchiveToggle}
-            className="text-gray-300 hover:text-[#4648d4] transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 transition-colors hover:bg-indigo-50 hover:text-[#4648d4]"
             title={isArchived ? 'Restore goal' : 'Archive goal'}
+            aria-label={isArchived ? `Restore goal ${goal.title}` : `Archive goal ${goal.title}`}
           >
             {isArchived ? <RotateCcw size={13} /> : <Archive size={13} />}
           </button>
@@ -183,19 +196,22 @@ function GoalCard({
       <div className="border-t border-gray-100 pt-4" onClick={(e) => e.stopPropagation()}>
         <p className="font-mono text-[9px] text-gray-400 uppercase tracking-widest mb-2 font-bold">Next Action</p>
         {nextAction ? (
-          <div
+          <button
+            type="button"
             onClick={handleToggleNextAction}
-            className="flex items-start gap-2.5 bg-[#f8f9fa] p-2 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors"
+            className="flex w-full items-start gap-2.5 rounded-lg bg-[#f8f9fa] p-2 text-left transition-colors hover:bg-gray-100"
+            aria-pressed={nextAction.completed}
+            aria-label={`${nextAction.completed ? 'Mark incomplete' : 'Mark complete'}: ${nextAction.title}`}
           >
-            <button className="shrink-0 mt-0.5 text-gray-400 hover:text-black transition-colors">
+            <span className="shrink-0 mt-0.5 text-gray-400 transition-colors">
               {nextAction.completed
                 ? <CheckSquare size={14} className="text-[#4648d4]" />
                 : <Square size={14} />}
-            </button>
+            </span>
             <p className={`text-xs text-gray-700 leading-normal ${nextAction.completed ? 'line-through text-gray-400' : ''}`}>
               {nextAction.title}
             </p>
-          </div>
+          </button>
         ) : (
           <p className="text-xs text-gray-400 italic">No next action set.</p>
         )}
@@ -206,6 +222,7 @@ function GoalCard({
           <button
             onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}
             className="flex items-center gap-1.5 text-[11px] font-mono text-gray-400 hover:text-[#4648d4] transition-colors group/ms"
+            aria-label={`Add milestone to ${goal.title}`}
           >
             <span className="w-5 h-5 rounded-md bg-gray-100 group-hover/ms:bg-[#EEF2FF] flex items-center justify-center transition-colors">
               <Milestone size={11} className="group-hover/ms:text-[#4648d4]" />
@@ -273,6 +290,7 @@ export function GoalsDashboard() {
               <button
                 key={f}
                 onClick={() => setGoalsFilter(f)}
+                aria-pressed={goalsFilter === f}
                 className={`px-3 py-1 font-mono text-xs uppercase tracking-wider rounded-full transition-all ${
                   goalsFilter === f ? 'bg-white text-black font-bold shadow-sm' : 'text-gray-400 hover:text-black'
                 }`}
@@ -283,6 +301,7 @@ export function GoalsDashboard() {
           </div>
           <button
             onClick={() => openNewGoalModal()}
+            aria-label="Create new goal"
             className="bg-black text-white w-10 h-10 rounded-full flex items-center justify-center shadow-md hover:scale-[1.03] transition-all active:scale-[0.98]"
           >
             <Plus size={18} />
@@ -311,7 +330,7 @@ export function GoalsDashboard() {
           <p className="text-xs text-gray-400 max-w-xs mx-auto mb-4">
             Capture a new strategic goal using the button below.
           </p>
-          <button onClick={() => openNewGoalModal()} className="bg-black text-white text-xs font-mono py-2 px-4 rounded-xl font-bold shadow-sm">
+          <button onClick={() => openNewGoalModal()} className="bg-black text-white text-xs font-mono py-2 px-4 rounded-xl font-bold shadow-sm" aria-label="Create new goal">
             Initialize New Goal
           </button>
         </div>

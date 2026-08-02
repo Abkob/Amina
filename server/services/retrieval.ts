@@ -11,6 +11,7 @@ export interface EntityCard {
   title: string;
   status?: string;
   priority?: string;
+  feel_score?: number | null;
   due_date?: string | null;
   estimated_minutes?: number | null;
   logged_minutes?: number;
@@ -61,7 +62,7 @@ async function sqlRetrieval(opts: RetrievalOptions): Promise<EntityCard[]> {
   // 2. In-progress tasks regardless of date — always relevant
   // 3. ALL undated tasks (not just high/medium) — without this, backlog tasks are invisible to AI
   let sql = `
-    SELECT t.id, t.title, t.status, t.priority, t.due_date, t.estimated_minutes,
+    SELECT t.id, t.title, t.status, t.priority, t.feel_score, t.due_date, t.estimated_minutes,
            t.actual_minutes, t.goal_id, t.milestone_id,
            COALESCE(ws.logged, 0) as logged_minutes,
            es_plan.summary_text as planning_summary,
@@ -75,6 +76,7 @@ async function sqlRetrieval(opts: RetrievalOptions): Promise<EntityCard[]> {
     LEFT JOIN entity_summaries es_plan ON es_plan.entity_type='task' AND es_plan.entity_id=t.id AND es_plan.summary_type='planning'
     LEFT JOIN entity_summaries es_sem ON es_sem.entity_type='task' AND es_sem.entity_id=t.id AND es_sem.summary_type='semantic'
     WHERE t.completed = false
+      AND t.status <> 'done'
       AND (g.archived_at IS NULL OR t.goal_id IS NULL)
       AND (
         (t.due_date IS NOT NULL AND t.due_date <= $1)
@@ -106,6 +108,7 @@ async function sqlRetrieval(opts: RetrievalOptions): Promise<EntityCard[]> {
       title: r.title as string,
       status: r.status as string,
       priority: r.priority as string,
+      feel_score: r.feel_score == null ? null : Number(r.feel_score),
       due_date: r.due_date as string | null,
       estimated_minutes: est || null,
       logged_minutes: logged,
@@ -164,7 +167,7 @@ async function graphRetrieval(seedEntityIds: string[], depth = 1): Promise<Entit
 
   // Fetch task-type neighbors as entity cards (main use case for planning context)
   const { rows: taskRows } = await query(
-    `SELECT t.id, t.title, t.status, t.priority, t.due_date, t.estimated_minutes,
+    `SELECT t.id, t.title, t.status, t.priority, t.feel_score, t.due_date, t.estimated_minutes,
             t.actual_minutes, t.goal_id, t.milestone_id,
             COALESCE(ws.logged, 0) as logged_minutes,
             es.summary_text as planning_summary
@@ -181,6 +184,7 @@ async function graphRetrieval(seedEntityIds: string[], depth = 1): Promise<Entit
     title: r.title as string,
     status: r.status as string,
     priority: r.priority as string,
+    feel_score: r.feel_score == null ? null : Number(r.feel_score),
     due_date: r.due_date as string | null,
     estimated_minutes: Number(r.estimated_minutes ?? 0) || null,
     logged_minutes: Number(r.logged_minutes ?? 0),

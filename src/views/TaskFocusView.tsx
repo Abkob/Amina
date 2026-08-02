@@ -7,7 +7,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useGoal, useGoalTasks, useTask, useTaskNotes, useNoteFiles, useTaskWorkSessions, useTaskResources, useInvalidate, useCreateWorkSession, useDeleteWorkSession, useEventTaskLinks, useDeleteEventTaskLink, useEvents, useAllEventTaskLinks, useGoals, useAllMeetings, useMeetingTaskLinks, useCreateMeetingTaskLink, useDeleteMeetingTaskLink } from '../api/hooks';
 import { EventComposer } from './schedule/EventComposer';
 import { addDays, eventDate, fmtTimeRange, fmtYMD, parseLocalDate } from '../utils/calendar';
-import { createResource, deleteResource, detectResourceType, addMention } from '../db/queries/resources';
+import { createResource, detachResource, detectResourceType, addMention, uploadResource } from '../db/queries/resources';
 import { touchTask } from '../db/queries/tasks';
 import { ResourceMentionPicker, ResourceMentionChip, useResourceMentions } from '../components/ResourceMentionPicker';
 import {
@@ -21,13 +21,12 @@ import {
 } from '../db/queries/tasks';
 import { useAppStore } from '../store/useAppStore';
 import { normalizeTaskWeight } from '../utils/goalTaskMetrics';
-import { formatTaskTime, getTaskEstimatedMinutes, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
+import { formatTaskTime, getRolledUpActualTime, getTaskEstimatedMinutes, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
 import { addNoteFile, deleteNoteFile, getNoteFilesForNote } from '../db/queries/noteFiles';
 import { ActualTimeModal } from '../components/ActualTimeModal';
-import { ActualTimeChip } from '../components/ActualTimeChip';
 import { FileViewerModal } from '../components/FileViewerModal';
 import { EntityTopicChips } from '../components/EntityTopicChips';
-import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
+import { getEffectiveTaskDueDate, getInheritedTaskDueDate, getTaskDeadlineViolation } from '../utils/taskDates';
 import type { DBResource, DBTask, DBTaskNote, DBTaskNoteFile } from '../db/schema';
 
 function formatBytes(bytes: number) {
@@ -291,8 +290,15 @@ function SectionPlanningWidgets({
   onSaveTimeRollupMode: (mode: NonNullable<DBTask['time_rollup_mode']>) => void;
   className?: string;
 }) {
+  const estimate = getRolledUpTime(task, allTasks);
+  const actual = getRolledUpActualTime(task, allTasks);
+  const variance = estimate.minutes === null ? null : actual.minutes - estimate.minutes;
+  const percent = estimate.minutes && actual.minutes > 0
+    ? Math.round((actual.minutes / estimate.minutes) * 100)
+    : null;
+
   return (
-    <div className={className}>
+    <div className={`grid grid-cols-2 gap-2 ${className}`}>
       <div className="min-w-0 rounded-lg border border-gray-150 bg-[#f8f9fa] px-2.5 py-2">
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-gray-400">Time Needed</span>
@@ -305,18 +311,37 @@ function SectionPlanningWidgets({
           onSaveRollupMode={onSaveTimeRollupMode}
         />
       </div>
+      <div className={`min-w-0 rounded-lg border px-2.5 py-2 ${variance !== null && variance > 0 ? 'border-amber-200 bg-amber-50/70' : 'border-emerald-100 bg-emerald-50/60'}`}>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="font-mono text-[8px] font-bold uppercase tracking-widest text-gray-400">Time Logged</span>
+          {percent !== null && <span className="font-mono text-[8px] font-bold text-gray-400">{percent}%</span>}
+        </div>
+        <p className={`font-mono text-[11px] font-bold ${variance !== null && variance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+          {actual.minutes === 0 ? '0m' : formatTaskTime(actual.minutes)}
+          {variance !== null && variance !== 0 && (
+            <span className="ml-1 text-[8px]">({variance > 0 ? '+' : '-'}{formatTaskTime(Math.abs(variance))})</span>
+          )}
+        </p>
+        {actual.childrenMinutes > 0 && (
+          <p className="mt-1 font-mono text-[8px] text-gray-400" title={`${actual.contributingChildren} child task${actual.contributingChildren === 1 ? '' : 's'} contributed`}>
+            {formatTaskTime(actual.childrenMinutes)} from children
+          </p>
+        )}
+      </div>
     </div>
   );
 }
 
 function ChildTaskRow({
   task,
+  allTasks,
   childCount,
   onOpen,
   onToggle,
   onDelete,
 }: {
   task: DBTask;
+  allTasks: DBTask[];
   childCount: number;
   onOpen: () => void;
   onToggle: () => void;
@@ -324,10 +349,16 @@ function ChildTaskRow({
 }) {
   const { triggerToast } = useAppStore();
   const [timeDraft, setTimeDraft] = useState(task.estimated_minutes ? formatTaskTime(task.estimated_minutes) : '');
+  const [dueDraft, setDueDraft] = useState(task.due_date ? task.due_date.slice(0, 10) : '');
+  const actual = getRolledUpActualTime(task, allTasks);
 
   useEffect(() => {
     setTimeDraft(task.estimated_minutes ? formatTaskTime(task.estimated_minutes) : '');
   }, [task.id, task.estimated_minutes]);
+
+  useEffect(() => {
+    setDueDraft(task.due_date ? task.due_date.slice(0, 10) : '');
+  }, [task.id, task.due_date]);
 
   const saveTime = async () => {
     const raw = timeDraft.trim();
@@ -349,7 +380,20 @@ function ChildTaskRow({
   };
 
   const saveDue = async (value: string) => {
-    await updateTask(task.id, { due_date: value || null });
+    const previous = task.due_date ? task.due_date.slice(0, 10) : '';
+    setDueDraft(value);
+    const violation = getTaskDeadlineViolation(task.id, value || null, allTasks);
+    if (violation) {
+      setDueDraft(previous);
+      triggerToast(violation, 'error');
+      return;
+    }
+    try {
+      await updateTask(task.id, { due_date: value || null });
+    } catch (error) {
+      setDueDraft(previous);
+      triggerToast(error instanceof Error ? error.message : 'Could not update the deadline.', 'error');
+    }
   };
 
   return (
@@ -387,12 +431,20 @@ function ChildTaskRow({
             className="w-16 rounded border border-gray-150 bg-[#f8f9fa] px-1.5 py-0.5 font-mono text-[10px] text-gray-700 outline-none focus:border-[#4648d4]"
           />
         </label>
+        {actual.minutes > 0 && (
+          <span
+            className="rounded border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] text-emerald-700"
+            title={actual.childrenMinutes > 0 ? `${formatTaskTime(actual.childrenMinutes)} is from nested child tasks` : 'Logged time'}
+          >
+            {formatTaskTime(actual.minutes)} logged{actual.childrenMinutes > 0 ? ' Σ' : ''}
+          </span>
+        )}
         <label className="flex items-center gap-1" title="Due date for this child">
           <Calendar size={10} className="shrink-0 text-gray-300" />
           <input
             type="date"
-            value={task.due_date ? task.due_date.slice(0, 10) : ''}
-            onChange={e => saveDue(e.target.value)}
+            value={dueDraft}
+            onChange={e => void saveDue(e.target.value)}
             className="rounded border border-gray-150 bg-[#f8f9fa] px-1.5 py-0.5 font-mono text-[10px] text-gray-600 outline-none focus:border-[#4648d4]"
           />
         </label>
@@ -964,6 +1016,54 @@ function WorkSessionPanel({ taskId }: { taskId: string }) {
   );
 }
 
+function FeelScoreControl({ value, onSave }: {
+  value: number | null | undefined;
+  onSave: (value: number | null) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(value == null ? '' : String(value));
+
+  useEffect(() => setDraft(value == null ? '' : String(value)), [value]);
+
+  const commit = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      if (value != null) await onSave(null);
+      return;
+    }
+    const score = Math.max(0, Math.min(100, Math.round(Number(trimmed))));
+    if (!Number.isFinite(score)) {
+      setDraft(value == null ? '' : String(value));
+      return;
+    }
+    setDraft(String(score));
+    if (score !== value) await onSave(score);
+  };
+
+  const score = value ?? 0;
+  const tone = score >= 80 ? 'text-red-600 border-red-200 bg-red-50'
+    : score >= 60 ? 'text-amber-600 border-amber-200 bg-amber-50'
+    : 'text-[#4648d4] border-[#4648d4]/20 bg-[#EEF2FF]';
+
+  return (
+    <label className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${tone}`} title="Your subjective sense of how much this task needs attention">
+      <span className="font-mono text-[9px] font-bold uppercase tracking-widest">Feel score</span>
+      <input
+        type="number"
+        min={0}
+        max={100}
+        step={1}
+        value={draft}
+        placeholder="--"
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        className="w-10 bg-transparent text-right font-mono text-sm font-black outline-none placeholder:text-current/30"
+      />
+      <span className="font-mono text-[9px] opacity-60">/100</span>
+    </label>
+  );
+}
+
 export function TaskFocusView() {
   const {
     selectedGoalId,
@@ -1089,8 +1189,10 @@ export function TaskFocusView() {
     if (selected.length === 0) return;
 
     for (const file of selected) {
-      await attachResource(file.name, null, 'document', `${formatBytes(file.size)} from file picker`);
+      await uploadResource(file, goal.id, task.id);
     }
+    invalidate.resources();
+    triggerToast(`${selected.length} file${selected.length !== 1 ? 's' : ''} uploaded and attached.`, 'success');
   };
 
   const addPendingFiles = (files: File[]) => {
@@ -1177,6 +1279,11 @@ export function TaskFocusView() {
     await updateTask(task.id, { weight_percent: weight });
   };
 
+  const saveFeelScore = async (feelScore: number | null) => {
+    await updateTask(task.id, { feel_score: feelScore });
+    invalidate.tasks(selectedGoalId);
+  };
+
   const saveTaskTime = async (minutes: number | null) => {
     await updateTask(task.id, {
       estimated_minutes: minutes,
@@ -1189,10 +1296,10 @@ export function TaskFocusView() {
   };
 
   const handleDeleteResource = (resourceId: string) => {
-    showConfirm('Remove this resource?', async () => {
-      await deleteResource(resourceId);
+    showConfirm('Detach this resource from the task? The resource will remain in your library.', async () => {
+      await detachResource(resourceId, 'task', task.id);
       invalidate.resources();
-      triggerToast('Resource removed.', 'info');
+      triggerToast('Resource detached from this task.', 'info');
     });
   };
 
@@ -1362,6 +1469,7 @@ export function TaskFocusView() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
+            <FeelScoreControl value={task.feel_score} onSave={saveFeelScore} />
             <input
               ref={fileInputRef}
               type="file"
@@ -1386,17 +1494,8 @@ export function TaskFocusView() {
           allTasks={allTasks}
           onSaveTime={saveTaskTime}
           onSaveTimeRollupMode={saveTaskTimeRollupMode}
-          className="mt-4 max-w-xs"
+          className="mt-4 max-w-md"
         />
-        {task.completed && task.actual_minutes != null && (
-          <div className="mt-3 flex items-center gap-2">
-            <span className="font-mono text-[9px] uppercase tracking-widest text-gray-400">Actual:</span>
-            <ActualTimeChip
-              minutes={task.actual_minutes}
-              estimatedMinutes={task.estimated_minutes}
-            />
-          </div>
-        )}
       </header>
 
       <TaskCalendarPanel task={task} subtreeIds={subtreeIds} allTasks={allTasks} />
@@ -1432,6 +1531,7 @@ export function TaskFocusView() {
               <ChildTaskRow
                 key={child.id}
                 task={child}
+                allTasks={allTasks}
                 childCount={(childrenByParent[child.id] ?? []).length}
                 onOpen={() => setFocusedTaskId(child.id)}
                 onToggle={async () => { await toggleTask(child.id); invalidate.tasks(selectedGoalId ?? undefined); }}

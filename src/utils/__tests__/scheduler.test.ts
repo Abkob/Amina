@@ -226,6 +226,28 @@ describe('computeSchedule — work days', () => {
 // ─── Task splitting (Epic 21) ─────────────────────────────────────────────────
 
 describe('computeSchedule — task splitting across multiple days', () => {
+  it('respects a per-task daily allocation cap', () => {
+    const result = computeSchedule(makeInput({
+      tasks: [{
+        id: 'paced',
+        title: 'Paced task',
+        estimated_minutes: 360,
+        max_daily_minutes: 120,
+        due_date: daysFromNow(6),
+        priority: 'high',
+        blocker_ids: [],
+      }],
+      prefs: { ...BASE_PREFS, work_days: [0, 1, 2, 3, 4, 5, 6] },
+      horizon_days: 7,
+    }));
+
+    const allocations = result.day_assignments.filter(day => day.task_ids.includes('paced'));
+    expect(result.tasks_fit).toContain('paced');
+    expect(allocations).toHaveLength(3);
+    expect(allocations.every(day => day.used_minutes <= 120)).toBe(true);
+    expect(allocations.reduce((sum, day) => sum + day.used_minutes, 0)).toBe(360);
+  });
+
   it('places a task larger than daily capacity across two days', () => {
     // 600-min task, 480-min/day → needs day 0 (480) + 120 min on day 1
     const result = computeSchedule(makeInput({
@@ -250,6 +272,15 @@ describe('computeSchedule — task splitting across multiple days', () => {
     }));
     expect(result.tasks_overflow).toContain('tight');
     expect(result.tasks_fit).not.toContain('tight');
+    expect(result.gap_minutes).toBeGreaterThan(0); // spare exists after the deadline
+    expect(result.capacity_days).toHaveLength(7);
+    expect(result.task_diagnostics.find(item => item.task_id === 'tight')).toMatchObject({
+      outcome: 'overflow',
+      required_minutes: 960,
+      available_before_deadline_minutes: 480,
+      allocated_minutes: 480,
+      shortfall_minutes: 480,
+    });
   });
 
   it('rolls back partial allocations for an overflowed task so other tasks can use that capacity', () => {

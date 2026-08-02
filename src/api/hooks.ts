@@ -66,6 +66,16 @@ export function useGoalTasks(goalId: string | null) {
   });
 }
 
+export function useGoalTaskDependencies(goalId: string | null) {
+  return useQuery<DBEdge[]>({
+    queryKey: ['task-dependencies', goalId],
+    queryFn: () => apiFetch<DBEdge[]>(`/api/edges?goal_id=${encodeURIComponent(goalId!)}&relationship=blocks`),
+    enabled: Boolean(goalId),
+    staleTime: STALE_SHORT,
+    placeholderData: [],
+  });
+}
+
 export function useTask(taskId: string | null) {
   return useQuery<DBTask | null>({
     queryKey: ['tasks', taskId],
@@ -397,11 +407,21 @@ export function useAIProposals() {
 
 export interface ScheduleDay {
   date: string;
-  tasks: Array<{ id: string; title: string; goal_id: string | null; due_date: string; estimated_minutes: number | null; priority: string; status: string }>;
+  tasks: Array<{ id: string; title: string; goal_id: string | null; parent_task_id: string | null; due_date: string; estimated_minutes: number | null; priority: string; status: string }>;
   meetings: Array<{ id: string; title: string; scheduled_at: string; duration_minutes: number | null }>;
+  deadlines: ScheduleDeadlineInfo[];
   deadline_titles: string[];
   proposals: Array<{ id: string; action_type: string; explanation: string | null; confidence: number; target_date: string; params: Record<string, unknown> }>;
   override: { available_minutes: number; note: string | null } | null;
+}
+
+export interface ScheduleDeadlineInfo {
+  id: string;
+  goal_id: string;
+  goal_title: string | null;
+  title: string;
+  date: string;
+  color: string;
 }
 
 export interface DayAssignment {
@@ -421,6 +441,24 @@ export interface SchedulerResult {
   unestimated_task_ids: string[];
   cycle_task_ids: string[];
   day_assignments: DayAssignment[];
+  capacity_days: DayAssignment[];
+  task_diagnostics: Array<{
+    task_id: string;
+    outcome: 'fit' | 'overflow' | 'unestimated';
+    required_minutes: number;
+    due_date: string | null;
+    earliest_date: string;
+    available_before_deadline_minutes: number;
+    allocated_minutes: number;
+    shortfall_minutes: number;
+    days: Array<{
+      date: string;
+      capacity_minutes: number;
+      committed_before_minutes: number;
+      available_before_minutes: number;
+      allocated_minutes: number;
+    }>;
+  }>;
   impossible_reason?: string;
 }
 
@@ -429,21 +467,32 @@ export interface ScheduleTaskInfo {
   goal_id: string | null;
   priority: string;
   estimated_minutes: number;
+  logged_minutes: number;
+  committed_minutes: number;
+  remaining_minutes: number;
+  due_date: string | null;
 }
 
-export function useSchedulePreview() {
+export function useSchedulePreview(from?: string, to?: string) {
+  const qs = new URLSearchParams();
+  if (from) qs.set('from', from);
+  if (to) qs.set('to', to);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+
   return useQuery<{
     days: ScheduleDay[];
     scheduler_result?: SchedulerResult;
     task_lookup?: Record<string, ScheduleTaskInfo>;
   }>({
-    queryKey: ['schedule-preview'],
+    queryKey: ['schedule-preview', { from, to }],
     queryFn: () => apiFetch<{
       days: ScheduleDay[];
       scheduler_result?: SchedulerResult;
       task_lookup?: Record<string, ScheduleTaskInfo>;
-    }>('/api/ai/schedule-preview'),
-    refetchInterval: 5_000,
+    }>(`/api/ai/schedule-preview${suffix}`),
+    staleTime: STALE_SHORT,
+    placeholderData: previous => previous,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -807,8 +856,8 @@ export function useChatSessionMessages(sessionId: string | null) {
 export function useCreateChatSession() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (title?: string) =>
-      apiPost<ChatSession>('/api/ai/sessions', { title }),
+    mutationFn: ({ title, model }: { title?: string; model?: string }) =>
+      apiPost<ChatSession>('/api/ai/sessions', { title, model }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['chat-sessions'] }),
   });
 }
@@ -841,33 +890,84 @@ export function useSendSessionMessage() {
 
 export function useInvalidate() {
   const qc = useQueryClient();
+  const invalidateSchedulePreview = () =>
+    qc.invalidateQueries({ queryKey: ['schedule-preview'], refetchType: 'active' });
+
   return {
     goals: () => {
       qc.invalidateQueries({ queryKey: ['goals'] });
       qc.invalidateQueries({ queryKey: ['goals-health'] });
+      invalidateSchedulePreview();
     },
     tasks: (goalId?: string) => {
       // Always invalidate the all-tasks cache (used by GoalsDashboard)
       qc.invalidateQueries({ queryKey: ['tasks'] });
       // Also invalidate the goal-scoped cache when a specific goal is known
       if (goalId) qc.invalidateQueries({ queryKey: ['tasks', { goalId }] });
+      qc.invalidateQueries({ queryKey: ['goal-tasks'] });
+      qc.invalidateQueries({ queryKey: ['goals-health'] });
+      invalidateSchedulePreview();
     },
-    allTasks: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+    allTasks: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['goal-tasks'] });
+      qc.invalidateQueries({ queryKey: ['goals-health'] });
+      invalidateSchedulePreview();
+    },
     notes: () => qc.invalidateQueries({ queryKey: ['notes'] }),
     taskNotes: (taskId?: string) => qc.invalidateQueries({ queryKey: ['task-notes', ...(taskId ? [taskId] : [])] }),
     noteFiles: (noteId?: string) => qc.invalidateQueries({ queryKey: ['note-files', ...(noteId ? [noteId] : [])] }),
-    events: () => qc.invalidateQueries({ queryKey: ['events'] }),
+    events: () => {
+      qc.invalidateQueries({ queryKey: ['events'] });
+      qc.invalidateQueries({ queryKey: ['event-task-links'] });
+      invalidateSchedulePreview();
+    },
     resources: () => qc.invalidateQueries({ queryKey: ['resources'] }),
-    meetings: (goalId?: string) => qc.invalidateQueries({ queryKey: ['meetings', ...(goalId ? [goalId] : [])] }),
-    deadlines: (goalId?: string) => qc.invalidateQueries({ queryKey: ['deadlines', ...(goalId ? [goalId] : [])] }),
-    milestones: (goalId?: string) => qc.invalidateQueries({ queryKey: ['milestones', ...(goalId ? [goalId] : [])] }),
-    schedulePrefs: () => qc.invalidateQueries({ queryKey: ['schedule-prefs'] }),
-    workSessions: (taskId?: string) => qc.invalidateQueries({ queryKey: ['work-sessions', ...(taskId ? [taskId] : [])] }),
-    journal: () => qc.invalidateQueries({ queryKey: ['journal'] }),
-    aiProposals: () => qc.invalidateQueries({ queryKey: ['ai-proposals'] }),
-    schedulePreview: () => qc.invalidateQueries({ queryKey: ['schedule-preview'] }),
+    meetings: (goalId?: string) => {
+      qc.invalidateQueries({ queryKey: ['meetings', ...(goalId ? [goalId] : [])] });
+      qc.invalidateQueries({ queryKey: ['meeting-task-links'] });
+      invalidateSchedulePreview();
+    },
+    deadlines: (goalId?: string) => {
+      qc.invalidateQueries({ queryKey: ['deadlines', ...(goalId ? [goalId] : [])] });
+      qc.invalidateQueries({ queryKey: ['goals-health'] });
+      invalidateSchedulePreview();
+    },
+    milestones: (goalId?: string) => {
+      qc.invalidateQueries({ queryKey: ['milestones', ...(goalId ? [goalId] : [])] });
+      qc.invalidateQueries({ queryKey: ['goals-health'] });
+      invalidateSchedulePreview();
+    },
+    schedulePrefs: () => {
+      qc.invalidateQueries({ queryKey: ['schedule-prefs'] });
+      qc.invalidateQueries({ queryKey: ['schedule-overrides'] });
+      invalidateSchedulePreview();
+    },
+    workSessions: (taskId?: string) => {
+      qc.invalidateQueries({ queryKey: ['work-sessions', ...(taskId ? [taskId] : [])] });
+      qc.invalidateQueries({ queryKey: ['work-session-stats'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['goals-health'] });
+      invalidateSchedulePreview();
+    },
+    journal: () => {
+      qc.invalidateQueries({ queryKey: ['journal'] });
+      qc.invalidateQueries({ queryKey: ['proposals'] });
+      qc.invalidateQueries({ queryKey: ['ai-proposals'] });
+      invalidateSchedulePreview();
+    },
+    aiProposals: () => {
+      qc.invalidateQueries({ queryKey: ['ai-proposals'] });
+      qc.invalidateQueries({ queryKey: ['proposals'] });
+      invalidateSchedulePreview();
+    },
+    schedulePreview: invalidateSchedulePreview,
     entityAliases: () => qc.invalidateQueries({ queryKey: ['entity-aliases'] }),
-    eventTaskLinks: () => qc.invalidateQueries({ queryKey: ['event-task-links'] }),
+    eventTaskLinks: () => {
+      qc.invalidateQueries({ queryKey: ['event-task-links'] });
+      qc.invalidateQueries({ queryKey: ['events'] });
+      invalidateSchedulePreview();
+    },
     all: () => qc.invalidateQueries(),
   };
 }

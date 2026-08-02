@@ -4,6 +4,13 @@ import { syncGoalMetrics } from './goals.js';
 import { generateEntitySummary } from '../services/summaryGenerator.js';
 import { queueEmbeddingUpsert, markEmbeddingStale } from '../services/embeddingLifecycle.js';
 import { requireISODate } from '../utils/localDate.js';
+import {
+  childDeadlineError,
+  dateOnly,
+  isDeadlineAfter,
+  synchronizedTaskDeadlineUpdates,
+  type DeadlineTask,
+} from '../utils/taskDeadline.js';
 
 const router = Router();
 
@@ -11,7 +18,7 @@ const TASK_UPDATE_FIELDS = new Set([
   'goal_id', 'parent_task_id', 'milestone_id', 'deadline_id',
   'title', 'description', 'status', 'priority', 'kind', 'critical_path_status',
   'tags_json', 'due_date', 'start_date', 'estimated_duration', 'estimated_minutes', 'time_rollup_mode',
-  'weight_percent', 'completed', 'position',
+  'weight_percent', 'feel_score', 'completed', 'position',
   'last_activity_at', 'completion_note',
   // M-021 real date planning
   'target_date', 'hard_deadline', 'deadline_type', 'deadline_confidence',
@@ -23,6 +30,44 @@ const VALID_TASK_STATUSES = new Set(['todo', 'not_started', 'planned', 'in_progr
 const STARTABLE_TASK_STATUSES = new Set(['todo', 'not_started', 'planned', 'paused', 'inactive', 'blocked']);
 const VALID_TIME_ROLLUP_MODES = new Set(['additive', 'inclusive']);
 const VALID_TASK_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
+
+/** Finds the closest dated parent, including an immediate parent that inherits from its own parent. */
+async function findEffectiveParentDeadline(parentTaskId: string | null): Promise<DeadlineTask | null> {
+  if (!parentTaskId) return null;
+  const { rows } = await query<DeadlineTask>(
+    `WITH RECURSIVE ancestors AS (
+       SELECT id, title, parent_task_id, due_date, 0 AS depth, ARRAY[id] AS path FROM tasks WHERE id=$1
+       UNION ALL
+       SELECT t.id, t.title, t.parent_task_id, t.due_date, a.depth + 1, a.path || t.id
+       FROM tasks t JOIN ancestors a ON t.id=a.parent_task_id
+       WHERE NOT t.id = ANY(a.path)
+     )
+     SELECT id, title, due_date FROM ancestors
+     WHERE due_date IS NOT NULL
+     ORDER BY depth ASC
+     LIMIT 1`,
+    [parentTaskId],
+  );
+  return rows[0] ?? null;
+}
+
+async function findDescendantPastDeadline(taskId: string, deadline: string): Promise<DeadlineTask | null> {
+  const { rows } = await query<DeadlineTask>(
+    `WITH RECURSIVE descendants AS (
+       SELECT id, title, parent_task_id, due_date, ARRAY[id] AS path FROM tasks WHERE parent_task_id=$1
+       UNION ALL
+       SELECT t.id, t.title, t.parent_task_id, t.due_date, d.path || t.id
+       FROM tasks t JOIN descendants d ON t.parent_task_id=d.id
+       WHERE NOT t.id = ANY(d.path)
+     )
+     SELECT id, title, due_date FROM descendants
+     WHERE due_date IS NOT NULL AND LEFT(due_date, 10) > $2
+     ORDER BY LEFT(due_date, 10) DESC
+     LIMIT 1`,
+    [taskId, deadline],
+  );
+  return rows[0] ?? null;
+}
 
 // GET /api/tasks?goal_id=...&parent_task_id=...&limit=N&offset=N
 router.get('/', async (req, res) => {
@@ -72,6 +117,10 @@ router.post('/', async (req, res) => {
   if (b.time_rollup_mode !== undefined && !VALID_TIME_ROLLUP_MODES.has(b.time_rollup_mode as string)) {
     return res.status(400).json({ error: `Invalid time_rollup_mode. Must be one of: ${[...VALID_TIME_ROLLUP_MODES].join(', ')}` });
   }
+  if (b.feel_score !== undefined && b.feel_score !== null &&
+      (!Number.isInteger(b.feel_score) || b.feel_score < 0 || b.feel_score > 100)) {
+    return res.status(400).json({ error: 'feel_score must be a whole number from 0 to 100' });
+  }
   try {
     requireISODate(b.due_date, 'due_date');
     requireISODate(b.start_date, 'start_date');
@@ -80,6 +129,12 @@ router.post('/', async (req, res) => {
   }
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
+
+  const parentDeadline = await findEffectiveParentDeadline(b.parent_task_id ?? null);
+  const newDueDate = dateOnly(b.due_date);
+  if (newDueDate && parentDeadline && isDeadlineAfter(newDueDate, parentDeadline.due_date)) {
+    return res.status(409).json({ error: childDeadlineError(parentDeadline) });
+  }
 
   const { rows: countRows } = await query(
     'SELECT COUNT(*) as c FROM tasks WHERE goal_id = $1',
@@ -91,8 +146,8 @@ router.post('/', async (req, res) => {
     `INSERT INTO tasks
       (id,goal_id,parent_task_id,milestone_id,deadline_id,title,description,status,priority,kind,
        critical_path_status,tags_json,due_date,start_date,estimated_duration,estimated_minutes,time_rollup_mode,
-       weight_percent,completed,position,created_at,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+       weight_percent,feel_score,completed,position,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
     [
       id,
       b.goal_id ?? null,
@@ -112,6 +167,7 @@ router.post('/', async (req, res) => {
       b.estimated_minutes ?? null,
       b.time_rollup_mode ?? 'additive',
       b.weight_percent ?? null,
+      b.feel_score ?? null,
       b.completed ?? false,
       position,
       now,
@@ -162,9 +218,15 @@ router.patch('/:id', async (req, res) => {
   if (body.time_rollup_mode !== undefined && !VALID_TIME_ROLLUP_MODES.has(body.time_rollup_mode as string)) {
     return res.status(400).json({ error: `Invalid time_rollup_mode. Must be one of: ${[...VALID_TIME_ROLLUP_MODES].join(', ')}` });
   }
+  if (body.feel_score !== undefined && body.feel_score !== null &&
+      (!Number.isInteger(body.feel_score) || Number(body.feel_score) < 0 || Number(body.feel_score) > 100)) {
+    return res.status(400).json({ error: 'feel_score must be a whole number from 0 to 100' });
+  }
   try {
     if ('due_date' in body) requireISODate(body.due_date, 'due_date');
     if ('start_date' in body) requireISODate(body.start_date, 'start_date');
+    if ('target_date' in body) requireISODate(body.target_date, 'target_date');
+    if ('hard_deadline' in body) requireISODate(body.hard_deadline, 'hard_deadline');
   } catch (e) {
     return res.status(400).json({ error: (e as Error).message });
   }
@@ -173,6 +235,10 @@ router.patch('/:id', async (req, res) => {
   for (const key of TASK_UPDATE_FIELDS) {
     if (key in body) updates[key] = body[key];
   }
+  Object.assign(updates, synchronizedTaskDeadlineUpdates(
+    body,
+    existing[0] as Record<string, unknown>,
+  ));
   // State coherence: keep completed and status in sync
   if (updates.completed === true && !('status' in body)) {
     updates.status = 'done';
@@ -185,6 +251,23 @@ router.patch('/:id', async (req, res) => {
   const prevParent = (existing[0] as Record<string, unknown>).parent_task_id as string | null;
   const newParent = 'parent_task_id' in body ? (body.parent_task_id as string | null) : prevParent;
   const parentChanged = 'parent_task_id' in body && newParent !== prevParent;
+
+  const finalDueDate = dateOnly('due_date' in body ? body.due_date : (existing[0] as Record<string, unknown>).due_date);
+  const parentDeadline = await findEffectiveParentDeadline(newParent);
+  if (finalDueDate && parentDeadline && isDeadlineAfter(finalDueDate, parentDeadline.due_date)) {
+    return res.status(409).json({ error: childDeadlineError(parentDeadline) });
+  }
+
+  // A parent cannot be shortened past any explicitly dated child at any depth.
+  const effectiveTaskDeadline = finalDueDate ?? dateOnly(parentDeadline?.due_date);
+  if (effectiveTaskDeadline) {
+    const lateChild = await findDescendantPastDeadline(taskId, effectiveTaskDeadline);
+    if (lateChild) {
+      return res.status(409).json({
+        error: `Parent task deadline cannot be ${effectiveTaskDeadline}: child task "${lateChild.title}" is due ${dateOnly(lateChild.due_date)}. Move the child deadline first.`,
+      });
+    }
+  }
 
   const { sets, vals } = buildUpdate(updates);
   await transaction(async (client) => {
