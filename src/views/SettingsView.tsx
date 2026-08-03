@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Calendar, AlertTriangle, CheckCircle, Info, Database, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Calendar, AlertTriangle, CheckCircle, Info, Database, RefreshCw, Download, ShieldCheck } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useSchedulePrefs, useScheduleOverrides, useUpsertScheduleOverride, useDeleteScheduleOverride, useEntityAliases, useDeleteEntityAlias, useDataReadiness } from '../api/hooks';
 import { apiFetch, apiPut } from '../utils/apiFetch';
@@ -592,16 +592,135 @@ const INVENTORY_LABELS: Record<string, string> = {
 // ── Backups ───────────────────────────────────────────────────────────────────
 
 interface BackupList {
-  dir: string;
-  keep_last: number;
-  pg_dump_available: boolean;
+  available?: boolean;
+  reason?: string;
+  dir?: string;
+  keep_last?: number;
+  pg_dump_available?: boolean;
   backups: Array<{ name: string; bytes: number; created_at: string }>;
+  portable_export: {
+    available: boolean;
+    reason: string | null;
+    storage: 'local' | 'private_blob';
+    includes_database: true;
+    includes_files: true;
+  };
+  portable_backups: Array<{
+    name: string;
+    bytes: number;
+    created_at: string;
+    storage: 'local' | 'private_blob';
+  }>;
+}
+
+interface PortableBackupCreated {
+  filename: string;
+  bytes: number;
+  table_count: number;
+  row_count: number;
+  file_count: number;
+  file_bytes: number;
+  storage: 'local' | 'private_blob';
+  download_url: string;
+  expires_at: string | null;
 }
 
 function fmtBytes(b: number): string {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function CompleteBackupsSection() {
+  const { triggerToast, showConfirm } = useAppStore();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const { data } = useQuery<BackupList>({
+    queryKey: ['backups'],
+    queryFn: () => apiFetch<BackupList>('/api/backups'),
+    staleTime: 30_000,
+  });
+
+  const createComplete = async () => {
+    setBusy(true);
+    try {
+      const result = await apiFetch<PortableBackupCreated>('/api/backups/portable', { method: 'POST' });
+      const link = document.createElement('a');
+      link.href = result.download_url;
+      link.download = result.filename;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      triggerToast(`Complete backup ready: ${result.row_count} rows + ${result.file_count} files`, 'success');
+      qc.invalidateQueries({ queryKey: ['backups'] });
+    } catch (error) {
+      triggerToast((error as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = (name: string) => {
+    showConfirm(`Delete complete backup ${name}? Keep a downloaded copy first.`, async () => {
+      await apiFetch(`/api/backups/portable/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      triggerToast('Complete backup deleted.', 'info');
+    });
+  };
+
+  return (
+    <div className="bg-white border border-indigo-100 p-5 rounded-xl shadow-sm">
+      <div className="flex items-start justify-between gap-4 mb-2">
+        <div>
+          <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black flex items-center gap-2">
+            <ShieldCheck size={13} className="text-[#4648d4]" />
+            Complete disaster backup
+          </h3>
+          <p className="text-[11px] text-gray-500 mt-2 max-w-lg">
+            One private ZIP with every PostgreSQL table and every Resource/task-note file, plus SHA-256 checksums.
+          </p>
+        </div>
+        <button
+          onClick={createComplete}
+          disabled={busy || !data || data.portable_export.available === false}
+          aria-label="Download complete database and file backup"
+          className="px-3 py-2 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5 shrink-0"
+        >
+          {busy ? <RefreshCw size={12} className="animate-spin" /> : <Download size={12} />}
+          {busy ? 'Building…' : 'Download everything'}
+        </button>
+      </div>
+      {data?.portable_export?.available === false && (
+        <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mt-3">
+          {data.portable_export.reason}
+        </p>
+      )}
+      <p className="text-[10px] text-gray-400 font-mono mt-3">
+        Verify after download: npm run backup:verify -- &lt;file.zip&gt;
+      </p>
+      <div className="space-y-1 max-h-44 overflow-y-auto mt-3">
+        {(data?.portable_backups ?? []).length === 0 && (
+          <p className="text-[11px] text-gray-300 font-mono">no complete backups created yet</p>
+        )}
+        {(data?.portable_backups ?? []).map(backup => (
+          <div key={backup.name} className="flex items-center gap-2 text-[11px] border border-gray-100 rounded-lg px-2.5 py-1.5">
+            <span className="font-mono text-gray-700 truncate flex-1">{backup.name}</span>
+            <span className="text-gray-400 shrink-0">{fmtBytes(backup.bytes)}</span>
+            <span className="text-gray-300 font-mono shrink-0">
+              {new Date(backup.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <a href={`/api/backups/portable/${encodeURIComponent(backup.name)}/download`} className="text-[#4648d4] hover:underline shrink-0" title="Download complete backup">
+              download
+            </a>
+            <button onClick={() => remove(backup.name)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500" title="Delete complete backup" aria-label={`Delete complete backup ${backup.name}`}>
+              <Trash2 size={11} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function BackupsSection() {
@@ -641,7 +760,7 @@ function BackupsSection() {
         <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-black">Database Backups</h3>
             <button
               onClick={createNow}
-              disabled={busy || data?.pg_dump_available === false}
+              disabled={busy || data?.available === false || data?.pg_dump_available === false}
               aria-label="Create database backup now"
               className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-[#4648d4] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
         >
@@ -899,6 +1018,7 @@ export function SettingsView() {
         <DataReadinessSection />
 
         {/* DB Inventory */}
+        <CompleteBackupsSection />
         <BackupsSection />
         <DBInventorySection />
 

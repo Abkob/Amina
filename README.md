@@ -37,6 +37,68 @@ $env:DATABASE_URL_TEST = 'postgresql://user:password@localhost:5433/amina_test'
 npm run test:integration
 ```
 
+## Complete database + file backups
+
+Open **Settings → Complete disaster backup → Download everything**. A successful
+`.amina-backup.zip` contains:
+
+- `database/schema.sql` and JSONL for every row in every public application table;
+- every Resource upload and task-note attachment referenced by the database;
+- a manifest with table/file counts and SHA-256 checksums;
+- portable `backup://` file references instead of machine-specific paths or private Blob URLs.
+
+The database rows come from one PostgreSQL `REPEATABLE READ, READ ONLY` snapshot.
+The operation fails instead of silently completing if a referenced file is missing
+or changes while being read. Environment variables, database passwords, API keys,
+and Blob tokens are never written into the archive.
+
+On Vercel, the archive is streamed into the connected private Blob store and the
+browser receives a ten-minute signed download link. This avoids Vercel's function
+response-size limit. The private server copy remains listed in Settings until you
+explicitly delete it. Locally, the ZIP is written atomically under `backups/`.
+
+Always verify a downloaded copy before relying on it:
+
+```powershell
+npm run backup:verify -- "C:\path\to\amina-complete-....amina-backup.zip"
+```
+
+The equivalent local command (it creates and immediately verifies the ZIP) is:
+
+```powershell
+npm run backup:create
+```
+
+The verifier is read-only. It checks every entry checksum, byte count, JSONL row
+count, archive path, and manifest total.
+
+### Restore a complete backup
+
+Restore into a new, empty PostgreSQL database first. The command verifies the full
+archive before it connects to the target, restores in one transaction, rebuilds
+foreign keys, and compares every final table count before committing.
+
+For a local restore (files are copied to a new directory under `server/uploads/`):
+
+```powershell
+$env:TARGET_DATABASE_URL = 'postgresql://user:password@host/new_empty_database?sslmode=require'
+$env:CONFIRM_PORTABLE_RESTORE = '1'
+npm run backup:restore -- "C:\path\to\amina-complete-....amina-backup.zip"
+Remove-Item Env:CONFIRM_PORTABLE_RESTORE
+```
+
+For a Vercel restore into a new private Blob store, also set:
+
+```powershell
+$env:RESTORE_STORAGE = 'blob'
+$env:BLOB_READ_WRITE_TOKEN = 'new-private-blob-token'
+```
+
+The restore refuses a non-empty target unless `CONFIRM_REPLACE_TARGET=1` is set,
+and refuses to target the configured source database unless
+`ALLOW_RESTORE_OVER_SOURCE=1` is explicitly set. Prefer a fresh database; inspect
+and test it before changing the deployed `DATABASE_URL`.
+
 ## Safe Vercel deployment
 
 ### 1. Preserve and inventory the source database
@@ -137,4 +199,4 @@ Do not run `npm run migrate` for Vercel; that command is only for the old SQLite
 
 ## Operational limits
 
-Vercel Functions have a request/response body limit, so large files must use the direct Blob flow. Scheduled maintenance is configured once daily so it works on Vercel Hobby; higher tiers can increase the cron frequency. Local filesystem backups and Obsidian sync remain local-only. Continue taking managed PostgreSQL backups through the database provider.
+Vercel Functions have a request/response body limit, so large files use direct Blob flows and complete backups are assembled in private Blob storage before download. Scheduled maintenance is configured once daily so it works on Vercel Hobby; higher tiers can increase the cron frequency. Local pg_dump rotation and Obsidian sync remain local-only. Continue taking managed PostgreSQL backups through the database provider as a second, independent recovery layer.
