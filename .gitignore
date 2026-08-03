@@ -29,3 +29,6 @@ playwright-report/
 
 # Local scratch and generated inspection files
 tmp/
+
+# Local Vercel project metadata and pulled environment values
+.vercel/
