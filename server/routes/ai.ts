@@ -44,6 +44,7 @@ import { searchResearchEvidence } from '../services/researchRag.js';
 import { findExplicitTaskMatches } from '../services/contextTargeting.js';
 import { synchronizedTaskDeadlineUpdates } from '../utils/taskDeadline.js';
 import { runInBackground } from '../utils/background.js';
+import { simpleConversationReply } from '../services/conversationFastPath.js';
 
 const router = Router();
 
@@ -4797,6 +4798,43 @@ router.post('/sessions/:id/chat', rateLimit(60, 60_000, 'ai-session-chat'), asyn
   });
 
   try {
+    const greetingReply = COPILOT_DETERMINISTIC_FAST_PATHS
+      ? simpleConversationReply(message)
+      : null;
+    if (greetingReply) {
+      const now = new Date().toISOString();
+      const msgId1 = crypto.randomUUID();
+      const msgId2 = crypto.randomUUID();
+      const runtime = runtimeInfo();
+      const metadata = JSON.stringify({
+        agent_run_id: agentRunId,
+        actions: [],
+        citations: [],
+        intent: 'conversation_greeting',
+        model_used: false,
+        runtime,
+      });
+      await query(
+        `INSERT INTO chat_messages (id, session_id, role, content, metadata_json, created_at)
+         VALUES ($1,$2,'user',$3,NULL,$4),($5,$2,'assistant',$6,$7,$4)`,
+        [msgId1, req.params.id, message, now, msgId2, greetingReply, metadata],
+      );
+      await query(`UPDATE chat_sessions SET updated_at=$1 WHERE id=$2`, [now, req.params.id]);
+      await setAgentIntent(agentRunId, 'conversation_greeting', 1, { model_used: false });
+      await finishAgentRun(agentRunId, 'completed', greetingReply, {
+        metadata: { action_count: 0, citation_count: 0, model_used: false, runtime },
+      });
+      return res.json({
+        reply: greetingReply,
+        actions: [],
+        citations: [],
+        runtime,
+        session_id: req.params.id,
+        message_id: msgId2,
+        agent_run_id: agentRunId,
+      });
+    }
+
     const dueDateUpdate = COPILOT_DETERMINISTIC_FAST_PATHS
       ? await applyExplicitBatchDueDate(message)
       : null;
