@@ -163,7 +163,7 @@ export function createApp(): express.Express {
     const warnings: string[] = [];
     if (!models.reachable) warnings.push('Ollama is unreachable — chat is unavailable');
     if (models.primary.status === 'missing') warnings.push(`Configured primary model "${models.primary.model}" is not installed`);
-    if (models.fallback.status === 'missing') warnings.push(`Configured fallback model "${models.fallback.model}" is not installed`);
+    if (models.fallback?.status === 'missing') warnings.push(`Configured fallback model "${models.fallback.model}" is not installed`);
     if (models.primary.status === 'cloud') {
       const provider = models.primary.model.startsWith('gemini-')
         ? 'Gemini API'

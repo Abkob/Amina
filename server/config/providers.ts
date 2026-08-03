@@ -28,7 +28,18 @@ export const PROVIDER_MODE: ProviderMode = resolveMode();
 
 export const CHAT_HOST = process.env.OLLAMA_HOST ?? 'http://localhost:11434';
 export const CHAT_MODEL_PRIMARY = process.env.AMINA_MAIN_MODEL ?? process.env.OLLAMA_MODEL ?? 'gemini-3.6-flash';
-export const CHAT_MODEL_FALLBACK = process.env.AMINA_LOCAL_FALLBACK_MODEL ?? 'qwen3:8b';
+
+export function resolveLocalFallbackModel(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'VERCEL' | 'AMINA_LOCAL_FALLBACK_MODEL'>> = process.env,
+): string {
+  // Vercel functions cannot reach a developer-machine Ollama daemon. Keeping a
+  // local fallback there only delays the real cloud error and produces a
+  // misleading qwen3 message, so cloud deployments deliberately have none.
+  if (env.VERCEL === '1') return '';
+  return env.AMINA_LOCAL_FALLBACK_MODEL ?? 'qwen3:8b';
+}
+
+export const CHAT_MODEL_FALLBACK = resolveLocalFallbackModel();
 export const NVIDIA_API_BASE = process.env.NVIDIA_API_BASE ?? 'https://integrate.api.nvidia.com/v1';
 export const NVIDIA_NEMOTRON_MODEL = process.env.AMINA_NVIDIA_NEMOTRON_MODEL
   ?? 'nvidia/nemotron-3-super-120b-a12b';
@@ -66,6 +77,12 @@ export function isCloudChatModel(model: string): boolean {
     || model.endsWith('-cloud');
 }
 
+export const LOCAL_CHAT_ENABLED = [
+  CHAT_MODEL_PRIMARY,
+  CHAT_MODEL_FALLBACK,
+  ...SELECTABLE_CHAT_MODELS,
+].some(model => Boolean(model) && !isCloudChatModel(model));
+
 // Bounded chat request wait — callers must not hang forever on a wedged model.
 export const CHAT_TIMEOUT_MS = Number(process.env.AMINA_CHAT_TIMEOUT_MS ?? 180_000);
 
@@ -92,11 +109,11 @@ export function getProviderSummary() {
       model: CHAT_MODEL_PRIMARY,
       // ':cloud' models run on Ollama's cloud — chat prompts leave this machine
       model_is_cloud: isCloudChatModel(CHAT_MODEL_PRIMARY),
-      fallback: CHAT_MODEL_FALLBACK,
-      fallback_is_cloud: isCloudChatModel(CHAT_MODEL_FALLBACK),
+      fallback: CHAT_MODEL_FALLBACK || null,
+      fallback_is_cloud: CHAT_MODEL_FALLBACK ? isCloudChatModel(CHAT_MODEL_FALLBACK) : null,
       nvidia_fallback: NVIDIA_FALLBACK_MODEL,
       nvidia_fallback_configured: Boolean(process.env.NVIDIA_API_KEY),
-      host: CHAT_HOST,
+      host: LOCAL_CHAT_ENABLED ? CHAT_HOST : null,
     },
     embeddings: {
       // There is no local embedding implementation — embeddings always go to

@@ -46,8 +46,10 @@ async function startServer() {
         (process.env.NVIDIA_API_KEY && NVIDIA_FALLBACK_MODEL !== CHAT_MODEL_PRIMARY
           ? ` Â· fallback ${NVIDIA_FALLBACK_MODEL} (NVIDIA cloud)`
           : '') +
-        ` · fallback ${CHAT_MODEL_FALLBACK}${isCloudChatModel(CHAT_MODEL_FALLBACK) ? ' (cloud)' : ' (local)'}` +
-        ` · via ${CHAT_HOST}`,
+        (CHAT_MODEL_FALLBACK
+          ? ` · fallback ${CHAT_MODEL_FALLBACK}${isCloudChatModel(CHAT_MODEL_FALLBACK) ? ' (cloud)' : ' (local)'}`
+          : '') +
+        (CHAT_MODEL_FALLBACK || !isCloudChatModel(CHAT_MODEL_PRIMARY) ? ` · via ${CHAT_HOST}` : ''),
       );
       console.log(`[server] Embeddings: ${EMBED_MODEL} (${EMBED_DIMENSION} dimensions)`);
       const vault = scheduleObsidianVaultSync('startup');

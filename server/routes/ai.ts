@@ -4499,7 +4499,7 @@ router.get('/health', async (_req, res) => {
     model: CHAT_MODEL,
     nvidia_fallback_model: NVIDIA_MODEL,
     nvidia_configured: NVIDIA_CONFIGURED,
-    fallback_model: FALLBACK_MODEL,
+    fallback_model: FALLBACK_MODEL || null,
     chat_cooldown: getChatCooldownStatus(),
   });
 });

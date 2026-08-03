@@ -8,6 +8,7 @@ import {
   CHAT_TIMEOUT_MS,
   NVIDIA_API_BASE,
   NVIDIA_FALLBACK_MODEL,
+  LOCAL_CHAT_ENABLED,
   SELECTABLE_CHAT_MODELS,
   isCloudChatModel,
   isNvidiaChatModel,
@@ -106,18 +107,20 @@ export async function validateChatModels(): Promise<{
   reachable: boolean;
   primary: { model: string; status: ModelStatus };
   nvidia_fallback: { model: string; status: ModelStatus };
-  fallback: { model: string; status: ModelStatus };
+  fallback: { model: string; status: ModelStatus } | null;
   available: Array<{ model: string; provider: 'gemini' | 'nvidia' | 'ollama'; status: ModelStatus }>;
   installed: string[];
   error?: string;
 }> {
   try {
-    const installed = await listInstalledModels();
+    const installed = LOCAL_CHAT_ENABLED ? await listInstalledModels() : [];
     return {
       reachable: true,
       primary: { model: CHAT_MODEL, status: classifyModel(CHAT_MODEL, installed) },
       nvidia_fallback: { model: NVIDIA_MODEL, status: classifyModel(NVIDIA_MODEL, installed) },
-      fallback: { model: FALLBACK_MODEL, status: classifyModel(FALLBACK_MODEL, installed) },
+      fallback: FALLBACK_MODEL
+        ? { model: FALLBACK_MODEL, status: classifyModel(FALLBACK_MODEL, installed) }
+        : null,
       available: CHAT_MODEL_OPTIONS.map(model => ({
         model,
         provider: model.startsWith('gemini-') ? 'gemini' as const
@@ -132,7 +135,7 @@ export async function validateChatModels(): Promise<{
       reachable: false,
       primary: { model: CHAT_MODEL, status: 'unknown' },
       nvidia_fallback: { model: NVIDIA_MODEL, status: NVIDIA_CONFIGURED ? 'cloud' : 'missing' },
-      fallback: { model: FALLBACK_MODEL, status: 'unknown' },
+      fallback: FALLBACK_MODEL ? { model: FALLBACK_MODEL, status: 'unknown' } : null,
       available: CHAT_MODEL_OPTIONS.map(model => ({
         model,
         provider: model.startsWith('gemini-') ? 'gemini' as const
@@ -452,8 +455,9 @@ export function parseJSON<T = Record<string, unknown>>(raw: string): T {
   }
 }
 
-// Health check — returns true if Ollama is reachable and both models are available.
+// Local runtime health. Cloud-only deployments do not require an Ollama daemon.
 export async function ollamaHealth(): Promise<{ ok: boolean; models: string[]; error?: string }> {
+  if (!LOCAL_CHAT_ENABLED) return { ok: true, models: [] };
   try {
     const models = await listInstalledModels();
     return { ok: true, models };
