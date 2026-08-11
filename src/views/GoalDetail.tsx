@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   ChevronLeft, Clock, Folder, Calendar, Sparkles,
   FolderOpen, Upload, FileText, CheckSquare, Square,
-  Plus, Trash2, X, Paperclip, ChevronDown, ChevronRight, Check, GripVertical, Pause, Lock, AlertCircle,
+  Plus, Trash2, X, Paperclip, ChevronDown, ChevronRight, Check, GripVertical, Pause, Lock,
 } from 'lucide-react';
 import {
   DndContext, DragOverlay, closestCenter, KeyboardSensor, PointerSensor, useDraggable, useDroppable, useSensor, useSensors,
@@ -30,7 +30,7 @@ import { createDeadline, updateDeadline, deleteDeadline, assignTaskToDeadline } 
 import type { DBMeeting, DBDeadline } from '../db/schema';
 import { getGoalFinishEstimate } from '../utils/goalFinishEstimate';
 import { formatTaskTime, getTaskEstimatedMinutes, getTaskLeafProgress, getTaskTimeProgress, getRolledUpTime, parseTaskTimeInput } from '../utils/taskTime';
-import { getEffectiveTaskDueDate, getInheritedTaskDueDate, getOverdueDescendantCount, getTaskDeadlineViolation } from '../utils/taskDates';
+import { getEffectiveTaskDueDate, getInheritedTaskDueDate, getTaskDeadlineViolation } from '../utils/taskDates';
 import { apiFetch, apiPut, apiPatch, apiPost, apiDelete } from '../utils/apiFetch';
 import { calculateGoalTaskMetrics, computeGoalStatus } from '../utils/goalTaskMetrics';
 import { computeGoalTimeStats, formatVelocity, velocityColor, projectedFinishDate, formatProjectedDate } from '../utils/goalTimeAnalytics';
@@ -793,7 +793,6 @@ function TaskTreeRow({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const effectiveDueDate = getEffectiveTaskDueDate(task, allTasks);
   const inheritedDueDate = getInheritedTaskDueDate(task, allTasks);
-  const overdueDescendantCount = getOverdueDescendantCount(task.id, allTasks);
 
   useEffect(() => { if (showResourceInput) resRef.current?.focus(); }, [showResourceInput]);
 
@@ -854,15 +853,6 @@ function TaskTreeRow({
 
         {children.length > 0 && (
           <span className="text-[9px] font-mono text-gray-300 shrink-0">{children.length}</span>
-        )}
-        {overdueDescendantCount > 0 && (
-          <span
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[9px] font-bold text-red-500"
-            title={`${overdueDescendantCount} unfinished ${overdueDescendantCount === 1 ? 'child task is' : 'child tasks are'} overdue`}
-          >
-            <AlertCircle size={9} />
-            {overdueDescendantCount} overdue
-          </span>
         )}
 
         {/* Deadline + time — visible when set; shown on hover when empty */}
@@ -1424,7 +1414,13 @@ function MilestoneCard({
   const statusRef = useRef<HTMLSpanElement>(null);
   const effectiveDueDate = getEffectiveTaskDueDate(milestone, allTasks);
   const inheritedDueDate = getInheritedTaskDueDate(milestone, allTasks);
-  const overdueDescendantCount = getOverdueDescendantCount(milestone.id, allTasks);
+  const completedAt = milestone.completed || milestone.status === 'done'
+    ? (milestone.last_activity_at ?? milestone.updated_at)
+    : dynStatus === 'Completed'
+    ? subtasks
+        .map(task => task.last_activity_at ?? task.updated_at)
+        .sort((a, b) => b.localeCompare(a))[0] ?? null
+    : null;
 
   useEffect(() => {
     if (!statusOpen) return;
@@ -1520,21 +1516,12 @@ function MilestoneCard({
           )}
         </span>
         <span className="text-[10px] font-mono text-gray-400 shrink-0">{subtasks.length}</span>
-        {overdueDescendantCount > 0 && (
-          <span
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[9px] font-bold text-red-500"
-            title={`${overdueDescendantCount} unfinished ${overdueDescendantCount === 1 ? 'child task is' : 'child tasks are'} overdue`}
-          >
-            <AlertCircle size={9} />
-            {overdueDescendantCount} overdue
-          </span>
-        )}
         <span onClick={e => e.stopPropagation()}>
           <DeadlinePill
             value={effectiveDueDate}
             label="milestone deadline"
             onSave={d => onUpdateDeadline(milestone.id, d)}
-            completedAt={milestone.completed || milestone.status === 'done' ? (milestone.last_activity_at ?? milestone.updated_at) : null}
+            completedAt={completedAt}
             inherited={Boolean(inheritedDueDate)}
           />
         </span>

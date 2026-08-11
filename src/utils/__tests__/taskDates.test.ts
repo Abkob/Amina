@@ -3,7 +3,6 @@ import type { DBTask } from '../../db/schema';
 import {
   getEffectiveTaskDueDate,
   getInheritedTaskDueDate,
-  getOverdueDescendantCount,
   getTaskDeadlineViolation,
   taskUsesInheritedDueDate,
 } from '../taskDates';
@@ -99,43 +98,5 @@ describe('task deadline hierarchy validation', () => {
     expect(getTaskDeadlineViolation('child', '2026-07-21', [grandparent, parent, child])).toBe(
       'Child task deadline must be on or before parent task "Grandparent" deadline (2026-07-20).',
     );
-  });
-});
-
-describe('overdue descendant rollup', () => {
-  it('keeps an overdue child visible on a completed parent card', () => {
-    const parent = task({ id: 'parent', completed: true, status: 'done' });
-    const overdueChild = task({
-      id: 'overdue-child',
-      parent_task_id: 'parent',
-      due_date: '2026-07-19',
-    });
-
-    expect(getOverdueDescendantCount(
-      parent.id,
-      [parent, overdueChild],
-      new Date('2026-07-20T12:00:00'),
-    )).toBe(1);
-  });
-
-  it('ignores completed and future descendants', () => {
-    const parent = task({ id: 'parent', due_date: '2026-07-19', completed: true, status: 'done' });
-    const completedChild = task({
-      id: 'completed-child',
-      parent_task_id: 'parent',
-      completed: true,
-      status: 'done',
-    });
-    const futureChild = task({
-      id: 'future-child',
-      parent_task_id: 'parent',
-      due_date: '2026-07-21',
-    });
-
-    expect(getOverdueDescendantCount(
-      parent.id,
-      [parent, completedChild, futureChild],
-      new Date('2026-07-20T12:00:00'),
-    )).toBe(0);
   });
 });

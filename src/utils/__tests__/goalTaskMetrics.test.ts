@@ -4,6 +4,7 @@ import {
   getCountableGoalTasks,
   calculateGoalTaskMetrics,
   computeGoalStatus,
+  getClosestDueTask,
   normalizeTaskWeight,
 } from '../goalTaskMetrics';
 
@@ -156,6 +157,13 @@ describe('calculateGoalTaskMetrics — progress', () => {
     ];
     expect(calculateGoalTaskMetrics(tasks).progress).toBe(99);
   });
+
+  it('reaches 100 when a milestone is completed by all of its child tasks', () => {
+    const milestone = makeTask({ id: 'milestone', kind: 'critical_path', due_date: '2026-07-10' });
+    const child = makeTask({ parent_task_id: 'milestone', completed: true, status: 'done' });
+
+    expect(calculateGoalTaskMetrics([milestone, child]).progress).toBe(100);
+  });
 });
 
 describe('calculateGoalTaskMetrics — counts', () => {
@@ -209,5 +217,14 @@ describe('computeGoalStatus task deadlines', () => {
   it('ignores approaching deadlines on completed tasks', () => {
     const task = makeTask({ due_date: '2026-07-15', completed: true, status: 'done' });
     expect(computeGoalStatus(goal, [task], now)).toBe('Safe');
+  });
+
+  it('ignores an overdue milestone when all of its child tasks are completed', () => {
+    const milestone = makeTask({ id: 'milestone', kind: 'critical_path', due_date: '2026-07-10' });
+    const child = makeTask({ parent_task_id: 'milestone', completed: true, status: 'done' });
+    const tasks = [milestone, child];
+
+    expect(getClosestDueTask(tasks, now)).toBeNull();
+    expect(computeGoalStatus(goal, tasks, now)).toBe('Safe');
   });
 });

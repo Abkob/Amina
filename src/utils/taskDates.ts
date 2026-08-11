@@ -62,29 +62,6 @@ function getDescendants(taskId: string, allTasks: DBTask[]): DBTask[] {
   return result;
 }
 
-function isTaskDone(task: DBTask): boolean {
-  return task.completed || task.status === 'done';
-}
-
-function dueTime(value: string): number | null {
-  const parsed = value.includes('T')
-    ? new Date(value)
-    : new Date(`${value.slice(0, 10)}T23:59:59.999`);
-  const time = parsed.getTime();
-  return Number.isNaN(time) ? null : time;
-}
-
-/** Counts unfinished descendants whose own or inherited task deadline has passed. */
-export function getOverdueDescendantCount(taskId: string, allTasks: DBTask[], now = new Date()): number {
-  return getDescendants(taskId, allTasks).filter(descendant => {
-    if (isTaskDone(descendant)) return false;
-    const dueDate = getEffectiveTaskDueDate(descendant, allTasks);
-    if (!dueDate) return false;
-    const deadline = dueTime(dueDate);
-    return deadline !== null && deadline < now.getTime();
-  }).length;
-}
-
 /** Returns notification-ready copy when a proposed task deadline breaks its hierarchy. */
 export function getTaskDeadlineViolation(taskId: string, proposedDate: string | null, allTasks: DBTask[]): string | null {
   const task = allTasks.find(candidate => candidate.id === taskId);

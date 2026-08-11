@@ -17,6 +17,14 @@ function isDone(task: DBTask) {
   return task.completed || task.status === 'done';
 }
 
+/** Mirrors the milestone card: a milestone is complete when all direct child tasks are done. */
+export function isEffectivelyDone(task: DBTask, tasks: DBTask[]) {
+  if (isDone(task)) return true;
+  if (task.kind !== 'critical_path') return false;
+  const children = tasks.filter(candidate => candidate.parent_task_id === task.id);
+  return children.length > 0 && children.every(isDone);
+}
+
 function parseTime(value: string | null | undefined) {
   if (!value) return 0;
   const time = new Date(value).getTime();
@@ -47,7 +55,7 @@ export function getClosestDueTask(tasks: DBTask[], now = new Date()): ClosestDue
   today.setHours(0, 0, 0, 0);
 
   const candidates = tasks
-    .filter(t => !isDone(t) && t.due_date)
+    .filter(t => !isEffectivelyDone(t, tasks) && t.due_date)
     .map(t => {
       const due = parseDueDate(t.due_date!);
       const daysUntil = Math.round((due.getTime() - today.getTime()) / 86_400_000);
@@ -123,10 +131,10 @@ export function calculateGoalTaskMetrics(tasks: DBTask[], now = new Date()): Goa
     }
   }
 
-  // A goal may only be 100% when every task is explicitly complete. Weighting
-  // and time estimates can otherwise round to 100 while a zero-weight,
-  // untimed, parent, or milestone task is still not started/in progress.
-  if (tasks.some(task => !isDone(task))) {
+  // A goal may only be 100% when every task is complete. Milestone cards derive
+  // completion from their direct children, so use that same rule here instead
+  // of leaving an otherwise-finished goal stuck at 99%.
+  if (tasks.some(task => !isEffectivelyDone(task, tasks))) {
     progress = Math.min(progress, 99);
   }
 
@@ -172,7 +180,7 @@ export function computeGoalStatus(
 
   // Remaining estimated minutes across incomplete tasks
   const remainingMinutes = tasks
-    .filter(t => !t.completed && t.status !== 'done')
+    .filter(t => !isEffectivelyDone(t, tasks))
     .reduce((sum, t) => sum + (t.estimated_minutes ?? 0), 0);
 
   // Parse deadline — handle ISO date strings; ignore quarter strings like "Q3 2024"
@@ -181,7 +189,7 @@ export function computeGoalStatus(
     : null;
 
   const taskDeadlineDays = tasks
-    .filter(task => !isDone(task))
+    .filter(task => !isEffectivelyDone(task, tasks))
     .flatMap(task => [task.hard_deadline, task.due_date, task.target_date])
     .filter((value): value is string => Boolean(value))
     .map(value => new Date(value.slice(0, 10) + 'T23:59:59'))
