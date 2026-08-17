@@ -14,7 +14,7 @@ import { useAppStore } from '../../store/useAppStore';
  * parent renders (they stay drag-and-drop day targets).
  */
 
-export const GRID_START_HOUR = 6;
+export const GRID_START_HOUR = 1;
 export const GRID_END_HOUR = 24;
 export const HOUR_PX = 48;
 const MIN_HOUR_PX = 28;
@@ -539,11 +539,6 @@ export function WeekTimeGrid({ days, events, meetings, linksByEvent, workStart, 
     };
   }, []);
 
-  useEffect(() => {
-    // Land with the workday in view, a touch of margin above it.
-    scrollRef.current?.scrollTo({ top: Math.max(0, hourToY(workStart, hourPx) - 12) });
-  }, [hourPx, workStart]);
-
   const eventsByDate = useMemo(() => {
     const m = new Map<string, PlacedEvent[]>();
     for (const p of events) {
@@ -607,6 +602,9 @@ export function WeekTimeGrid({ days, events, meetings, linksByEvent, workStart, 
         {/* Time grid */}
         <div className={COLS}>
           <div className="relative" style={{ height: gridHeight }}>
+            <span className="absolute right-1.5 top-1 font-mono text-[9px] text-gray-400">
+              {fmtHourLabel(GRID_START_HOUR)}
+            </span>
             {Array.from({ length: GRID_END_HOUR - GRID_START_HOUR - 1 }, (_, i) => (
               <span
                 key={i}
