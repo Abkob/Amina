@@ -369,12 +369,31 @@ export function buildGoogleTaskPayload(
     taskMarker(task.id),
   ].filter(Boolean).join('\n');
   return {
-    title: task.title.slice(0, 1024),
+    title: googleTaskDisplayTitle(task.title, pathTitles),
     notes,
     status: task.completed ? 'completed' : 'needsAction',
     completed: task.completed ? new Date().toISOString() : null,
     due: isoDate(task.due_date) ? `${isoDate(task.due_date)}T00:00:00.000Z` : null,
   };
+}
+
+export function googleTaskDisplayTitle(taskTitle: string, pathTitles: string[]): string {
+  const immediateParent = pathTitles.length >= 3 ? pathTitles[pathTitles.length - 2]?.trim() : '';
+  return (immediateParent ? `${immediateParent}: ${taskTitle}` : taskTitle).slice(0, 1024);
+}
+
+export function aminaTaskTitleFromGoogle(
+  remoteTitle: string | undefined,
+  currentTaskTitle: string,
+  pathTitles: string[],
+): string {
+  const nextTitle = remoteTitle?.trim() || currentTaskTitle;
+  const immediateParent = pathTitles.length >= 3 ? pathTitles[pathTitles.length - 2]?.trim() : '';
+  if (!immediateParent) return nextTitle;
+
+  const flattenedPrefix = `${immediateParent}:`;
+  if (!nextTitle.startsWith(flattenedPrefix)) return nextTitle;
+  return nextTitle.slice(flattenedPrefix.length).trimStart() || currentTaskTitle;
 }
 
 export function buildGoogleCalendarPayload(
@@ -624,6 +643,7 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
       const payload = buildGoogleTaskPayload(task, goalId ? goalsById.get(goalId)?.title ?? null : null,
         task.parent_task_id ? tasksById.get(task.parent_task_id)?.title ?? null : null,
         projection.path_titles);
+      let pulledRemoteChange = false;
       if (remote?.deleted && link) {
         if (!projection.visible) {
           await query('DELETE FROM google_sync_links WHERE id=$1', [link.id]);
@@ -678,14 +698,16 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
           }
           const nextStatus = completed ? 'done' : 'todo';
           const updatedAt = remote.updated ?? new Date().toISOString();
+          const nextTitle = aminaTaskTitleFromGoogle(remote.title, task.title, projection.path_titles);
           await query(
             `UPDATE tasks SET title=$1,due_date=$2,target_date=$2,completed=$3,status=$4,updated_at=$5 WHERE id=$6`,
-            [(remote.title ?? task.title).trim() || task.title, remoteDate, completed, nextStatus, updatedAt, task.id],
+            [nextTitle, remoteDate, completed, nextStatus, updatedAt, task.id],
           );
-          task.title = (remote.title ?? task.title).trim() || task.title;
+          task.title = nextTitle;
           task.due_date = remoteDate;
           task.completed = completed;
           task.updated_at = updatedAt;
+          pulledRemoteChange = true;
           link = await saveLink({ existing: link, entityType: 'task', entityId: task.id, remoteType: 'task', remoteContainerId: list.id,
             remoteId: remote.id, remoteEtag: remote.etag, remoteUpdatedAt: remote.updated, localUpdatedAt: updatedAt });
           links.set(key, link);
@@ -707,10 +729,23 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
         remote.parent = parentRemoteId;
         stats.tasks_updated_in_google += 1;
       }
-      if (projection.visible && remote && !remote.deleted && link?.sync_status !== 'conflict' && remote.notes !== payload.notes) {
+      const currentPathTitles = projection.path_titles.length > 0
+        ? [...projection.path_titles.slice(0, -1), task.title]
+        : [task.title];
+      const currentPayload = buildGoogleTaskPayload(task, goalId ? goalsById.get(goalId)?.title ?? null : null,
+        task.parent_task_id ? tasksById.get(task.parent_task_id)?.title ?? null : null,
+        currentPathTitles);
+      const titleNeedsProjection = !pulledRemoteChange && remote?.title !== currentPayload.title;
+      const notesNeedProjection = remote?.notes !== currentPayload.notes;
+      if (projection.visible && remote && !remote.deleted && link?.sync_status !== 'conflict'
+          && (titleNeedsProjection || notesNeedProjection)) {
+        const metadataPatch = {
+          ...(titleNeedsProjection ? { title: currentPayload.title } : {}),
+          ...(notesNeedProjection ? { notes: currentPayload.notes } : {}),
+        };
         remote = await googleApi<GoogleTask>(accessToken,
           `${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(remote.id)}`,
-          { method: 'PATCH', body: JSON.stringify({ notes: payload.notes }) });
+          { method: 'PATCH', body: JSON.stringify(metadataPatch) });
         link = await saveLink({ existing: link, entityType: 'task', entityId: task.id, remoteType: 'task', remoteContainerId: list.id,
           remoteId: remote.id, remoteEtag: remote.etag, remoteUpdatedAt: remote.updated, localUpdatedAt: task.updated_at });
         links.set(key, link);

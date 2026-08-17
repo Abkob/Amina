@@ -6,9 +6,11 @@ import {
   verifyGoogleOAuthState,
 } from '../../../server/services/googleWorkspaceAuth';
 import {
+  aminaTaskTitleFromGoogle,
   buildGoogleCalendarPayload,
   buildGoogleTaskPayload,
   buildGoogleTaskProjections,
+  googleTaskDisplayTitle,
 } from '../../../server/services/googleWorkspaceSync';
 
 beforeEach(() => {
@@ -55,10 +57,28 @@ describe('Google mapping', () => {
     const payload = buildGoogleTaskPayload(task, 'PSYCI 210', 'Week 4', ['Coursework', 'Week 4', 'Finish problem set']);
     expect(payload.due).toBe('2026-08-20T00:00:00.000Z');
     expect(payload.status).toBe('needsAction');
+    expect(payload.title).toBe('Week 4: Finish problem set');
     expect(payload.notes).toContain('Goal: PSYCI 210');
     expect(payload.notes).toContain('Parent: Week 4');
     expect(payload.notes).toContain('Amina path: Coursework > Week 4 > Finish problem set');
     expect(payload.notes).toContain(`Amina task: ${task.id}`);
+  });
+
+  it('names only flattened leaves as Parent: Child and keeps Amina titles clean', () => {
+    expect(googleTaskDisplayTitle('Finish Studying', ['Incomplete Courses', 'Physics 210', 'Finish Studying']))
+      .toBe('Physics 210: Finish Studying');
+    expect(googleTaskDisplayTitle('Physics 210', ['Incomplete Courses', 'Physics 210']))
+      .toBe('Physics 210');
+    expect(aminaTaskTitleFromGoogle(
+      'Physics 210: Finish Chapter 6',
+      'Finish Studying',
+      ['Incomplete Courses', 'Physics 210', 'Finish Studying'],
+    )).toBe('Finish Chapter 6');
+    expect(aminaTaskTitleFromGoogle(
+      'Review for the exam',
+      'Finish Studying',
+      ['Incomplete Courses', 'Physics 210', 'Finish Studying'],
+    )).toBe('Review for the exam');
   });
 
   it('projects roots and active leaves while hiding unfinished intermediate containers', () => {
