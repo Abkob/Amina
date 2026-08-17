@@ -13,6 +13,7 @@ import { openStoredFile } from './fileStorage.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, '..', 'schema.sql');
 const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+const NON_PORTABLE_SECRET_TABLES = new Set(['google_sync_connections', 'google_sync_links']);
 
 export const PORTABLE_BACKUP_FORMAT = 'amina-portable-backup' as const;
 export const PORTABLE_BACKUP_VERSION = 1;
@@ -122,6 +123,8 @@ transaction. File references inside the exported resources and task_note_files\n
 rows use backup:// paths that point to the corresponding files in this ZIP.\n+
 Keep this archive private: it contains the full workspace and may contain\n+
 personal text and documents.\n+
+Google OAuth tokens and remote sync IDs are intentionally excluded. Reconnect\n+
+Google after a restore so credentials never travel inside a portable backup.\n+
 Verify without changing a database:\n+
   npm run backup:verify -- <path-to-this-zip>\n+
 Restore only into a fresh target database after reading README.md:\n+
@@ -221,7 +224,7 @@ async function appendTable(
     ? ` ORDER BY ${table.primaryKey.map(quoteIdentifier).join(', ')}`
     : '';
   const queryStream = client.query(new QueryStream(
-    `SELECT row_to_json(t)::text AS row_json FROM public.${tableName} AS t${order}`,
+    `SELECT row_to_json(t)::text AS row_json FROM public.${tableName} AS t${NON_PORTABLE_SECRET_TABLES.has(table.name) ? ' WHERE FALSE' : ''}${order}`,
     [],
     { batchSize: 100 },
   )) as Readable;

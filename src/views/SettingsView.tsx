@@ -24,6 +24,32 @@ interface HealthData {
   timestamp: string;
 }
 
+interface GoogleSyncStatus {
+  configured: boolean;
+  missing_configuration: string[];
+  schema_ready: boolean;
+  connected: boolean;
+  account_email?: string | null;
+  calendar_name?: string;
+  initial_sync_complete?: boolean;
+  auto_sync_enabled?: boolean;
+  last_synced_at?: string | null;
+  last_error?: string | null;
+  sync_running?: boolean;
+  conflicts?: number;
+  errors?: number;
+}
+
+interface GoogleSyncPreview {
+  goals_as_task_lists: number;
+  one_off_task_list: boolean;
+  tasks: number;
+  timed_schedule_blocks: number;
+  meetings: number;
+  all_day_tasks: number;
+  repeating_blocks_skipped: number;
+}
+
 function useHealth() {
   const [health, setHealth] = useState<HealthData | null>(null);
   useEffect(() => {
@@ -861,6 +887,275 @@ function DBInventorySection() {
   );
 }
 
+function GoogleWorkspaceSection() {
+  const { triggerToast, showConfirm } = useAppStore();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState<'connect' | 'sync' | 'toggle' | 'disconnect' | null>(null);
+  const statusQuery = useQuery<GoogleSyncStatus>({
+    queryKey: ['google-sync-status'],
+    queryFn: () => apiFetch<GoogleSyncStatus>('/api/google/status'),
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+  const status = statusQuery.data;
+  const previewQuery = useQuery<GoogleSyncPreview>({
+    queryKey: ['google-sync-preview'],
+    queryFn: () => apiFetch<GoogleSyncPreview>('/api/google/preview'),
+    enabled: Boolean(status?.connected && status.schema_ready && !status.initial_sync_complete),
+    staleTime: 10_000,
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('google');
+    if (!result) return;
+    const message = params.get('google_message');
+    if (result === 'connected') triggerToast('Google connected. Review the preview before the first sync.', 'success');
+    else triggerToast(message || 'Google connection failed.', 'error');
+    params.delete('google');
+    params.delete('google_message');
+    const queryString = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${queryString ? `?${queryString}` : ''}${window.location.hash}`);
+    statusQuery.refetch();
+  }, [statusQuery, triggerToast]);
+
+  const connect = async () => {
+    setBusy('connect');
+    try {
+      const result = await apiFetch<{ authorization_url: string }>('/api/google/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ return_to: '/?google=connected' }),
+      });
+      window.location.assign(result.authorization_url);
+    } catch (error) {
+      triggerToast((error as Error).message, 'error');
+      setBusy(null);
+    }
+  };
+
+  const sync = async (confirmInitial = false) => {
+    setBusy('sync');
+    try {
+      const result = await apiFetch<{ stats: Record<string, number> }>('/api/google/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_initial: confirmInitial }),
+      });
+      const changed = Object.entries(result.stats).filter(([key, value]) => value > 0 && key !== 'skipped');
+      triggerToast(changed.length ? `Google sync finished · ${changed.reduce((sum, [, value]) => sum + value, 0)} updates` : 'Google is already up to date.', 'success');
+      await Promise.all([
+        statusQuery.refetch(),
+        qc.invalidateQueries({ queryKey: ['goals'] }),
+        qc.invalidateQueries({ queryKey: ['tasks'] }),
+        qc.invalidateQueries({ queryKey: ['events'] }),
+        qc.invalidateQueries({ queryKey: ['meetings'] }),
+        qc.invalidateQueries({ queryKey: ['schedule-preview'] }),
+      ]);
+    } catch (error) {
+      triggerToast((error as Error).message, 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleAutoSync = async () => {
+    if (!status?.connected) return;
+    setBusy('toggle');
+    try {
+      await apiFetch('/api/google/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_sync_enabled: !status.auto_sync_enabled }),
+      });
+      await statusQuery.refetch();
+      triggerToast(!status.auto_sync_enabled ? 'Live Google sync enabled.' : 'Automatic Google sync paused.', 'success');
+    } catch (error) {
+      triggerToast((error as Error).message, 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disconnect = () => {
+    showConfirm('Disconnect Google? Amina will keep all of your Google tasks and calendar events, but live updates will stop.', async () => {
+      setBusy('disconnect');
+      try {
+        await apiFetch('/api/google/connection', { method: 'DELETE' });
+        await statusQuery.refetch();
+        triggerToast('Google disconnected. Existing Google data was kept.', 'success');
+      } catch (error) {
+        triggerToast((error as Error).message, 'error');
+      } finally {
+        setBusy(null);
+      }
+    });
+  };
+
+  const preview = previewQuery.data;
+  const lastSync = status?.last_synced_at ? new Date(status.last_synced_at).toLocaleString() : null;
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm">
+      <div className="border-b border-blue-100 bg-gradient-to-r from-blue-50 via-white to-indigo-50 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
+              <Calendar size={19} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-slate-900">Google Tasks + Calendar</h3>
+              <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-500">
+                Amina stays the organized home. Google becomes the always-available copy you can check and update anywhere.
+              </p>
+            </div>
+          </div>
+          {status?.connected ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">
+              <CheckCircle size={11} /> Connected{status.account_email ? ` · ${status.account_email}` : ''}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="space-y-4 p-5">
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[
+            ['Goals', 'One Google Tasks list per goal'],
+            ['Tasks', 'Parent tasks and subtasks keep their hierarchy'],
+            ['One-offs', 'Collected in an Amina · One-offs list'],
+            ['Schedule', 'Focus blocks and meetings use Amina Schedule'],
+            ['All-day work', 'Tasks without a time stay as all-day items'],
+            ['Changes', 'Dates, titles, completion, and time edits sync back'],
+          ].map(([label, text]) => (
+            <div key={label} className="rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">{label}</p>
+              <p className="mt-0.5 text-xs text-slate-600">{text}</p>
+            </div>
+          ))}
+        </div>
+
+        {!status && statusQuery.isLoading ? (
+          <p className="text-xs text-slate-400">Checking Google connection…</p>
+        ) : status && (!status.configured || !status.schema_ready) ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+            <div className="flex gap-2">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600" />
+              <div>
+                <p className="text-xs font-bold text-amber-900">Activation is safely paused</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-amber-800">
+                  {!status.schema_ready
+                    ? 'The integration code is ready, but its new empty sync tables have not been added to the production database.'
+                    : `The Vercel environment still needs: ${status.missing_configuration.join(', ')}.`}
+                  {' '}Your existing goals, tasks, and schedule have not been changed.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : status?.connected ? (
+          <>
+            {!status.initial_sync_complete && preview ? (
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4">
+                <div className="flex items-start gap-2">
+                  <ShieldCheck size={17} className="mt-0.5 shrink-0 text-indigo-600" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-indigo-950">First-sync preview — nothing has been copied yet</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {[
+                        [`${preview.goals_as_task_lists}`, 'goal lists'],
+                        [`${preview.tasks}`, 'tasks'],
+                        [`${preview.timed_schedule_blocks}`, 'focus blocks'],
+                        [`${preview.meetings}`, 'meetings'],
+                        [`${preview.all_day_tasks}`, 'all-day tasks'],
+                        [`${preview.repeating_blocks_skipped}`, 'repeaters skipped'],
+                      ].map(([value, label]) => (
+                        <div key={label} className="rounded-lg bg-white px-3 py-2 text-center shadow-sm">
+                          <p className="text-lg font-black text-indigo-700">{value}</p>
+                          <p className="text-[10px] text-slate-500">{label}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-[11px] leading-relaxed text-indigo-800">
+                      First sync creates dedicated Amina lists and one Amina Schedule calendar. It never deletes existing Google or Amina data.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => sync(true)}
+                      disabled={busy !== null}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-indigo-500 disabled:opacity-40"
+                    >
+                      <RefreshCw size={12} className={busy === 'sync' ? 'animate-spin' : ''} />
+                      Start first sync
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-slate-200 p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">{status.calendar_name || 'Amina Schedule'}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      {status.sync_running ? 'Syncing now…' : lastSync ? `Last synced ${lastSync}` : 'Ready for the first update'}
+                      {status.conflicts ? ` · ${status.conflicts} conflict${status.conflicts === 1 ? '' : 's'} need review` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => sync(false)}
+                    disabled={busy !== null || status.sync_running}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-blue-500 disabled:opacity-40"
+                  >
+                    <RefreshCw size={12} className={busy === 'sync' || status.sync_running ? 'animate-spin' : ''} />
+                    Sync now
+                  </button>
+                </div>
+                {status.last_error ? <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700">{status.last_error}</p> : null}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={Boolean(status.auto_sync_enabled)}
+                  onChange={toggleAutoSync}
+                  disabled={busy !== null || !status.initial_sync_complete}
+                  className="h-4 w-4 accent-blue-600"
+                />
+                Live sync while Amina is open
+              </label>
+              <button type="button" onClick={disconnect} disabled={busy !== null} className="text-[11px] font-semibold text-slate-400 hover:text-red-600 disabled:opacity-40">
+                Disconnect Google
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3.5">
+            <div>
+              <p className="text-xs font-bold text-slate-800">Connect your Google account</p>
+              <p className="mt-0.5 text-[11px] text-slate-500">You will approve Google Tasks and Amina’s own secondary calendar.</p>
+            </div>
+            <button
+              type="button"
+              onClick={connect}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-blue-500 disabled:opacity-40"
+            >
+              {busy === 'connect' ? <RefreshCw size={12} className="animate-spin" /> : <Calendar size={12} />}
+              Connect Google
+            </button>
+          </div>
+        )}
+
+        <p className="text-[10px] leading-relaxed text-slate-400">
+          Google Calendar supports fast change notifications. Google Tasks currently requires polling, so Amina checks about every two minutes while open and immediately after your Amina edits. Google deletions never delete Amina data automatically.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsView() {
   const {
     triggerToast,
@@ -912,6 +1207,9 @@ export function SettingsView() {
 
         {/* Schedule Day Overrides */}
         <ScheduleOverridesSection onSave={(msg, type) => triggerToast(msg, type ?? 'success')} />
+
+        {/* Google Tasks + Calendar */}
+        <GoogleWorkspaceSection />
 
         {/* Copilot Metadata */}
         <div className="bg-white border border-gray-200 p-5 rounded-xl shadow-sm">

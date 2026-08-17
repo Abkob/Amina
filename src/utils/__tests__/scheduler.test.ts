@@ -66,6 +66,17 @@ describe('computeSchedule — feasibility status', () => {
     expect(result.gap_minutes).toBeGreaterThan(0);
   });
 
+  it('explains deadline shortfall instead of claiming zero shortage when later capacity exists', () => {
+    const result = computeSchedule(makeInput({
+      tasks: [{ id: 'early', title: 'Early overload', estimated_minutes: 960, due_date: FIXED_TODAY, priority: 'high', blocker_ids: [] }],
+      horizon_days: 7,
+    }));
+    expect(result.status).toBe('impossible');
+    expect(result.gap_minutes).toBeGreaterThan(0);
+    expect(result.impossible_reason).toContain('480 minutes unfinished');
+    expect(result.impossible_reason).not.toContain('Short by 0 minutes');
+  });
+
   it('gap_minutes is negative when overflow exists', () => {
     const result = computeSchedule(makeInput({
       tasks: [{ id: 't1', title: 'Huge task', estimated_minutes: 99999, due_date: daysFromNow(1), priority: 'high', blocker_ids: [] }],

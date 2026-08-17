@@ -16,14 +16,7 @@ import { addTaskNote, deleteTaskNote, toggleTask, touchTask } from '../db/querie
 import { addNoteFile, deleteNoteFile } from '../db/queries/noteFiles';
 import { formatTaskTime, getRolledUpActualTime, getRolledUpTime } from '../utils/taskTime';
 import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
-
-const TIMER_KEY = 'marina-work-active-timer';
-
-type ActiveTimer = {
-  taskId: string;
-  startedAt: string;
-  notes: string;
-};
+import { readActiveWorkTimer, writeActiveWorkTimer, type ActiveWorkTimer } from '../utils/workTimer';
 
 function formatStopwatch(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -126,14 +119,7 @@ export function WorkView() {
   const createSession = useCreateWorkSession();
   const deleteSession = useDeleteWorkSession();
 
-  const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(() => {
-    try {
-      const raw = localStorage.getItem(TIMER_KEY);
-      return raw ? JSON.parse(raw) as ActiveTimer : null;
-    } catch {
-      return null;
-    }
-  });
+  const [activeTimer, setActiveTimer] = useState<ActiveWorkTimer | null>(readActiveWorkTimer);
   const [nowMs, setNowMs] = useState(Date.now());
   const [timerNotes, setTimerNotes] = useState(activeTimer?.notes ?? '');
   const [manualMinutes, setManualMinutes] = useState('');
@@ -146,8 +132,7 @@ export function WorkView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (activeTimer) localStorage.setItem(TIMER_KEY, JSON.stringify(activeTimer));
-    else localStorage.removeItem(TIMER_KEY);
+    writeActiveWorkTimer(activeTimer);
   }, [activeTimer]);
 
   useEffect(() => {

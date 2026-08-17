@@ -12,6 +12,8 @@ CC-Session-Logs/
 EXAMPLE IMAGES/
 glbassets/
 Gerber_PCB2_2026-06-13/
+gerber_to_dxf.py
+recreate_paper_sensor.py
 *.db
 *.db-shm
 *.db-wal

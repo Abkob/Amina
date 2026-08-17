@@ -36,6 +36,7 @@ import { usageRouter } from './routes/usage.js';
 import { authRouter } from './routes/auth.js';
 import { cronRouter } from './routes/cron.js';
 import { uploadsRouter } from './routes/uploads.js';
+import { googleWorkspaceOauthRouter, googleWorkspaceRouter } from './routes/google-workspace.js';
 import { EMBED_DIMENSION, EMBED_MODEL } from './embeddingProvider.js';
 import { getProviderSummary, isNvidiaChatModel } from './config/providers.js';
 import { scheduleObsidianVaultSync, shouldSyncObsidianVaultForRequest } from './services/obsidianVaultSync.js';
@@ -73,6 +74,7 @@ export function createApp(): express.Express {
   // direct-to-Blob tokens, so leave a small margin for JSON/API overhead.
   app.use(express.json({ limit: isVercelRuntime ? '4mb' : '10mb' }));
   app.use('/api/auth', authRouter);
+  app.use('/api/google/oauth', googleWorkspaceOauthRouter);
   // The Blob completion callback has no browser cookie. This router performs
   // authentication internally for token issuance and lets the SDK validate callbacks.
   app.use('/api/uploads', uploadsRouter);
@@ -124,6 +126,7 @@ export function createApp(): express.Express {
   app.use('/api/research', researchRouter);
   app.use('/api/orchestrator', orchestratorRouter);
   app.use('/api/usage', usageRouter);
+  app.use('/api/google', googleWorkspaceRouter);
 
   // POST /api/entity-summaries/backfill — generate deterministic planning summaries for all entities missing them
   app.post('/api/entity-summaries/backfill', async (_req, res) => {
@@ -566,6 +569,7 @@ export function createApp(): express.Express {
       'ai_action_proposals', 'resource_chunks', 'schedule_day_overrides',
       'chat_sessions', 'chat_messages', 'schema_migrations',
       'topics', 'topic_aliases', 'topic_memberships', 'suggestion_runs',
+      'google_sync_connections', 'google_sync_links',
     ];
     const counts: Record<string, number> = {};
     await Promise.all(

@@ -6,7 +6,7 @@ import {
 } from '@dnd-kit/core';
 import {
   Sparkles, Calendar, AlertTriangle, RefreshCw, ChevronLeft, ChevronRight, ChevronDown,
-  GripVertical, Check, Eye, EyeOff, BarChart2, PanelLeftOpen, PanelRightClose, Plus,
+  GripVertical, Check, Eye, EyeOff, BarChart2, PanelLeftOpen, PanelRightClose, Play, Plus,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import {
@@ -22,7 +22,7 @@ import {
 } from '../utils/calendar';
 import { autofillFromTask } from '../utils/eventAutofill';
 import { suggestionsFromPlan } from '../utils/planAssist';
-import { TaskTreeDrawer, type OneOffTaskDraft } from './schedule/TaskTreeDrawer';
+import { OneOffTaskComposer, TaskTreeDrawer, type CalendarTaskDraft } from './schedule/TaskTreeDrawer';
 import { PlanAssistPanel } from './schedule/PlanAssistPanel';
 import { DayFlowRiver } from './schedule/DayFlowRiver';
 import {
@@ -32,6 +32,8 @@ import {
 import { EventComposer, type ComposerSeed } from './schedule/EventComposer';
 import { GanttView } from './GanttView';
 import { FeasibilityReport } from './schedule/FeasibilityReport';
+import { ModalFrame } from '../components/ModalFrame';
+import { readActiveWorkTimer, writeActiveWorkTimer } from '../utils/workTimer';
 
 /**
  * Schedule workspace, Google-Calendar style: a week time-grid carrying
@@ -129,8 +131,9 @@ function fmtWeekRange(weekStart: string): string {
 // ── Draggable task chip ───────────────────────────────────────────────────────
 
 type ScheduleChipTask = Pick<DBTask, 'id' | 'title' | 'estimated_minutes' | 'priority' | 'goal_id'>;
+type FocusTaskRef = Pick<DBTask, 'id' | 'title'>;
 
-function TaskChip({ task, ghost = false }: { task: ScheduleChipTask; ghost?: boolean }) {
+function TaskChip({ task, ghost = false, onStartFocus }: { task: ScheduleChipTask; ghost?: boolean; onStartFocus?: (task: FocusTaskRef) => void }) {
   const { navigateToGoal, setTaskSpotlight, triggerToast } = useAppStore();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id, disabled: ghost });
 
@@ -148,19 +151,41 @@ function TaskChip({ task, ghost = false }: { task: ScheduleChipTask; ghost?: boo
   return (
     <div
       ref={setNodeRef}
-      {...listeners}
-      {...attributes}
       onClick={openGoalFromAltClick}
-      className={`flex h-5 items-center gap-1 rounded border px-1.5 text-[10px] leading-none select-none
+      className={`flex h-5 items-center gap-1 rounded border px-1 text-[10px] leading-none select-none
         ${ghost
           ? 'bg-indigo-50/60 text-indigo-400 border-dashed border-indigo-300'
-          : 'bg-[#EEF2FF] text-[#4648d4] border-[#c0c1ff]/40 cursor-grab active:cursor-grabbing hover:brightness-95'}
+          : 'bg-[#EEF2FF] text-[#4648d4] border-[#c0c1ff]/40 hover:brightness-95'}
         ${isDragging ? 'opacity-30' : ''}`}
       title={ghost ? `${task.title} (draft preview)` : `${task.title} — drag to a day, onto a time slot, or back to the backlog`}
     >
-      {!ghost && <GripVertical size={9} className="shrink-0 opacity-50" />}
+      {!ghost && (
+        <button
+          type="button"
+          {...listeners}
+          {...attributes}
+          onClick={event => event.stopPropagation()}
+          className="cursor-grab rounded p-0.5 opacity-50 hover:bg-white/70 hover:opacity-100 active:cursor-grabbing"
+          aria-label={`Drag ${task.title}`}
+          title="Drag to another day or into the hourly grid"
+        >
+          <GripVertical size={9} />
+        </button>
+      )}
       <span className="min-w-0 flex-1 truncate">{task.title}</span>
       {task.estimated_minutes ? <span className="shrink-0 opacity-60">{fmtMins(task.estimated_minutes)}</span> : null}
+      {!ghost && onStartFocus && (
+        <button
+          type="button"
+          onPointerDown={event => event.stopPropagation()}
+          onClick={event => { event.preventDefault(); event.stopPropagation(); onStartFocus(task); }}
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[#4648d4]/55 hover:bg-white hover:text-[#4648d4]"
+          aria-label={`Start focus timer for ${task.title}`}
+          title="Start focus and record actual work time"
+        >
+          <Play size={9} fill="currentColor" />
+        </button>
+      )}
     </div>
   );
 }
@@ -393,12 +418,13 @@ type ScheduleTaskTreeItem = Pick<DBTask, 'id' | 'title' | 'goal_id' | 'parent_ta
   position?: number;
 };
 
-function MiniScheduleTaskTree({ tasks, allTasks, tone, isBlocked, onOpenTask }: {
+function MiniScheduleTaskTree({ tasks, allTasks, tone, isBlocked, onOpenTask, onStartFocus }: {
   tasks: ScheduleTaskTreeItem[];
   allTasks: DBTask[];
   tone: 'due' | 'planned';
   isBlocked?: (taskId: string) => boolean;
   onOpenTask: (task: { id: string; title: string; goal_id: string | null }) => void;
+  onStartFocus?: (task: FocusTaskRef) => void;
 }) {
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const targetIds = useMemo(() => new Set(tasks.map(t => t.id)), [tasks]);
@@ -498,6 +524,17 @@ function MiniScheduleTaskTree({ tasks, allTasks, tone, isBlocked, onOpenTask }: 
           }`}>
             {label}
           </span>
+          {direct && onStartFocus && (
+            <button
+              type="button"
+              onClick={() => onStartFocus(task)}
+              className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[#4648d4]/55 hover:bg-white hover:text-[#4648d4]"
+              aria-label={`Start focus timer for ${task.title}`}
+              title="Start focus and record actual work time"
+            >
+              <Play size={9} fill="currentColor" />
+            </button>
+          )}
           {direct && task.estimated_minutes ? (
             <span className="mt-0.5 shrink-0 font-mono text-[8px] opacity-60">{fmtMins(task.estimated_minutes)}</span>
           ) : null}
@@ -519,7 +556,7 @@ function MiniScheduleTaskTree({ tasks, allTasks, tone, isBlocked, onOpenTask }: 
   );
 }
 
-function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTasks, isBlocked }: {
+function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTasks, isBlocked, onAddTask, onStartFocus }: {
   date: string;
   day: ScheduleDay | undefined;
   startTasks: DBTask[];
@@ -527,6 +564,8 @@ function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTas
   taskLookup: Record<string, ScheduleTaskInfo>;
   allTasks: DBTask[];
   isBlocked: (taskId: string) => boolean;
+  onAddTask: (date: string) => void;
+  onStartFocus: (task: FocusTaskRef) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `day:${date}` });
   const { navigateToGoal, setTaskSpotlight, setDeadlineSpotlight, triggerToast } = useAppStore();
@@ -590,9 +629,18 @@ function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTas
   return (
     <div
       ref={setNodeRef}
-      className={`relative h-full overflow-visible px-1 py-1 transition-colors ${isOver ? 'bg-indigo-50/70' : ''}`}
+      className={`group/day relative h-full overflow-visible px-1 py-1 transition-colors ${isOver ? 'bg-indigo-50/70' : ''}`}
     >
-      <div className="flex h-full min-h-0 flex-col gap-1 overflow-hidden">
+      <button
+        type="button"
+        onClick={event => { event.stopPropagation(); onAddTask(date); }}
+        className="absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-md border border-indigo-100 bg-white text-indigo-300 opacity-100 shadow-sm transition-all hover:border-indigo-300 hover:text-[#4648d4] focus:opacity-100 sm:opacity-0 sm:group-hover/day:opacity-100"
+        aria-label={`Add all-day task on ${date}`}
+        title="Add an all-day task"
+      >
+        <Plus size={11} />
+      </button>
+      <div className="flex h-full min-h-0 flex-col gap-1 overflow-hidden pr-6">
         {day?.override && (
           <p className="h-4 truncate font-mono text-[8px] leading-4 text-amber-600" title={day.override.note ?? undefined}>
             {fmtMins(day.override.available_minutes)} free
@@ -627,7 +675,7 @@ function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTas
           </button>
         )}
 
-        {shownStartTasks.map(t => <TaskChip key={t.id} task={t} />)}
+        {shownStartTasks.map(t => <TaskChip key={t.id} task={t} onStartFocus={onStartFocus} />)}
 
         {hiddenCount > 0 && (
           <button
@@ -639,7 +687,15 @@ function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTas
           </button>
         )}
 
-        {!hasContent && <div className="h-5" />}
+        {!hasContent && (
+          <button
+            type="button"
+            onClick={() => onAddTask(date)}
+            className="flex h-6 w-full items-center justify-center gap-1 rounded-md border border-dashed border-indigo-100 text-[9px] font-semibold text-indigo-300 hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-[#4648d4]"
+          >
+            <Plus size={10} /> task
+          </button>
+        )}
       </div>
 
       {open && (
@@ -690,6 +746,7 @@ function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTas
                   tone="due"
                   isBlocked={isBlocked}
                   onOpenTask={openTask}
+                  onStartFocus={onStartFocus}
                 />
               </div>
             )}
@@ -704,6 +761,7 @@ function CompactAllDayCell({ date, day, startTasks, ghostIds, taskLookup, allTas
                       allTasks={allTasks}
                       tone="planned"
                       onOpenTask={openTask}
+                      onStartFocus={onStartFocus}
                     />
                   )}
                   {ghostIds.map(id => (
@@ -1126,7 +1184,7 @@ function WeeklyParentBreakdown({ weekDays, tasks, goals, placedEvents, linksByEv
 }
 
 export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 'timeline' } = {}) {
-  const { triggerToast } = useAppStore();
+  const { triggerToast, setCurrentTab, setWorkTaskId } = useAppStore();
   const qc = useQueryClient();
   const invalidate = useInvalidate();
   const todayStr = fmtYMD(new Date());
@@ -1144,6 +1202,7 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
   const [dragTask, setDragTask] = useState<DBTask | null>(null);
   const [innerPage, setInnerPage] = useState<'plan' | 'timeline' | 'feasibility'>(initialPage);
   const [composer, setComposer] = useState<ComposerSeed | null>(null);
+  const [taskComposerDate, setTaskComposerDate] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [rightPanel, setRightPanel] = useState<'assist' | 'drafts' | null>(null);
   const [dayFlowOrders, setDayFlowOrders] = useState<Record<string, string[]>>(() => {
@@ -1490,11 +1549,12 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
     onError: (e: Error) => triggerToast(e.message, 'error'),
   });
 
-  const createOneOffTask = async ({ title, estimatedMinutes, dueDate }: OneOffTaskDraft) => {
+  const createCalendarTask = async ({ title, goalId, parentTaskId, startDate, estimatedMinutes, dueDate }: CalendarTaskDraft) => {
     await apiPost<{ id: string }>('/api/tasks', {
       title,
-      goal_id: null,
-      parent_task_id: null,
+      goal_id: goalId,
+      parent_task_id: parentTaskId,
+      start_date: startDate,
       estimated_minutes: estimatedMinutes,
       due_date: dueDate,
       priority: 'medium',
@@ -1505,7 +1565,28 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
       qc.invalidateQueries({ queryKey: ['tasks'] }),
       qc.invalidateQueries({ queryKey: ['schedule-preview'] }),
     ]);
-    triggerToast(`One-off task "${title}" created.`, 'success');
+    const destination = parentTaskId ? 'subtask' : goalId ? 'goal task' : 'one-off task';
+    triggerToast(`${destination[0].toUpperCase()}${destination.slice(1)} "${title}" created${startDate ? ' in the all-day row' : ''}.`, 'success');
+  };
+
+  const startFocusTimer = (task: FocusTaskRef) => {
+    const active = readActiveWorkTimer();
+    if (active) {
+      const activeTask = allTasks.find(item => item.id === active.taskId);
+      setWorkTaskId(active.taskId);
+      setCurrentTab('Work');
+      triggerToast(`A timer is already running${activeTask ? ` for "${activeTask.title}"` : ''}.`, 'info');
+      return;
+    }
+    writeActiveWorkTimer({ taskId: task.id, startedAt: new Date().toISOString(), notes: '' });
+    setWorkTaskId(task.id);
+    setCurrentTab('Work');
+    triggerToast(`Focus started for "${task.title}".`, 'success');
+    apiPatch(`/api/tasks/${task.id}`, { status: 'in_progress' })
+      .then(() => qc.invalidateQueries({ queryKey: ['tasks'] }))
+      .catch(() => {
+        // The timer still records work if promoting task status fails.
+      });
   };
 
   /** Apply every Plan-assist suggestion in one go. */
@@ -1817,7 +1898,7 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
                   draggableIds={draggableIds}
                   scheduledDates={scheduledDates}
                   onCollapse={() => setDrawerOpen(false)}
-                  onCreateOneOff={createOneOffTask}
+                  onCreateTask={createCalendarTask}
                 />
               )}
 
@@ -1844,6 +1925,8 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
                       taskLookup={taskLookup}
                       allTasks={allTasks}
                       isBlocked={taskId => blockDates.has(`${taskId}|${date}`)}
+                      onAddTask={setTaskComposerDate}
+                      onStartFocus={task => void startFocusTimer(task)}
                     />
                   )}
                   onSlotClick={(date, hour) => openCreate(date, hour)}
@@ -1874,7 +1957,7 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
                 />
                 <div className="mt-1.5 flex items-center gap-2">
                   <p className="font-mono text-[9px] uppercase tracking-wider text-gray-300">
-                    Click an empty slot to add a block · drag blocks to move, pull their bottom edge to resize
+                    + in all-day adds a task · drag a task onto an hour for a Focus block · Play records actual work
                   </p>
                 </div>
                 {draftPreview && (
@@ -1917,6 +2000,28 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
           </div>
         )}
       </DragOverlay>
+
+      {taskComposerDate && (
+        <ModalFrame
+          onClose={() => setTaskComposerDate(null)}
+          titleId="calendar-task-composer-title"
+          overlayClassName="bg-black/40"
+          className="w-full max-w-md overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl"
+        >
+          <h2 id="calendar-task-composer-title" className="sr-only">Add all-day calendar task</h2>
+          <OneOffTaskComposer
+            variant="modal"
+            tasks={allTasks}
+            goals={goals}
+            defaultStartDate={taskComposerDate}
+            onCancel={() => setTaskComposerDate(null)}
+            onCreate={async draft => {
+              await createCalendarTask(draft);
+              setTaskComposerDate(null);
+            }}
+          />
+        </ModalFrame>
+      )}
 
       {composer && (
         <EventComposer

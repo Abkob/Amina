@@ -45,6 +45,13 @@ import { findExplicitTaskMatches } from '../services/contextTargeting.js';
 import { synchronizedTaskDeadlineUpdates } from '../utils/taskDeadline.js';
 import { runInBackground } from '../utils/background.js';
 import { simpleConversationReply } from '../services/conversationFastPath.js';
+import {
+  buildTaskTimelineResolver,
+  type GoalTimelineRow,
+  type MilestoneTimelineRow,
+  type TaskTimelineRow,
+  type TimelineSource,
+} from '../services/taskTimeline.js';
 
 const router = Router();
 
@@ -98,6 +105,11 @@ type TaskDeadlineRow = {
   id: string;
   parent_task_id: string | null;
   due_date: string | null;
+  goal_id?: string | null;
+  milestone_id?: string | null;
+  start_date?: string | null;
+  target_date?: string | null;
+  hard_deadline?: string | null;
 };
 
 function buildTaskDueDateResolver(rows: TaskDeadlineRow[]) {
@@ -2752,12 +2764,15 @@ router.get('/schedule-preview', async (req, res) => {
     { rows: allSchedulerTasks },
     { rows: blockerEdges },
     { rows: taskDeadlineRows },
+    { rows: goalTimelineRows },
+    { rows: milestoneTimelineRows },
     { rows: schedulerMeetings },
     { rows: schedulerOverrides },
     { rows: previewPlannedRows },
   ] = await Promise.all([
     query(
-      `SELECT id, title, goal_id, milestone_id, parent_task_id, due_date, estimated_minutes, priority, status
+      `SELECT id, title, goal_id, milestone_id, parent_task_id, start_date, due_date,
+              target_date, hard_deadline, estimated_minutes, priority, status
        FROM tasks WHERE completed=false ORDER BY due_date ASC NULLS LAST`,
     ),
     query(
@@ -2776,25 +2791,36 @@ router.get('/schedule-preview', async (req, res) => {
     query(`SELECT id, action_type, action_payload, explanation, confidence, source_type, source_id FROM ai_action_proposals WHERE status='pending'`),
     query(`SELECT date, available_minutes, note FROM schedule_day_overrides WHERE date BETWEEN $1 AND $2`, [displayFromStr, displayToStr]),
     query(
-      `SELECT t.id, t.title, t.goal_id, t.parent_task_id, t.estimated_minutes, t.due_date, t.priority,
+      `SELECT t.id, t.title, t.goal_id, g.title AS goal_title, t.milestone_id, t.parent_task_id,
+              t.estimated_minutes, t.start_date, t.due_date, t.target_date, t.hard_deadline, t.priority,
               COALESCE(SUM(ws.minutes), 0) as logged_minutes
        FROM tasks t
+       LEFT JOIN goals g ON g.id = t.goal_id
+       LEFT JOIN goal_milestones gm ON gm.id = t.milestone_id
        LEFT JOIN work_sessions ws ON ws.task_id = t.id AND ws.minutes IS NOT NULL
        WHERE t.completed = false
          AND COALESCE(t.scheduling_enabled, true) = true
+         AND COALESCE(g.scheduling_enabled, true) = true
+         AND COALESCE(gm.scheduling_enabled, true) = true
          AND t.kind <> 'critical_path'
          AND NOT EXISTS (
            SELECT 1 FROM tasks child
            WHERE child.parent_task_id = t.id
              AND child.completed = false
          )
-       GROUP BY t.id, t.title, t.goal_id, t.parent_task_id, t.estimated_minutes, t.due_date, t.priority`,
+       GROUP BY t.id, t.title, t.goal_id, g.title, t.milestone_id, t.parent_task_id,
+                t.estimated_minutes, t.start_date, t.due_date, t.target_date, t.hard_deadline, t.priority`,
     ),
     query(
       `SELECT source_id as blocker_id, target_id as task_id
        FROM edges WHERE relationship='blocks' AND source_type='task' AND target_type='task'`,
     ),
-    query(`SELECT id, parent_task_id, due_date FROM tasks WHERE completed=false`),
+    query(
+      `SELECT id, parent_task_id, goal_id, milestone_id, start_date, due_date, target_date, hard_deadline
+       FROM tasks WHERE completed=false`,
+    ),
+    query(`SELECT id, start_date, target_date, hard_deadline, deadline FROM goals`),
+    query(`SELECT id, start_date, due_date, hard_deadline FROM goal_milestones`),
     query(
       `SELECT id, title, goal_id, scheduled_at, duration_minutes, location
        FROM meetings WHERE DATE(scheduled_at::timestamp) BETWEEN $1 AND $2 ORDER BY scheduled_at ASC`,
@@ -2811,14 +2837,21 @@ router.get('/schedule-preview', async (req, res) => {
       [todayStr, schedulerEndStr],
     ),
   ]);
-  const resolveTaskDueDate = buildTaskDueDateResolver(taskDeadlineRows as TaskDeadlineRow[]);
+  const resolveTaskTimeline = buildTaskTimelineResolver(
+    taskDeadlineRows as unknown as TaskTimelineRow[],
+    goalTimelineRows as unknown as GoalTimelineRow[],
+    milestoneTimelineRows as unknown as MilestoneTimelineRow[],
+  );
   const previewTasks = (tasks as Record<string, unknown>[])
     .map(t => {
-      const dueDate = resolveTaskDueDate(t);
+      const timeline = resolveTaskTimeline(t as Partial<TaskTimelineRow> & { id: unknown });
       return {
         ...t,
-        due_date: dueDate,
-        inherited_due_date: !t.due_date && Boolean(dueDate),
+        start_date: timeline.start_date,
+        due_date: timeline.due_date,
+        start_date_source: timeline.start_source,
+        due_date_source: timeline.due_source,
+        inherited_due_date: timeline.due_source?.scope !== 'task' && Boolean(timeline.due_date),
       };
     })
     .filter(t => typeof t.due_date === 'string' && t.due_date >= displayFromStr && t.due_date <= displayToStr)
@@ -2873,7 +2906,9 @@ router.get('/schedule-preview', async (req, res) => {
     return committed;
   };
 
-  const schedulerInputTasks = (allSchedulerTasks as Record<string, unknown>[]).map(t => ({
+  const schedulerInputTasks = (allSchedulerTasks as Record<string, unknown>[]).map(t => {
+    const timeline = resolveTaskTimeline(t as Partial<TaskTimelineRow> & { id: unknown });
+    return ({
       id: t.id as string,
       title: t.title as string,
       // Canonical remaining minutes: estimate minus logged work. NULL estimate
@@ -2884,10 +2919,15 @@ router.get('/schedule-preview', async (req, res) => {
         0,
         Number(t.estimated_minutes ?? 0) - Number(t.logged_minutes ?? 0) - previewCommittedMinutes(String(t.id)),
       ),
-      due_date: resolveTaskDueDate(t),
+      has_estimate: Number(t.estimated_minutes ?? 0) > 0,
+      start_date: timeline.start_date,
+      due_date: timeline.due_date,
+      start_date_source: timeline.start_source,
+      due_date_source: timeline.due_source,
       priority: (t.priority as string) ?? 'medium',
       blocker_ids: blockerMap.get(t.id as string) ?? [],
-    }));
+    });
+  });
   const schedulerResult = computeSchedule({
     tasks: schedulerInputTasks,
     meetings: [
@@ -2965,12 +3005,16 @@ router.get('/schedule-preview', async (req, res) => {
   const taskLookup: Record<string, {
     title: string;
     goal_id: string | null;
+    goal_title: string | null;
     priority: string;
     estimated_minutes: number;
     logged_minutes: number;
     committed_minutes: number;
     remaining_minutes: number;
+    start_date: string | null;
     due_date: string | null;
+    start_date_source: TimelineSource | null;
+    due_date_source: TimelineSource | null;
   }> = {};
   for (const t of allSchedulerTasks as Record<string, unknown>[]) {
     const id = t.id as string;
@@ -2978,12 +3022,16 @@ router.get('/schedule-preview', async (req, res) => {
     taskLookup[t.id as string] = {
       title: t.title as string,
       goal_id: (t as Record<string, unknown>).goal_id as string | null ?? null,
+      goal_title: (t.goal_title as string | null) ?? null,
       priority: t.priority as string ?? 'medium',
       estimated_minutes: Number(t.estimated_minutes ?? 0),
       logged_minutes: Number(t.logged_minutes ?? 0),
       committed_minutes: committedMinutes,
       remaining_minutes: schedulerInputById.get(id)?.estimated_minutes ?? 0,
+      start_date: schedulerInputById.get(id)?.start_date ?? null,
       due_date: schedulerInputById.get(id)?.due_date ?? null,
+      start_date_source: schedulerInputById.get(id)?.start_date_source ?? null,
+      due_date_source: schedulerInputById.get(id)?.due_date_source ?? null,
     };
   }
 
@@ -3171,10 +3219,22 @@ async function loadSchedulerInputs(horizonDays: number) {
   end.setDate(end.getDate() + horizonDays - 1);
   const endStr = fmtYMD(end);
 
-  const [{ rows: schedTasks }, { rows: meetings }, { rows: overrides }, { rows: blockerEdges }, { rows: taskDeadlineRows }, { rows: plannedRows }] = await Promise.all([
+  const [
+    { rows: schedTasks },
+    { rows: meetings },
+    { rows: overrides },
+    { rows: blockerEdges },
+    { rows: taskDeadlineRows },
+    { rows: goalTimelineRows },
+    { rows: milestoneTimelineRows },
+    { rows: plannedRows },
+  ] = await Promise.all([
     query(
-      `SELECT t.id, t.title, t.goal_id, g.title AS goal_title, t.parent_task_id, t.estimated_minutes, t.due_date, t.start_date, t.priority,
+      `SELECT t.id, t.title, t.goal_id, g.title AS goal_title, t.milestone_id, t.parent_task_id,
+              t.estimated_minutes, t.due_date, t.start_date, t.priority,
               t.kind, t.target_date, t.hard_deadline, t.scheduling_enabled,
+              g.scheduling_enabled AS goal_scheduling_enabled,
+              gm.scheduling_enabled AS milestone_scheduling_enabled,
               COUNT(child.id)::int AS child_count,
               COALESCE((
                 SELECT SUM(ws.minutes)
@@ -3183,15 +3243,23 @@ async function loadSchedulerInputs(horizonDays: number) {
               ), 0) as logged_minutes
        FROM tasks t
        LEFT JOIN goals g ON g.id = t.goal_id
+       LEFT JOIN goal_milestones gm ON gm.id = t.milestone_id
        LEFT JOIN tasks child ON child.parent_task_id = t.id AND child.completed = false
        WHERE t.completed = false
-       GROUP BY t.id, t.title, t.goal_id, g.title, t.parent_task_id, t.estimated_minutes, t.due_date, t.start_date, t.priority,
-                t.kind, t.target_date, t.hard_deadline, t.scheduling_enabled`,
+       GROUP BY t.id, t.title, t.goal_id, g.title, t.milestone_id, t.parent_task_id,
+                t.estimated_minutes, t.due_date, t.start_date, t.priority,
+                t.kind, t.target_date, t.hard_deadline, t.scheduling_enabled,
+                g.scheduling_enabled, gm.scheduling_enabled`,
     ),
     query(`SELECT scheduled_at, duration_minutes FROM meetings WHERE DATE(scheduled_at::timestamp) BETWEEN $1 AND $2`, [todayStr, endStr]),
     query(`SELECT date, available_minutes FROM schedule_day_overrides WHERE date BETWEEN $1 AND $2`, [todayStr, endStr]),
     query(`SELECT source_id as blocker_id, target_id as task_id FROM edges WHERE relationship='blocks' AND source_type='task' AND target_type='task'`),
-    query(`SELECT id, parent_task_id, due_date FROM tasks WHERE completed=false`),
+    query(
+      `SELECT id, parent_task_id, goal_id, milestone_id, start_date, due_date, target_date, hard_deadline
+       FROM tasks WHERE completed=false`,
+    ),
+    query(`SELECT id, start_date, target_date, hard_deadline, deadline FROM goals`),
+    query(`SELECT id, start_date, due_date, hard_deadline FROM goal_milestones`),
     query(
       `SELECT etl.task_id,
               COALESCE(SUM(COALESCE(etl.planned_minutes, ROUND(e.duration_hours * 60))), 0)::int AS planned_minutes
@@ -3202,7 +3270,11 @@ async function loadSchedulerInputs(horizonDays: number) {
       [todayStr, endStr],
     ),
   ]);
-  const resolveTaskDueDate = buildTaskDueDateResolver(taskDeadlineRows as TaskDeadlineRow[]);
+  const resolveTaskTimeline = buildTaskTimelineResolver(
+    taskDeadlineRows as unknown as TaskTimelineRow[],
+    goalTimelineRows as unknown as GoalTimelineRow[],
+    milestoneTimelineRows as unknown as MilestoneTimelineRow[],
+  );
 
   const blockerMap = new Map<string, string[]>();
   for (const e of blockerEdges as { blocker_id: string; task_id: string }[]) {
@@ -3230,14 +3302,26 @@ async function loadSchedulerInputs(horizonDays: number) {
   //   scheduling is enabled, a duration estimate exists, and a real date
   //   (hard_deadline > target_date > legacy due_date) exists. Everything else
   //   stays logged/classified but untouched, with an explicit reason.
-  const tasks: Array<{ id: string; title: string; goal_id: string | null; goal_title: string | null; estimated_minutes: number; due_date: string | null; priority: string; blocker_ids: string[] }> = [];
+  const tasks: Array<{
+    id: string;
+    title: string;
+    goal_id: string | null;
+    goal_title: string | null;
+    estimated_minutes: number;
+    start_date: string | null;
+    due_date: string | null;
+    priority: string;
+    blocker_ids: string[];
+  }> = [];
   const notSchedulable: Array<{ task_id: string; title: string; goal_id: string | null; reasons: string[] }> = [];
   for (const t of schedTasks as Record<string, unknown>[]) {
     const remaining = Math.max(0, Number(t.estimated_minutes ?? 0) - Number(t.logged_minutes ?? 0) - committedMinutesFor(t));
-    const inheritedTaskDue = resolveTaskDueDate(t);
-    const effectiveDue = (t.hard_deadline as string | null) ?? (t.target_date as string | null) ?? inheritedTaskDue;
+    const timeline = resolveTaskTimeline(t as Partial<TaskTimelineRow> & { id: unknown });
+    const effectiveDue = timeline.due_date;
     const reasons: string[] = [];
     if (t.scheduling_enabled === false) reasons.push('scheduling disabled by user');
+    if (t.goal_scheduling_enabled === false) reasons.push('automatic scheduling disabled for goal');
+    if (t.milestone_scheduling_enabled === false) reasons.push('automatic scheduling disabled for milestone');
     if (Number(t.child_count ?? 0) > 0) reasons.push('parent task rolls up from child tasks');
     // A critical-path item with no active children is executable work. Only
     // parent rollups are excluded (already covered by child_count above).
@@ -3254,6 +3338,7 @@ async function loadSchedulerInputs(horizonDays: number) {
       goal_id: (t.goal_id as string | null) ?? null,
       goal_title: (t.goal_title as string | null) ?? null,
       estimated_minutes: remaining,
+      start_date: timeline.start_date,
       due_date: effectiveDue,
       priority: (t.priority as string) ?? 'medium',
       blocker_ids: blockerMap.get(t.id as string) ?? [],

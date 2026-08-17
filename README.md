@@ -162,6 +162,9 @@ Import the GitHub repository and deploy the safety branch as a preview first. Se
 - `DATABASE_URL`, `DATABASE_POOL_MAX=3`
 - `APP_URL` (use the current preview URL during preview testing)
 - `AMINA_ACCESS_PASSWORD`, `AMINA_SESSION_SECRET`
+- Optional Google sync: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+  `GOOGLE_REDIRECT_URI`, `GOOGLE_TOKEN_ENCRYPTION_KEY`,
+  `GOOGLE_OAUTH_STATE_SECRET`
 - `CRON_SECRET`
 - `BLOB_READ_WRITE_TOKEN`
 - `PROVIDER_MODE=hybrid`, `GEMINI_API_KEY`, `AMINA_MAIN_MODEL`
@@ -196,6 +199,27 @@ Perform these checks in order:
 9. Promote the verified preview to Production and change `APP_URL` to the production URL.
 
 Do not run `npm run migrate` for Vercel; that command is only for the old SQLite-to-PostgreSQL migration.
+
+### Google Tasks + Calendar sync
+
+The Settings page can connect one Google account. Amina creates one Google
+Tasks list per active goal, an `Amina · One-offs` list, and a dedicated
+`Amina Schedule` secondary calendar. The first sync always shows a count
+preview and requires explicit confirmation. Google deletions never delete
+Amina rows automatically; simultaneous edits are recorded as conflicts.
+
+In Google Cloud, enable the Google Tasks API and Google Calendar API, then
+create an OAuth 2.0 Web application with this redirect URI:
+
+```text
+https://your-project.vercel.app/api/google/oauth/callback
+```
+
+Use the least-privilege Tasks scope and `calendar.app.created`; Amina can only
+manage the secondary calendar it creates. Google Tasks does not provide push
+notifications, so the open app polls every two minutes and syncs immediately
+after Amina edits. Portable Amina backups intentionally omit Google OAuth
+tokens and remote mapping IDs; reconnect Google after a restore.
 
 ## Operational limits
 

@@ -465,12 +465,22 @@ export interface SchedulerResult {
 export interface ScheduleTaskInfo {
   title: string;
   goal_id: string | null;
+  goal_title: string | null;
   priority: string;
   estimated_minutes: number;
   logged_minutes: number;
   committed_minutes: number;
   remaining_minutes: number;
+  start_date: string | null;
   due_date: string | null;
+  start_date_source: ScheduleTimelineSource | null;
+  due_date_source: ScheduleTimelineSource | null;
+}
+
+export interface ScheduleTimelineSource {
+  scope: 'task' | 'parent_task' | 'milestone' | 'goal';
+  field: 'start_date' | 'hard_deadline' | 'target_date' | 'due_date' | 'deadline';
+  entity_id: string;
 }
 
 export function useSchedulePreview(from?: string, to?: string) {
@@ -492,6 +502,9 @@ export function useSchedulePreview(from?: string, to?: string) {
     }>(`/api/ai/schedule-preview${suffix}`),
     staleTime: STALE_SHORT,
     placeholderData: previous => previous,
+    // Goal/task planning edits invalidate this query. Always recalculate when
+    // the user returns to Schedule so stale feasibility math is never shown.
+    refetchOnMount: 'always',
     refetchOnWindowFocus: false,
   });
 }

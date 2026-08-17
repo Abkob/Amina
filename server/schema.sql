@@ -873,6 +873,49 @@ UPDATE tasks SET target_date = due_date
 -- Journal end-of-day rollup marker (capture wall → journal book)
 ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS source TEXT;
 
+-- M-023: Durable, encrypted Google Tasks + Calendar synchronization.
+-- The connection contains only encrypted OAuth refresh-token material and
+-- sync health. Remote IDs live in a generic link table so Amina's canonical
+-- goal/task/event rows stay provider-agnostic.
+CREATE TABLE IF NOT EXISTS google_sync_connections (
+  id                      TEXT PRIMARY KEY DEFAULT 'primary',
+  account_email           TEXT,
+  encrypted_refresh_token TEXT NOT NULL,
+  calendar_id             TEXT,
+  calendar_name           TEXT NOT NULL DEFAULT 'Amina Schedule',
+  initial_sync_complete   BOOLEAN NOT NULL DEFAULT false,
+  auto_sync_enabled       BOOLEAN NOT NULL DEFAULT true,
+  last_synced_at          TEXT,
+  last_error              TEXT,
+  sync_lease_until        TEXT,
+  created_at              TEXT NOT NULL,
+  updated_at              TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS google_sync_links (
+  id                     TEXT PRIMARY KEY,
+  connection_id          TEXT NOT NULL DEFAULT 'primary' REFERENCES google_sync_connections(id) ON DELETE CASCADE,
+  entity_type            TEXT NOT NULL CHECK (entity_type IN ('goal','task','event','meeting','task_day','system')),
+  entity_id              TEXT NOT NULL,
+  remote_type            TEXT NOT NULL CHECK (remote_type IN ('task_list','task','calendar_event')),
+  remote_container_id    TEXT,
+  remote_id              TEXT NOT NULL,
+  remote_etag            TEXT,
+  remote_updated_at      TEXT,
+  local_updated_at       TEXT,
+  sync_status            TEXT NOT NULL DEFAULT 'synced' CHECK (sync_status IN ('synced','conflict','remote_deleted','error')),
+  conflict_json          TEXT,
+  last_synced_at         TEXT NOT NULL,
+  created_at             TEXT NOT NULL,
+  updated_at             TEXT NOT NULL,
+  UNIQUE (connection_id, remote_type, entity_type, entity_id),
+  UNIQUE (connection_id, remote_type, remote_container_id, remote_id)
+);
+CREATE INDEX IF NOT EXISTS idx_google_sync_links_remote
+  ON google_sync_links(connection_id, remote_type, remote_container_id, remote_id);
+CREATE INDEX IF NOT EXISTS idx_google_sync_links_status
+  ON google_sync_links(connection_id, sync_status);
+
 -- Backfill existing migrations so the registry reflects current state
 INSERT INTO schema_migrations (name) VALUES
   ('M-001-rename-payload'),
@@ -897,5 +940,6 @@ INSERT INTO schema_migrations (name) VALUES
   ('M-018-semantic-topics'),
   ('M-019-chat-message-metadata'),
   ('M-020-journal-source-note'),
-  ('M-021-real-date-planning')
+  ('M-021-real-date-planning'),
+  ('M-023-google-workspace-sync')
 ON CONFLICT (name) DO NOTHING;

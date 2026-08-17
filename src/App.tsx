@@ -9,6 +9,7 @@ import { Sidebar }   from './components/Sidebar';
 import { Header }    from './components/Header';
 import { MobileNav } from './components/MobileNav';
 import { Toast }     from './components/Toast';
+import { GoogleSyncPulse } from './components/GoogleSyncPulse';
 
 // Views
 import { CaptureView }      from './views/CaptureView';
@@ -113,6 +114,9 @@ setMutationListener((_method, url) => {
   for (const key of keysToInvalidate) {
     queueInvalidation(key);
   }
+  if (!path.startsWith('/api/google/')) {
+    window.dispatchEvent(new CustomEvent('amina:data-mutated', { detail: { path } }));
+  }
 });
 
 function AppInner() {
@@ -170,6 +174,7 @@ function AppInner() {
 
   return (
     <div className="bg-canvas-bg text-on-surface font-sans antialiased min-h-screen flex selection:bg-[#EEF2FF] selection:text-black">
+      <GoogleSyncPulse />
       <Toast />
       <Sidebar />
       <Header />

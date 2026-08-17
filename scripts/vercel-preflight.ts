@@ -29,6 +29,15 @@ if (process.argv.includes('--env')) {
   add('Cron secret', value('CRON_SECRET').length >= 16, 'CRON_SECRET is at least 16 characters');
   add('Public app URL', /^https:\/\//i.test(value('APP_URL')), 'APP_URL uses HTTPS');
 
+  const googleNames = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'GOOGLE_TOKEN_ENCRYPTION_KEY', 'GOOGLE_OAUTH_STATE_SECRET'];
+  const googleRequested = googleNames.some(name => Boolean(value(name)));
+  if (googleRequested) {
+    add('Google OAuth client', Boolean(value('GOOGLE_CLIENT_ID') && value('GOOGLE_CLIENT_SECRET')), 'Google client ID and secret are both configured');
+    add('Google OAuth redirect', /^https:\/\/.+\/api\/google\/oauth\/callback$/i.test(value('GOOGLE_REDIRECT_URI')), 'GOOGLE_REDIRECT_URI is the production HTTPS callback');
+    add('Google token encryption', value('GOOGLE_TOKEN_ENCRYPTION_KEY').length >= 32, 'GOOGLE_TOKEN_ENCRYPTION_KEY is at least 32 characters');
+    add('Google OAuth state secret', value('GOOGLE_OAUTH_STATE_SECRET').length >= 32, 'GOOGLE_OAUTH_STATE_SECRET is at least 32 characters');
+  }
+
   const primaryModel = value('AMINA_MAIN_MODEL');
   const cloudModelOk = primaryModel.startsWith('gemini-')
     ? Boolean(value('GEMINI_API_KEY'))

@@ -5,6 +5,10 @@ export interface SchedulerTask {
   id: string;
   title: string;
   estimated_minutes: number;
+  /** Distinguishes a real estimate reduced to zero from a missing estimate. */
+  has_estimate?: boolean;
+  /** Earliest date on which this task may receive work. */
+  start_date?: string | null;
   due_date: string | null;
   priority: 'high' | 'medium' | 'low' | string;
   blocker_ids: string[];
@@ -202,7 +206,8 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
   const { tasks, meetings, prefs, overrides, horizon_days, start_date } = input;
 
   // Split off unestimated tasks — they can't be scheduled
-  const unestimated = tasks.filter(t => !t.estimated_minutes || t.estimated_minutes <= 0);
+  const covered = tasks.filter(t => (!t.estimated_minutes || t.estimated_minutes <= 0) && t.has_estimate === true);
+  const unestimated = tasks.filter(t => (!t.estimated_minutes || t.estimated_minutes <= 0) && t.has_estimate !== true);
   const estimable = tasks.filter(t => t.estimated_minutes > 0);
 
   // Build work-day capacity map
@@ -259,23 +264,28 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
   // Topological sort respects blocker ordering
   const sorted = topologicalSort(estimable);
 
-  const tasksFit: string[] = [];
+  const tasksFit: string[] = covered.map(task => task.id);
   const tasksOverflow: string[] = [];
-  const taskDiagnostics: TaskScheduleDiagnostic[] = unestimated.map(task => ({
+  const zeroMinuteDiagnostic = (task: SchedulerTask, outcome: 'fit' | 'unestimated'): TaskScheduleDiagnostic => ({
     task_id: task.id,
-    outcome: 'unestimated',
+    outcome,
     required_minutes: 0,
     due_date: task.due_date,
-    earliest_date: todayStr,
+    earliest_date: task.start_date && task.start_date > todayStr ? task.start_date : todayStr,
     available_before_deadline_minutes: 0,
     allocated_minutes: 0,
     shortfall_minutes: 0,
     days: [],
-  }));
+  });
+  const taskDiagnostics: TaskScheduleDiagnostic[] = [
+    ...covered.map(task => zeroMinuteDiagnostic(task, 'fit')),
+    ...unestimated.map(task => zeroMinuteDiagnostic(task, 'unestimated')),
+  ];
 
   for (const task of sorted) {
-    // Earliest possible date: after all blockers are fully scheduled
-    let earliestDate = toYMD(today);
+    // Earliest possible date: today, the task/goal timeline start, or the date
+    // on which all blockers have been fully scheduled â€” whichever is latest.
+    let earliestDate = task.start_date && task.start_date > todayStr ? task.start_date : todayStr;
     for (const bid of task.blocker_ids) {
       const bd = taskAssignedDate.get(bid);
       if (bd && bd > earliestDate) earliestDate = bd;
@@ -365,7 +375,16 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
 
   if (tasksOverflow.length > 0) {
     status = 'impossible';
-    impossibleReason = `${tasksOverflow.length} task(s) cannot fit within the ${horizon_days}-day horizon. Short by ${Math.abs(Math.min(0, gap))} minutes.`;
+    const overflowDiagnostics = taskDiagnostics.filter(item => item.outcome === 'overflow');
+    const overdueCount = overflowDiagnostics.filter(item => Boolean(item.due_date && item.due_date < todayStr)).length;
+    const activeFailures = overflowDiagnostics.filter(item => !item.due_date || item.due_date >= todayStr);
+    const activeShortfall = activeFailures.reduce((sum, item) => sum + item.shortfall_minutes, 0);
+    const reasonParts = [`${tasksOverflow.length} task(s) cannot be scheduled in time.`];
+    if (overdueCount > 0) reasonParts.push(`${overdueCount} already past their deadline${overdueCount === 1 ? '' : 's'}.`);
+    if (activeFailures.length > 0) {
+      reasonParts.push(`${activeFailures.length} still ${activeFailures.length === 1 ? 'has' : 'have'} ${activeShortfall} minutes unfinished at the deadline or planning cutoff.`);
+    }
+    impossibleReason = reasonParts.join(' ');
   } else {
     const utilisationRatio = totalRequired / Math.max(1, totalAvailable);
     const lastUsedDay = days.filter(d => d.used_minutes > 0).at(-1);
