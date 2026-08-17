@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { SchedulerResult, ScheduleTaskInfo } from '../../../api/hooks';
 import type { DBTask } from '../../../db/schema';
@@ -123,7 +123,14 @@ describe('WorkloadHorizon', () => {
       onOpenAudit={vi.fn()}
     />);
 
-    expect(screen.getByText('Understand the workload')).toBeInTheDocument();
+    const explanationToggle = screen.getByRole('button', { name: 'Show schedule explanation' });
+    expect(explanationToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/later hours cannot repair an earlier deadline/i)).not.toBeInTheDocument();
+
+    fireEvent.click(explanationToggle);
+
+    expect(screen.getByRole('button', { name: 'Hide schedule explanation' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('How Amina calculated this')).toBeInTheDocument();
     expect(screen.getByText(/later hours cannot repair an earlier deadline/i)).toBeInTheDocument();
     expect(screen.getByText(/old date stays red, but the work is carried/i)).toBeInTheDocument();
     expect(screen.getByText(/Courses › Physics 210 › Finish studying/)).toBeInTheDocument();

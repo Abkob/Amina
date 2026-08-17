@@ -249,6 +249,7 @@ export function WorkloadHorizon({
   onSelectDate?: (date: string) => void;
 }) {
   const reduceMotion = useReducedMotion();
+  const [expanded, setExpanded] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const model = useMemo(() => scheduler ? buildWorkloadHorizonModel({
     scheduler, taskLookup, allTasks, rangeStart, rangeEnd, today, mode,
@@ -267,16 +268,35 @@ export function WorkloadHorizon({
     : `${duration(model.remainingMinutes)} remains, and every estimated task in this view can currently be placed.`;
 
   return (
-    <section className="mb-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_18px_60px_-44px_rgba(15,23,42,0.45)]">
-      <div className="border-b border-slate-100 bg-gradient-to-br from-white via-white to-indigo-50/60 p-5 lg:p-6">
+    <section className="mb-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => setExpanded(value => !value)}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? 'Hide' : 'Show'} schedule explanation`}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
+      >
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white"><Gauge size={17} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-bold text-slate-900">Schedule explanation</span>
+          <span className="mt-0.5 block truncate text-[11px] text-slate-500">
+            {duration(model.remainingMinutes)} left
+            {model.overdueCount ? ` · ${model.overdueCount} overdue` : ''}
+            {model.missedCount ? ` · ${model.missedCount} deadline${model.missedCount === 1 ? '' : 's'} need attention` : ''}
+            {model.unestimatedCount ? ` · ${model.unestimatedCount} need estimates` : ''}
+          </span>
+        </span>
+        <span className="hidden shrink-0 text-[10px] font-bold text-indigo-700 sm:inline">{expanded ? 'Hide details' : 'Show details'}</span>
+        <ChevronDown size={16} className={`shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+
+      {expanded && <motion.div initial={reduceMotion ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+      <div className="border-t border-slate-100 bg-gradient-to-br from-white via-white to-indigo-50/60 p-5 lg:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white"><Gauge size={20} /></div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-600">Understand the workload</p>
+          <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-600">How Amina calculated this</p>
               <h3 className="mt-1 font-headline text-xl font-bold text-slate-950">{rangeTitle}</h3>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{explanation}</p>
-            </div>
           </div>
           <button type="button" onClick={onOpenAudit} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm hover:border-indigo-200 hover:text-indigo-700">
             See every calculation <ArrowRight size={14} />
@@ -309,7 +329,7 @@ export function WorkloadHorizon({
         </div>
       )}
 
-      <div className="grid gap-5 p-4 lg:p-6 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.8fr)]">
+      <div className="space-y-6 p-4 lg:p-6">
         <div className="min-w-0">
           <div className="mb-3 flex items-end justify-between gap-3"><div><p className="text-xs font-bold text-slate-900">{mode === 'week' ? 'Day-by-day capacity' : 'Five-week load map'}</p><p className="mt-0.5 text-[11px] text-slate-500">Indigo is the planner’s suggested task time, not saved calendar blocks. Pale space is usable time still open; red dates contain a deadline miss.</p></div><span className="shrink-0 text-[10px] font-bold text-slate-400">{duration(model.plannedMinutes)} / {duration(model.availableMinutes)}</span></div>
           <div className="overflow-x-auto pb-1">
@@ -335,7 +355,7 @@ export function WorkloadHorizon({
 
         <div className="min-w-0">
           <div className="mb-3 flex items-end justify-between gap-3"><div><p className="text-xs font-bold text-slate-900">{pressureTasks.length ? 'Tasks needing attention' : 'Tasks shaping this view'}</p><p className="mt-0.5 text-[11px] text-slate-500">Every row shows the leaf task once, with its parent path for context.</p></div><span className="shrink-0 text-[10px] text-slate-400">{pressureTasks.length || model.tasks.length} task{(pressureTasks.length || model.tasks.length) === 1 ? '' : 's'}</span></div>
-          <div className="space-y-2">
+          <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
             {taskRows.length === 0 ? <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">No actionable task hours fall inside this view.</div> : taskRows.map(task => {
               const tone = task.overdue ? 'border-red-100 bg-red-50/60' : task.outcome === 'overflow' ? 'border-orange-100 bg-orange-50/60' : task.outcome === 'unestimated' ? 'border-amber-100 bg-amber-50/60' : 'border-emerald-100 bg-emerald-50/50';
               const status = task.overdue ? `${relativeDeadline(task.dueDate, today)} · ${duration(task.remaining)} left` : task.outcome === 'overflow' ? `${relativeDeadline(task.dueDate, today)} · short ${duration(task.shortfall)}` : task.outcome === 'unestimated' ? 'Needs a time estimate' : `${relativeDeadline(task.dueDate, today)} · fits`;
@@ -352,6 +372,7 @@ export function WorkloadHorizon({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 bg-slate-50 px-5 py-3 text-[10px] text-slate-500"><span className="inline-flex items-center gap-1"><CalendarDays size={11} /> Fixed events are removed from usable capacity first.</span><span>The load map is a suggested plan; the calendar below is what is actually saved.</span><span>Completed tasks add 0 remaining hours.</span><span>Unfinished parents are labels; unfinished leaves carry the estimates.</span></div>
+      </motion.div>}
     </section>
   );
 }
