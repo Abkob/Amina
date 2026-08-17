@@ -21,6 +21,7 @@ const scheduler: SchedulerResult = {
       task_id: 'physics', outcome: 'overflow', required_minutes: 7800,
       due_date: '2026-08-09', earliest_date: '2026-08-11',
       available_before_deadline_minutes: 0, allocated_minutes: 0, shortfall_minutes: 7800, days: [],
+      recovery_allocated_minutes: 600, recovery_finish_date: null, unscheduled_minutes: 7200,
     },
     {
       task_id: 'algorithm', outcome: 'overflow', required_minutes: 5880,
@@ -69,6 +70,7 @@ describe('FeasibilityReport', () => {
     expect(within(breakdown).getByText(/not one 228h block you must somehow do today/)).toBeInTheDocument();
     expect(within(breakdown).getAllByTestId('shortfall-task')).toHaveLength(2);
     expect(within(breakdown).getByText(/130h remaining − 0m reachable before cutoff = 130h unfinished/)).toBeInTheDocument();
+    expect(within(breakdown).getByText(/Recovery proposal: 10h; 120h still outside this planning window/)).toBeInTheDocument();
     expect(within(breakdown).getByText(/98h remaining − 0m reachable before cutoff = 98h unfinished/)).toBeInTheDocument();
     expect(within(breakdown).getByText(/130h \+ 98h = 228h/)).toBeInTheDocument();
   });

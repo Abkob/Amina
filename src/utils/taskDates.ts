@@ -62,6 +62,38 @@ function getDescendants(taskId: string, allTasks: DBTask[]): DBTask[] {
   return result;
 }
 
+export interface DescendantTaskDeadlineSummary {
+  earliest: string;
+  latest: string;
+  taskCount: number;
+}
+
+/**
+ * Summarizes unfinished descendant deadlines without assigning one to the
+ * parent. The earliest cutoff drives urgency; the latest is the last known
+ * child cutoff for rollup displays.
+ */
+export function getDescendantTaskDeadlineSummary(
+  taskId: string,
+  allTasks: DBTask[],
+): DescendantTaskDeadlineSummary | null {
+  const dated = getDescendants(taskId, allTasks)
+    .filter(descendant => !descendant.completed && descendant.status !== 'done')
+    .map(descendant => ({
+      id: descendant.id,
+      date: getEffectiveTaskDueDate(descendant, allTasks),
+    }))
+    .filter((item): item is { id: string; date: string } => Boolean(item.date))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (!dated.length) return null;
+  return {
+    earliest: dated[0].date,
+    latest: dated[dated.length - 1].date,
+    taskCount: new Set(dated.map(item => item.id)).size,
+  };
+}
+
 /** Returns notification-ready copy when a proposed task deadline breaks its hierarchy. */
 export function getTaskDeadlineViolation(taskId: string, proposedDate: string | null, allTasks: DBTask[]): string | null {
   const task = allTasks.find(candidate => candidate.id === taskId);

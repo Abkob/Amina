@@ -48,10 +48,16 @@ export interface BackgroundTask extends PlanningBucketTask {
   reason: 'far_deadline' | 'no_deadline';
 }
 
+export interface ParentRollupTask extends PlanningBucketTask {
+  earliest_child_deadline: string | null;
+  latest_child_deadline: string | null;
+  dated_descendant_count: number;
+}
+
 export interface PlanningBuckets {
   must_finish_by_date: Array<{ date: string; tasks: PlanningBucketTask[] }>;
   large_tasks_needing_slices: LargeSliceTask[];
-  parent_rollups: PlanningBucketTask[];
+  parent_rollups: ParentRollupTask[];
   background_fillers: BackgroundTask[];
   unestimated_due_soon: PlanningBucketTask[];
   rules_summary: string[];
@@ -181,7 +187,35 @@ export function buildPlanningBuckets(
       };
     });
 
-  const parentRollups = normalized.filter(t => isParent(t));
+  const childrenByParent = new Map<string, PlanningTaskInput[]>();
+  for (const task of tasks) {
+    if (!task.parent_task_id) continue;
+    if (!childrenByParent.has(task.parent_task_id)) childrenByParent.set(task.parent_task_id, []);
+    childrenByParent.get(task.parent_task_id)!.push(task);
+  }
+  const descendantDeadlines = (taskId: string) => {
+    const dates: string[] = [];
+    const queue = [...(childrenByParent.get(taskId) ?? [])];
+    const seen = new Set<string>([taskId]);
+    while (queue.length) {
+      const descendant = queue.shift()!;
+      if (seen.has(descendant.id)) continue;
+      seen.add(descendant.id);
+      const { deadline } = resolvePlanningDeadline(descendant);
+      if (deadline) dates.push(deadline);
+      queue.push(...(childrenByParent.get(descendant.id) ?? []));
+    }
+    return dates.sort();
+  };
+  const parentRollups = normalized.filter(t => isParent(t)).map(parent => {
+    const dates = descendantDeadlines(parent.id);
+    return {
+      ...parent,
+      earliest_child_deadline: dates[0] ?? null,
+      latest_child_deadline: dates.at(-1) ?? null,
+      dated_descendant_count: dates.length,
+    };
+  });
 
   const backgroundFillers = normalized
     .filter(t =>
@@ -214,6 +248,7 @@ export function buildPlanningBuckets(
       'A task is due on a date only when its own hard_deadline, target_date, or due_date is that date.',
       'Large future-deadline tasks should be described as slices to start/continue before the deadline, not as due today.',
       'Parent tasks are rollups when they have incomplete children; schedule leaf subtasks when possible.',
+      'An undated parent can still be time-sensitive: use its earliest child deadline for urgency and its latest child deadline as the last known rollup cutoff.',
       'Far-deadline or undated large tasks are background fillers: use small slices only after urgent work fits.',
     ],
   };

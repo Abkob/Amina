@@ -1301,6 +1301,12 @@ function compactContextForModel(context: ScheduleContext, userQuery?: string | n
       remaining_minutes: task.remaining_minutes,
       suggested_daily_minutes: task.suggested_daily_minutes,
     })),
+    parent_rollups: context.planning_buckets.parent_rollups.map(task => ({
+      id: task.id,
+      earliest_child_deadline: task.earliest_child_deadline,
+      latest_child_deadline: task.latest_child_deadline,
+      dated_descendant_count: task.dated_descendant_count,
+    })),
     unestimated_due_soon_ids: context.planning_buckets.unestimated_due_soon.map(task => task.id),
   };
   const asksForResources = /\b(file|document|resource|upload|attachment|library|paper|pdf)\b/i.test(userQuery ?? '');
@@ -1718,6 +1724,7 @@ The JSON injected under "Current data" has these top-level keys:
   - tasks_overflow: IDs of tasks that cannot fit in the 14-day horizon
   - unestimated_task_ids: IDs of tasks with no time estimate (flag these to the user)
   - impossible_reason: human-readable explanation when status is 'impossible'
+  - task_diagnostics[].recovery_allocated_minutes / recovery_finish_date: best-effort work proposed after a cutoff cannot be met; this does not erase the missed deadline
 - goal_task_hierarchy[]: COMPLETE compact baseline, grouped by goal
   - tasks[] are recursively nested under their parent tasks in children[]
   - each task includes its deadline and deadline_kind, remaining/logged minutes, feel_score, blockers, rollup status, and saved scheduled_blocks
@@ -1747,6 +1754,7 @@ The JSON injected under "Current data" has these top-level keys:
 - planning_focus: compact deadline-derived indexes
   - must_finish_by_date[] maps dates to task IDs
   - large_tasks_needing_slices[] gives remaining work and suggested daily minutes
+  - parent_rollups[] carries the earliest/latest known child deadlines for undated container tasks
   - unestimated_due_soon_ids[] identifies work that cannot be scheduled honestly yet
 
 ## Rules
@@ -1771,6 +1779,7 @@ The JSON injected under "Current data" has these top-level keys:
   2. BIG/NEAR-DEADLINE means large_tasks_needing_slices: say "start/continue before its YYYY-MM-DD deadline", never "due today" unless that date is the actual deadline.
   3. BACKGROUND means far-deadline or undated leaf work in goal_task_hierarchy: suggest a small slice only if urgent and near-deadline work leaves slack.
   4. PARENT means a task with is_rollup=true: name it as context, but schedule/link leaf subtasks when possible.
+     An undated parent is not timeless when parent_rollups gives child deadlines: use the earliest child date for urgency, the latest as the last known child cutoff, and keep scheduling the leaf children rather than assigning the parent a fabricated deadline.
 - For "check/show schedule" day replies, keep reply text to 1-2 short sentences and do NOT enumerate the timeline as bullets. The app renders a visual day schedule widget. Use text only for a compact summary of the strongest indicators.
 - In schedule replies, show block duration from blocks[].minutes, not linked task estimates. If free_minutes is negative, label it as PLACED OVERBOOKED by the absolute value; if positive, label it as FREE AFTER PLACED SCHEDULE.
 - Display buffer as a reserved positive number ("Reserved buffer: 1h 25m"), not as a negative bullet. The formula should read like "14h 10m raw - 1h 25m buffer - 0h fixed = 12h 45m available".

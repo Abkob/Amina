@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
-import { CalendarCheck2, ChevronRight, GripVertical, Search } from 'lucide-react';
+import { CalendarCheck2, CalendarClock, ChevronRight, GripVertical, Search } from 'lucide-react';
 import type { DBGoal, DBTask } from '../db/schema';
 import { buildTaskForest, filterForest, type TaskTreeNode } from '../utils/taskTree';
 import { useAppStore } from '../store/useAppStore';
 import { getRolledUpActualTime, getRolledUpTime } from '../utils/taskTime';
+import { getDescendantTaskDeadlineSummary, type DescendantTaskDeadlineSummary } from '../utils/taskDates';
 
 /**
  * The one way tasks are found: goals as collapsible sections, tasks nested
@@ -35,7 +36,7 @@ function fmtMins(mins: number): string {
   return `${h}h${m ? ` ${m}m` : ''}`;
 }
 
-function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, muted, mutedReason, estimatedMinutes, loggedMinutes }: {
+function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, muted, mutedReason, estimatedMinutes, loggedMinutes, childDeadlines }: {
   task: DBTask;
   depth: number;
   hasChildren: boolean;
@@ -46,6 +47,7 @@ function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, mute
   mutedReason?: string;
   estimatedMinutes: number | null;
   loggedMinutes: number;
+  childDeadlines: DescendantTaskDeadlineSummary | null;
 }) {
   return (
     <>
@@ -71,6 +73,14 @@ function RowBody({ task, depth, hasChildren, isOpen, onToggle, scheduledOn, mute
       {scheduledOn && (
         <span className="flex shrink-0 items-center gap-0.5 font-mono text-[8px] text-[#4648d4]" title={`On your calendar: ${scheduledOn}`}>
           <CalendarCheck2 size={9} />{scheduledOn.slice(5)}
+        </span>
+      )}
+      {childDeadlines && !task.due_date && (
+        <span
+          className="flex shrink-0 items-center gap-0.5 font-mono text-[8px] text-red-500"
+          title={`Earliest unfinished child deadline: ${childDeadlines.earliest}. Last known child deadline: ${childDeadlines.latest}.`}
+        >
+          <CalendarClock size={9} />child {childDeadlines.earliest.slice(5, 10)}
         </span>
       )}
       {estimatedMinutes ? (
@@ -175,6 +185,7 @@ export function TaskTree({ tasks, goals, mode, selectedTaskId, onSelect, draggab
         : undefined,
       estimatedMinutes: getRolledUpTime(task, tasks).minutes,
       loggedMinutes: getRolledUpActualTime(task, tasks).minutes,
+      childDeadlines: hasChildren ? getDescendantTaskDeadlineSummary(task.id, tasks) : null,
     };
     return (
       <div key={task.id}>

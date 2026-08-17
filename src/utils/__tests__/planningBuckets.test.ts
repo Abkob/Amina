@@ -59,8 +59,29 @@ describe('buildPlanningBuckets', () => {
     ]);
 
     expect(result.parent_rollups.map(t => t.id)).toEqual(['parent']);
+    expect(result.parent_rollups[0]).toMatchObject({
+      earliest_child_deadline: '2026-07-07',
+      latest_child_deadline: '2026-07-07',
+      dated_descendant_count: 2,
+    });
     expect(result.large_tasks_needing_slices.map(t => t.id)).not.toContain('parent');
     expect(result.must_finish_by_date.find(d => d.date === '2026-07-07')?.tasks.map(t => t.id)).toEqual(['child', 'subchild']);
+  });
+
+  it('carries a child deadline range on an undated parent rollup', () => {
+    const result = buckets([
+      task({ id: 'parent', title: 'Open-ended course', due_date: null, estimated_minutes: null, child_count: 2 }),
+      task({ id: 'exam', parent_task_id: 'parent', due_date: '2026-08-20', estimated_minutes: 1200 }),
+      task({ id: 'admin', parent_task_id: 'parent', due_date: '2026-07-30', estimated_minutes: 30 }),
+    ]);
+
+    expect(result.parent_rollups[0]).toMatchObject({
+      id: 'parent',
+      deadline: null,
+      earliest_child_deadline: '2026-07-30',
+      latest_child_deadline: '2026-08-20',
+      dated_descendant_count: 2,
+    });
   });
 
   it('does not list a parent rollup as due work on the same day as its subtasks', () => {

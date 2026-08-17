@@ -429,6 +429,7 @@ export interface DayAssignment {
   available_minutes: number;
   used_minutes: number;
   task_ids: string[];
+  task_minutes?: Record<string, number>;
 }
 
 export interface SchedulerResult {
@@ -451,6 +452,9 @@ export interface SchedulerResult {
     available_before_deadline_minutes: number;
     allocated_minutes: number;
     shortfall_minutes: number;
+    recovery_allocated_minutes?: number;
+    recovery_finish_date?: string | null;
+    unscheduled_minutes?: number;
     days: Array<{
       date: string;
       capacity_minutes: number;

@@ -306,6 +306,36 @@ describe('computeSchedule — task splitting across multiple days', () => {
     }));
     expect(result.tasks_overflow).toContain('overflow');
     expect(result.tasks_fit).toContain('normal');
+    expect(result.day_assignments.some(day => day.task_ids.includes('overflow'))).toBe(true);
+    expect(result.task_diagnostics.find(item => item.task_id === 'overflow')).toMatchObject({
+      outcome: 'overflow',
+      shortfall_minutes: 480,
+      recovery_allocated_minutes: 960,
+      recovery_finish_date: daysFromNow(2),
+      unscheduled_minutes: 0,
+    });
+  });
+
+  it('gives an overdue task a recovery plan while preserving its missed deadline', () => {
+    const result = computeSchedule(makeInput({
+      tasks: [{
+        id: 'overdue-child', title: 'Large overdue child', estimated_minutes: 780,
+        due_date: daysFromNow(-2), priority: 'high', blocker_ids: [],
+      }],
+      horizon_days: 3,
+    }));
+
+    expect(result.tasks_overflow).toContain('overdue-child');
+    expect(result.day_assignments.map(day => day.task_minutes['overdue-child'] ?? 0)).toEqual([480, 300]);
+    expect(result.task_diagnostics.find(item => item.task_id === 'overdue-child')).toMatchObject({
+      due_date: daysFromNow(-2),
+      available_before_deadline_minutes: 0,
+      allocated_minutes: 0,
+      shortfall_minutes: 780,
+      recovery_allocated_minutes: 780,
+      recovery_finish_date: daysFromNow(1),
+      unscheduled_minutes: 0,
+    });
   });
 
   it('blocked task is deferred past the completion day of a split blocker', () => {

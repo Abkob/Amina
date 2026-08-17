@@ -145,18 +145,25 @@ export function HierarchyWorkloadPanel({
       ? path.slice(0, Math.max(0, branchPathIndex)).reverse().find(task => Number(task.estimated_minutes ?? 0) > 0) ?? null
       : null;
 
-    const groupFitAllocationByDate = new Map<string, number>();
-    for (const item of branchDiagnostics) {
-      if (item.outcome !== 'fit') continue;
-      for (const day of item.days) {
-        groupFitAllocationByDate.set(day.date, (groupFitAllocationByDate.get(day.date) ?? 0) + day.allocated_minutes);
+    const groupAllocationByDate = new Map<string, number>();
+    for (const day of capacityDays) {
+      const allocated = [...subtreeIds].reduce((sum, taskId) => sum + (day.task_minutes?.[taskId] ?? 0), 0);
+      if (allocated > 0) groupAllocationByDate.set(day.date, allocated);
+    }
+    // Older/test payloads may not include the per-task allocation map.
+    if (groupAllocationByDate.size === 0) {
+      for (const item of branchDiagnostics) {
+        if (item.outcome !== 'fit') continue;
+        for (const day of item.days) {
+          groupAllocationByDate.set(day.date, (groupAllocationByDate.get(day.date) ?? 0) + day.allocated_minutes);
+        }
       }
     }
 
     const baseCapacity = [...capacityDays]
       .sort((a, b) => a.date.localeCompare(b.date))
       .map(day => {
-        const selectedGroupKept = groupFitAllocationByDate.get(day.date) ?? 0;
+        const selectedGroupKept = groupAllocationByDate.get(day.date) ?? 0;
         const alreadyClaimed = Math.max(0, day.used_minutes - selectedGroupKept);
         return {
           day,

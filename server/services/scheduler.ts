@@ -71,6 +71,12 @@ export interface TaskScheduleDiagnostic {
   available_before_deadline_minutes: number;
   allocated_minutes: number;
   shortfall_minutes: number;
+  /** Work placed in the horizon after the on-time attempt failed. */
+  recovery_allocated_minutes: number;
+  /** Projected recovery finish when the remaining task fits in the horizon. */
+  recovery_finish_date: string | null;
+  /** Work still unplaced after both the deadline attempt and recovery pass. */
+  unscheduled_minutes: number;
   days: TaskScheduleDiagnosticDay[];
 }
 
@@ -275,6 +281,9 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
     available_before_deadline_minutes: 0,
     allocated_minutes: 0,
     shortfall_minutes: 0,
+    recovery_allocated_minutes: 0,
+    recovery_finish_date: null,
+    unscheduled_minutes: 0,
     days: [],
   });
   const taskDiagnostics: TaskScheduleDiagnostic[] = [
@@ -342,6 +351,9 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
         available_before_deadline_minutes: diagnosticDays.reduce((sum, day) => sum + day.available_before_minutes, 0),
         allocated_minutes: task.estimated_minutes,
         shortfall_minutes: 0,
+        recovery_allocated_minutes: 0,
+        recovery_finish_date: null,
+        unscheduled_minutes: 0,
         days: diagnosticDays,
       });
     } else {
@@ -362,9 +374,53 @@ export function computeSchedule(input: SchedulerInput): SchedulerResult {
         available_before_deadline_minutes: diagnosticDays.reduce((sum, day) => sum + day.available_before_minutes, 0),
         allocated_minutes: allocatedMinutes,
         shortfall_minutes: Math.max(0, minutesLeft),
+        recovery_allocated_minutes: 0,
+        recovery_finish_date: null,
+        unscheduled_minutes: task.estimated_minutes,
         days: diagnosticDays,
       });
     }
+  }
+
+  // A missed or impossible cutoff must not make work disappear from the plan.
+  // Once every task that can still finish on time has claimed capacity, use the
+  // remaining horizon for best-effort recovery slices, earliest deadline first.
+  // Deadline diagnostics above remain unchanged: recovery is a plan from now,
+  // not a claim that the original cutoff can still be met.
+  const overflowById = new Map(sorted.map(task => [task.id, task]));
+  for (const diagnostic of taskDiagnostics) {
+    if (diagnostic.outcome !== 'overflow') continue;
+    const task = overflowById.get(diagnostic.task_id);
+    if (!task) continue;
+
+    let recoveryLeft = task.estimated_minutes;
+    let recoveryAllocated = 0;
+    let recoveryFinishDate: string | null = null;
+    for (const day of days) {
+      if (recoveryLeft <= 0) break;
+      if (day.date < diagnostic.earliest_date) continue;
+
+      const freeMinutes = day.available_minutes - day.used_minutes;
+      if (freeMinutes <= 0) continue;
+      const alreadyAllocatedToday = day.task_minutes[task.id] ?? 0;
+      const taskDayCapacity = Math.max(
+        0,
+        (task.max_daily_minutes ?? Number.POSITIVE_INFINITY) - alreadyAllocatedToday,
+      );
+      const allocate = Math.min(freeMinutes, recoveryLeft, taskDayCapacity);
+      if (allocate <= 0) continue;
+
+      day.used_minutes += allocate;
+      if (!day.task_ids.includes(task.id)) day.task_ids.push(task.id);
+      day.task_minutes[task.id] = alreadyAllocatedToday + allocate;
+      recoveryLeft -= allocate;
+      recoveryAllocated += allocate;
+      recoveryFinishDate = recoveryLeft <= 0 ? day.date : null;
+    }
+
+    diagnostic.recovery_allocated_minutes = recoveryAllocated;
+    diagnostic.recovery_finish_date = recoveryFinishDate;
+    diagnostic.unscheduled_minutes = Math.max(0, recoveryLeft);
   }
 
   const gap = totalAvailable - totalRequired;

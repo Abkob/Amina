@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DBTask } from '../../db/schema';
 import {
   getEffectiveTaskDueDate,
+  getDescendantTaskDeadlineSummary,
   getInheritedTaskDueDate,
   getTaskDeadlineViolation,
   taskUsesInheritedDueDate,
@@ -61,6 +62,22 @@ describe('task due date inheritance', () => {
     const child = task({ id: 'child', parent_task_id: 'parent', due_date: null });
 
     expect(getEffectiveTaskDueDate(child, [grandparent, parent, child])).toBe('2026-08-01');
+  });
+
+  it('summarizes child deadlines without inventing a parent deadline', () => {
+    const parent = task({ id: 'parent', due_date: null });
+    const early = task({ id: 'early', parent_task_id: 'parent', due_date: '2026-07-12' });
+    const branch = task({ id: 'branch', parent_task_id: 'parent', due_date: null });
+    const late = task({ id: 'late', parent_task_id: 'branch', due_date: '2026-08-20' });
+    const done = task({ id: 'done', parent_task_id: 'parent', due_date: '2026-07-01', completed: true });
+    const all = [parent, early, branch, late, done];
+
+    expect(getEffectiveTaskDueDate(parent, all)).toBeNull();
+    expect(getDescendantTaskDeadlineSummary(parent.id, all)).toEqual({
+      earliest: '2026-07-12',
+      latest: '2026-08-20',
+      taskCount: 2,
+    });
   });
 });
 

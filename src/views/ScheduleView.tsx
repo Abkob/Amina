@@ -6,7 +6,7 @@ import {
 } from '@dnd-kit/core';
 import {
   Sparkles, Calendar, AlertTriangle, RefreshCw, ChevronLeft, ChevronRight, ChevronDown,
-  GripVertical, Check, Eye, EyeOff, BarChart2, PanelLeftOpen, PanelRightClose, Play, Plus,
+  GripVertical, Check, Eye, EyeOff, BarChart2, CalendarDays, PanelLeftOpen, PanelRightClose, Play, Plus,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import {
@@ -32,6 +32,7 @@ import {
 import { EventComposer, type ComposerSeed } from './schedule/EventComposer';
 import { GanttView } from './GanttView';
 import { FeasibilityReport } from './schedule/FeasibilityReport';
+import { WorkloadHorizon } from './schedule/WorkloadHorizon';
 import { ModalFrame } from '../components/ModalFrame';
 import { readActiveWorkTimer, writeActiveWorkTimer } from '../utils/workTimer';
 
@@ -65,7 +66,7 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
   feasible:   { label: 'Feasible',   cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   tight:      { label: 'Tight',      cls: 'bg-amber-50 text-amber-700 border-amber-200' },
   risky:      { label: 'Risky',      cls: 'bg-orange-50 text-orange-700 border-orange-200' },
-  impossible: { label: 'Impossible', cls: 'bg-red-50 text-red-700 border-red-200' },
+  impossible: { label: 'Needs attention', cls: 'bg-red-50 text-red-700 border-red-200' },
 };
 
 function fmtMins(mins: number): string {
@@ -101,12 +102,13 @@ function moveFlowId(ids: string[], activeId: string, overId: string): string[] {
   return next;
 }
 
-function schedulerGapLabel(scheduler: SchedulerResult): string {
-  if (scheduler.gap_minutes === 0) return '';
-  if (scheduler.status === 'impossible' && scheduler.gap_minutes > 0) {
-    return ` · ${fmtMins(scheduler.gap_minutes)} spare overall`;
+function schedulerStatusLabel(scheduler: SchedulerResult): string {
+  if (scheduler.status === 'impossible') {
+    const count = scheduler.tasks_overflow.length;
+    return `${count} deadline${count === 1 ? '' : 's'} need attention`;
   }
-  return ` · ${scheduler.gap_minutes > 0 ? '+' : ''}${fmtMins(scheduler.gap_minutes)}`;
+  if (scheduler.status === 'feasible') return `Fits · ${fmtMins(Math.max(0, scheduler.gap_minutes))} open`;
+  return `${STATUS_STYLE[scheduler.status]?.label ?? 'Plan'} · ${fmtMins(Math.abs(scheduler.gap_minutes))} ${scheduler.gap_minutes >= 0 ? 'open' : 'over'}`;
 }
 
 function dayLabel(dateStr: string): { dow: string; dom: string; isToday: boolean } {
@@ -913,11 +915,14 @@ function ScheduleInsights({ scheduler, weekDays, assignmentsByDate, startsByDate
   const busiest = weekStats.reduce((max, d) => (d.used > max.used ? d : max), weekStats[0] ?? { date: '', used: 0, available: null });
   const busiestLabel = busiest.date ? dayLabel(busiest.date).dow : '—';
   const overflowCount = scheduler?.tasks_overflow.length ?? 0;
+  const recoveryDiagnostics = scheduler?.task_diagnostics.filter(item => (item.recovery_allocated_minutes ?? 0) > 0) ?? [];
+  const recoveryMinutes = recoveryDiagnostics.reduce((sum, item) => sum + (item.recovery_allocated_minutes ?? 0), 0);
   const tone = !scheduler ? 'neutral' : scheduler.status === 'feasible' ? 'good' : scheduler.status === 'impossible' ? 'risk' : 'watch';
   const gap = scheduler?.gap_minutes ?? 0;
 
   const attention = [
     overflowCount > 0 ? `${overflowCount} task${overflowCount !== 1 ? 's' : ''} won't fit before their deadlines — move dates or trim estimates` : null,
+    recoveryMinutes > 0 ? `${fmtMins(recoveryMinutes)} of best-effort recovery work is still included for ${recoveryDiagnostics.length} missed or oversized task${recoveryDiagnostics.length !== 1 ? 's' : ''}` : null,
     unestimated.length > 0 ? `${unestimated.length} task${unestimated.length !== 1 ? 's' : ''} need a time estimate before they can be planned` : null,
     backlog.length > 0 ? `${backlog.length} ready task${backlog.length !== 1 ? 's aren’t' : ' isn’t'} on a day yet — drag them in from the backlog` : null,
     rollups.length > 0 ? `${rollups.length} parent or long-term task${rollups.length !== 1 ? 's' : ''} stay out of auto-planning (their subtasks are planned instead)` : null,
@@ -1200,7 +1205,7 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
   const { data: prefs } = useSchedulePrefs();
   const [draftPreview, setDraftPreview] = useState<Draft | null>(null);
   const [dragTask, setDragTask] = useState<DBTask | null>(null);
-  const [innerPage, setInnerPage] = useState<'plan' | 'timeline' | 'feasibility'>(initialPage);
+  const [innerPage, setInnerPage] = useState<'plan' | 'month' | 'timeline' | 'feasibility'>(initialPage);
   const [composer, setComposer] = useState<ComposerSeed | null>(null);
   const [taskComposerDate, setTaskComposerDate] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1765,11 +1770,10 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
                 type="button"
                 onClick={() => setInnerPage('feasibility')}
                 title="Open the structured feasibility audit (click or Alt-click)"
-                aria-label={`Open feasibility audit: ${statusInfo.label}`}
+                aria-label={`Open feasibility audit: ${schedulerStatusLabel(scheduler)}`}
                 className={`text-[10px] font-mono uppercase font-bold px-2.5 py-1 rounded-full border transition-shadow hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 ${statusInfo.cls}`}
               >
-                {statusInfo.label}
-                {schedulerGapLabel(scheduler)}
+                {schedulerStatusLabel(scheduler)}
               </button>
             )}
             {(scheduler?.unestimated_task_ids.length ?? 0) > 0 && (
@@ -1787,6 +1791,15 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
                 }`}
               >
                 <Calendar size={12} /> Week
+              </button>
+              <button
+                onClick={() => setInnerPage('month')}
+                aria-pressed={innerPage === 'month'}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[10px] font-bold transition-all ${
+                  innerPage === 'month' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400 hover:text-gray-600'
+                }`}
+              >
+                <CalendarDays size={12} /> Month
               </button>
               <button
                 onClick={() => setInnerPage('timeline')}
@@ -1851,14 +1864,16 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
 
         {innerPage === 'plan' ? (
           <>
-            <ScheduleInsights
+            <WorkloadHorizon
               scheduler={scheduler}
-              weekDays={weekDays}
-              assignmentsByDate={assignmentsByDate}
-              startsByDate={startsByDate}
-              backlog={backlog}
-              unestimated={unestimated}
-              rollups={rollupTasks}
+              taskLookup={taskLookup}
+              allTasks={allTasks}
+              rangeStart={weekStart}
+              rangeEnd={weekDays[6]}
+              today={todayStr}
+              mode="week"
+              onOpenAudit={() => setInnerPage('feasibility')}
+              onSelectDate={setFocusedDate}
             />
 
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -1985,6 +2000,18 @@ export function ScheduleView({ initialPage = 'plan' }: { initialPage?: 'plan' | 
               </div>}
             </div>
           </>
+        ) : innerPage === 'month' ? (
+          <WorkloadHorizon
+            scheduler={scheduler}
+            taskLookup={taskLookup}
+            allTasks={allTasks}
+            rangeStart={todayStr}
+            rangeEnd={addDays(todayStr, 34)}
+            today={todayStr}
+            mode="month"
+            onOpenAudit={() => setInnerPage('feasibility')}
+            onSelectDate={date => { setFocusedDate(date); setInnerPage('plan'); }}
+          />
         ) : (
           <div className="h-[calc(100vh-240px)] min-h-[640px]">
             <GanttView embedded />

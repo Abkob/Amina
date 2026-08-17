@@ -290,6 +290,11 @@ export function FeasibilityReport({
                           <p className="truncate text-sm font-bold text-slate-900">{task?.title ?? failure.task_id}</p>
                           <p className="mt-0.5 text-xs leading-5 text-slate-500">{goal?.title ?? 'No goal'} · cutoff {failure.due_date ? dateLabel(failure.due_date) : 'not dated'}</p>
                           <p className="mt-1 text-xs font-semibold text-slate-600">{duration(failure.required_minutes)} remaining − {duration(failure.available_before_deadline_minutes)} reachable before cutoff = {duration(failure.shortfall_minutes)} unfinished</p>
+                          {(failure.recovery_allocated_minutes ?? 0) > 0 && (
+                            <p className="mt-1 text-xs font-semibold text-indigo-700">
+                              Recovery proposal: {duration(failure.recovery_allocated_minutes ?? 0)}{failure.recovery_finish_date ? ` through ${dateLabel(failure.recovery_finish_date)}` : ''}{(failure.unscheduled_minutes ?? 0) > 0 ? `; ${duration(failure.unscheduled_minutes ?? 0)} still outside this planning window` : ''}.
+                            </p>
+                          )}
                         </div>
                         <span className="justify-self-start whitespace-nowrap rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700 sm:justify-self-end">{duration(failure.shortfall_minutes)} does not fit</span>
                       </div>
@@ -369,6 +374,7 @@ export function FeasibilityReport({
                             <span className="self-start rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700">{duration(failure.shortfall_minutes)} short</span>
                           </div>
                           <p className="mt-3 text-sm leading-6 text-slate-700">Needs <strong>{duration(failure.required_minutes)}</strong>. The calculator found <strong>{duration(failure.available_before_deadline_minutes)}</strong> before this cutoff, leaving <strong className="text-red-700">{duration(failure.shortfall_minutes)}</strong>.</p>
+                          {(failure.recovery_allocated_minutes ?? 0) > 0 && <p className="mt-2 text-xs font-semibold leading-5 text-indigo-700">The best-effort plan still proposes {duration(failure.recovery_allocated_minutes ?? 0)} of recovery work{failure.recovery_finish_date ? ` and projects completion ${dateLabel(failure.recovery_finish_date)}` : ''}.</p>}
                         </div>
                       );
                     })}
@@ -487,7 +493,12 @@ export function FeasibilityReport({
                         </ol>
                       </div>
                       {diagnostic.outcome === 'overflow' && (
-                        <p className="mt-3 text-xs leading-5 text-red-700">These are trial slices, not kept calendar blocks. Even using every slice shown, {duration(diagnostic.shortfall_minutes)} would still remain at the cutoff.</p>
+                        <div className="mt-3 space-y-2 text-xs leading-5">
+                          <p className="text-red-700">These are deadline-feasibility slices, not kept calendar blocks. Even using every slice shown, {duration(diagnostic.shortfall_minutes)} would still remain at the cutoff.</p>
+                          {(diagnostic.recovery_allocated_minutes ?? 0) > 0 && (
+                            <p className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 font-semibold text-indigo-800">The schedule proposal does not drop this task: it adds {duration(diagnostic.recovery_allocated_minutes ?? 0)} of best-effort recovery work{diagnostic.recovery_finish_date ? ` through ${dateLabel(diagnostic.recovery_finish_date)}` : ''}{(diagnostic.unscheduled_minutes ?? 0) > 0 ? `, with ${duration(diagnostic.unscheduled_minutes ?? 0)} still beyond the visible horizon` : ''}.</p>
+                          )}
+                        </div>
                       )}
                     </>
                   )}
