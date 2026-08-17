@@ -117,6 +117,7 @@ interface GoogleCalendarEvent {
 export interface GoogleSyncStats {
   task_lists_created: number;
   tasks_created: number;
+  tasks_hidden_in_google: number;
   tasks_updated_in_google: number;
   tasks_updated_in_amina: number;
   tasks_imported: number;
@@ -142,6 +143,7 @@ function emptyStats(): GoogleSyncStats {
   return {
     task_lists_created: 0,
     tasks_created: 0,
+    tasks_hidden_in_google: 0,
     tasks_updated_in_google: 0,
     tasks_updated_in_amina: 0,
     tasks_imported: 0,
@@ -255,6 +257,70 @@ function sortedTasks(tasks: TaskRow[]): TaskRow[] {
   return [...tasks].sort((a, b) => depth(a) - depth(b) || a.position - b.position || a.title.localeCompare(b.title));
 }
 
+export interface GoogleTaskProjection {
+  visible: boolean;
+  root_task_id: string;
+  google_parent_task_id: string | null;
+  path_titles: string[];
+}
+
+/**
+ * Google Tasks supports one subtask level. Amina keeps its full hierarchy,
+ * while Google shows each root plus the currently actionable leaves beneath
+ * it. An intermediate task becomes visible once it has no unfinished
+ * descendants left.
+ */
+export function buildGoogleTaskProjections(tasks: TaskRow[]): Map<string, GoogleTaskProjection> {
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  const children = new Map<string, TaskRow[]>();
+  for (const task of tasks) {
+    if (!task.parent_task_id || !byId.has(task.parent_task_id)) continue;
+    const siblings = children.get(task.parent_task_id) ?? [];
+    siblings.push(task);
+    children.set(task.parent_task_id, siblings);
+  }
+
+  const activeDescendantMemo = new Map<string, boolean>();
+  const hasActiveDescendant = (taskId: string, visiting = new Set<string>()): boolean => {
+    const memoized = activeDescendantMemo.get(taskId);
+    if (memoized !== undefined) return memoized;
+    if (visiting.has(taskId)) return false;
+    visiting.add(taskId);
+    const result = (children.get(taskId) ?? []).some(child =>
+      !child.completed || hasActiveDescendant(child.id, visiting));
+    visiting.delete(taskId);
+    activeDescendantMemo.set(taskId, result);
+    return result;
+  };
+
+  const pathFor = (task: TaskRow): TaskRow[] => {
+    const reversed = [task];
+    const seen = new Set([task.id]);
+    let cursor = task;
+    while (cursor.parent_task_id) {
+      const parent = byId.get(cursor.parent_task_id);
+      if (!parent) break;
+      if (seen.has(parent.id)) return [task];
+      reversed.push(parent);
+      seen.add(parent.id);
+      cursor = parent;
+    }
+    return reversed.reverse();
+  };
+
+  return new Map(tasks.map(task => {
+    const path = pathFor(task);
+    const root = path[0] ?? task;
+    const isRoot = root.id === task.id;
+    return [task.id, {
+      visible: isRoot || !hasActiveDescendant(task.id),
+      root_task_id: root.id,
+      google_parent_task_id: isRoot ? null : root.id,
+      path_titles: path.map(item => item.title),
+    } satisfies GoogleTaskProjection];
+  }));
+}
+
 async function taskDeadlineHierarchyConflict(task: TaskRow, dueDate: string | null): Promise<string | null> {
   if (!dueDate) return null;
   if (task.parent_task_id) {
@@ -288,11 +354,17 @@ async function taskDeadlineHierarchyConflict(task: TaskRow, dueDate: string | nu
   return child ? `Google due date ${dueDate} is before child “${child.title}” (${child.due_date.slice(0, 10)}).` : null;
 }
 
-export function buildGoogleTaskPayload(task: TaskRow, goalTitle: string | null, parentTitle: string | null) {
+export function buildGoogleTaskPayload(
+  task: TaskRow,
+  goalTitle: string | null,
+  parentTitle: string | null,
+  pathTitles: string[] = [],
+) {
   const notes = [
     task.description?.trim() || null,
     goalTitle ? `Goal: ${goalTitle}` : 'One-off task',
     parentTitle ? `Parent: ${parentTitle}` : null,
+    pathTitles.length > 1 ? `Amina path: ${pathTitles.join(' > ')}` : null,
     task.estimated_minutes ? `Estimate: ${Math.round(task.estimated_minutes / 6) / 10} hours` : null,
     taskMarker(task.id),
   ].filter(Boolean).join('\n');
@@ -517,6 +589,7 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
 
   for (const [goalId, list] of listByGoal) {
     const localTasks = sortedTasks(tasks.filter(task => task.goal_id === goalId));
+    let projections = buildGoogleTaskProjections(localTasks);
     const remoteTasks = await listAll<GoogleTask>(accessToken,
       `${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks?maxResults=100&showCompleted=true&showHidden=true&showDeleted=true`);
     const remoteById = new Map(remoteTasks.map(task => [task.id, task]));
@@ -524,6 +597,7 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
 
     // Restore a lost link from Amina's marker before treating a Google task as new.
     for (const remote of remoteTasks) {
+      if (remote.deleted) continue;
       const markedId = markerTaskId(remote.notes);
       const local = markedId ? tasksById.get(markedId) : undefined;
       const key = markedId ? linkKey('task', 'task', markedId) : '';
@@ -536,12 +610,27 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
 
     for (const task of localTasks) {
       const key = linkKey('task', 'task', task.id);
+      const projection = projections.get(task.id) ?? {
+        visible: true,
+        root_task_id: task.id,
+        google_parent_task_id: null,
+        path_titles: [task.title],
+      };
       let link = links.get(key);
       let remote = link ? remoteById.get(link.remote_id) : undefined;
-      const parentRemoteId = task.parent_task_id ? links.get(linkKey('task', 'task', task.parent_task_id))?.remote_id : undefined;
+      const parentRemoteId = projection.google_parent_task_id
+        ? links.get(linkKey('task', 'task', projection.google_parent_task_id))?.remote_id
+        : undefined;
       const payload = buildGoogleTaskPayload(task, goalId ? goalsById.get(goalId)?.title ?? null : null,
-        task.parent_task_id ? tasksById.get(task.parent_task_id)?.title ?? null : null);
+        task.parent_task_id ? tasksById.get(task.parent_task_id)?.title ?? null : null,
+        projection.path_titles);
       if (remote?.deleted && link) {
+        if (!projection.visible) {
+          await query('DELETE FROM google_sync_links WHERE id=$1', [link.id]);
+          links.delete(key);
+          linkedRemoteIds.add(remote.id);
+          continue;
+        }
         link = await saveLink({ existing: link, entityType: 'task', entityId: task.id, remoteType: 'task',
           remoteContainerId: list.id, remoteId: remote.id, remoteEtag: remote.etag,
           remoteUpdatedAt: remote.updated, localUpdatedAt: task.updated_at, status: 'remote_deleted',
@@ -552,6 +641,11 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
         continue;
       }
       if (!remote) {
+        if (!projection.visible) {
+          if (link) await query('DELETE FROM google_sync_links WHERE id=$1', [link.id]);
+          links.delete(key);
+          continue;
+        }
         const url = new URL(`${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks`);
         if (parentRemoteId) url.searchParams.set('parent', parentRemoteId);
         remote = await googleApi<GoogleTask>(accessToken, url.toString(), { method: 'POST', body: JSON.stringify(payload) });
@@ -600,16 +694,27 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
           remote = await googleApi<GoogleTask>(accessToken,
             `${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(remote.id)}`,
             { method: 'PATCH', body: JSON.stringify(payload) });
-          if ((remote.parent ?? null) !== (parentRemoteId ?? null)) {
-            const moveUrl = new URL(`${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(remote.id)}/move`);
-            if (parentRemoteId) moveUrl.searchParams.set('parent', parentRemoteId);
-            await googleApi(accessToken, moveUrl.toString(), { method: 'POST' });
-          }
           link = await saveLink({ existing: link, entityType: 'task', entityId: task.id, remoteType: 'task', remoteContainerId: list.id,
             remoteId: remote.id, remoteEtag: remote.etag, remoteUpdatedAt: remote.updated, localUpdatedAt: task.updated_at });
           links.set(key, link);
           stats.tasks_updated_in_google += 1;
         }
+      }
+      if (remote && !remote.deleted && (remote.parent ?? null) !== (parentRemoteId ?? null)) {
+        const moveUrl = new URL(`${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(remote.id)}/move`);
+        if (parentRemoteId) moveUrl.searchParams.set('parent', parentRemoteId);
+        await googleApi(accessToken, moveUrl.toString(), { method: 'POST' });
+        remote.parent = parentRemoteId;
+        stats.tasks_updated_in_google += 1;
+      }
+      if (projection.visible && remote && !remote.deleted && link?.sync_status !== 'conflict' && remote.notes !== payload.notes) {
+        remote = await googleApi<GoogleTask>(accessToken,
+          `${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(remote.id)}`,
+          { method: 'PATCH', body: JSON.stringify({ notes: payload.notes }) });
+        link = await saveLink({ existing: link, entityType: 'task', entityId: task.id, remoteType: 'task', remoteContainerId: list.id,
+          remoteId: remote.id, remoteEtag: remote.etag, remoteUpdatedAt: remote.updated, localUpdatedAt: task.updated_at });
+        links.set(key, link);
+        stats.tasks_updated_in_google += 1;
       }
       linkedRemoteIds.add(remote.id);
     }
@@ -651,6 +756,31 @@ async function syncTasks(accessToken: string, links: Map<string, LinkRow>, stats
         remoteId: remote.id, remoteEtag: remote.etag, remoteUpdatedAt: remote.updated, localUpdatedAt: now });
       links.set(linkKey('task', 'task', id), saved);
       stats.tasks_imported += 1;
+    }
+
+    // Re-evaluate after Google completions were pulled into Amina. Hidden
+    // intermediate tasks are removed only from Google's projection; their
+    // Amina rows and full parent relationships remain untouched.
+    projections = buildGoogleTaskProjections(localTasks);
+    for (const task of [...localTasks].reverse()) {
+      const projection = projections.get(task.id);
+      if (!projection || projection.visible) continue;
+      const key = linkKey('task', 'task', task.id);
+      const link = links.get(key);
+      if (link?.sync_status === 'conflict') continue;
+      const remote = link
+        ? remoteById.get(link.remote_id)
+        : remoteTasks.find(item => !item.deleted && markerTaskId(item.notes) === task.id);
+      if (remote && !remote.deleted) {
+        await googleApi(accessToken,
+          `${GOOGLE_TASKS_BASE}/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(remote.id)}`,
+          { method: 'DELETE' });
+        stats.tasks_hidden_in_google += 1;
+      }
+      if (link) {
+        await query('DELETE FROM google_sync_links WHERE id=$1', [link.id]);
+        links.delete(key);
+      }
     }
   }
 

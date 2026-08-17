@@ -8,6 +8,7 @@ import {
 import {
   buildGoogleCalendarPayload,
   buildGoogleTaskPayload,
+  buildGoogleTaskProjections,
 } from '../../../server/services/googleWorkspaceSync';
 
 beforeEach(() => {
@@ -51,12 +52,39 @@ describe('Google mapping', () => {
   };
 
   it('preserves task context while respecting Google Tasks date-only deadlines', () => {
-    const payload = buildGoogleTaskPayload(task, 'PSYCI 210', 'Week 4');
+    const payload = buildGoogleTaskPayload(task, 'PSYCI 210', 'Week 4', ['Coursework', 'Week 4', 'Finish problem set']);
     expect(payload.due).toBe('2026-08-20T00:00:00.000Z');
     expect(payload.status).toBe('needsAction');
     expect(payload.notes).toContain('Goal: PSYCI 210');
     expect(payload.notes).toContain('Parent: Week 4');
+    expect(payload.notes).toContain('Amina path: Coursework > Week 4 > Finish problem set');
     expect(payload.notes).toContain(`Amina task: ${task.id}`);
+  });
+
+  it('projects roots and active leaves while hiding unfinished intermediate containers', () => {
+    const root = { ...task, id: 'root', parent_task_id: null, title: 'Incomplete Courses', position: 0 };
+    const parent = { ...task, id: 'parent', parent_task_id: root.id, title: 'Physics 210', position: 1 };
+    const activeLeaf = { ...task, id: 'active-leaf', parent_task_id: parent.id, title: 'Finish Studying', position: 2 };
+    const doneLeaf = { ...task, id: 'done-leaf', parent_task_id: parent.id, title: 'Get Slides', completed: true, position: 3 };
+
+    const projection = buildGoogleTaskProjections([root, parent, activeLeaf, doneLeaf]);
+    expect(projection.get(root.id)).toMatchObject({ visible: true, google_parent_task_id: null });
+    expect(projection.get(parent.id)).toMatchObject({ visible: false, google_parent_task_id: root.id });
+    expect(projection.get(activeLeaf.id)).toMatchObject({
+      visible: true,
+      google_parent_task_id: root.id,
+      path_titles: ['Incomplete Courses', 'Physics 210', 'Finish Studying'],
+    });
+    expect(projection.get(doneLeaf.id)).toMatchObject({ visible: true, google_parent_task_id: root.id });
+  });
+
+  it('reveals an intermediate parent after all of its descendants are completed', () => {
+    const root = { ...task, id: 'root', parent_task_id: null, title: 'Incomplete Courses', position: 0 };
+    const parent = { ...task, id: 'parent', parent_task_id: root.id, title: 'Physics 210', position: 1 };
+    const doneLeaf = { ...task, id: 'done-leaf', parent_task_id: parent.id, title: 'Finish Studying', completed: true, position: 2 };
+
+    const projection = buildGoogleTaskProjections([root, parent, doneLeaf]);
+    expect(projection.get(parent.id)).toMatchObject({ visible: true, google_parent_task_id: root.id });
   });
 
   it('creates all-day calendar items with Google-exclusive end dates', () => {

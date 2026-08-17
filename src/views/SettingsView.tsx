@@ -1022,7 +1022,7 @@ function GoogleWorkspaceSection() {
         <div className="grid gap-2 sm:grid-cols-2">
           {[
             ['Goals', 'One Google Tasks list per goal'],
-            ['Tasks', 'Parent tasks and subtasks keep their hierarchy'],
+            ['Tasks', 'Root tasks + active leaves; full paths stay in Amina'],
             ['One-offs', 'Collected in an Amina · One-offs list'],
             ['Schedule', 'Focus blocks and meetings use Amina Schedule'],
             ['All-day work', 'Tasks without a time stay as all-day items'],

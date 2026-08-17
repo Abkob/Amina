@@ -207,6 +207,10 @@ Tasks list per active goal, an `Amina · One-offs` list, and a dedicated
 `Amina Schedule` secondary calendar. The first sync always shows a count
 preview and requires explicit confirmation. Google deletions never delete
 Amina rows automatically; simultaneous edits are recorded as conflicts.
+Because Google Tasks supports only one subtask level, Amina keeps the complete
+task tree locally and projects each root plus its actionable leaf descendants
+into Google. Intermediate parents reappear after their unfinished descendants
+are completed, and every projected leaf carries its full Amina path in notes.
 
 In Google Cloud, enable the Google Tasks API and Google Calendar API, then
 create an OAuth 2.0 Web application with this redirect URI:
