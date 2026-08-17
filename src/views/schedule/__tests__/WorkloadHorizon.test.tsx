@@ -57,6 +57,9 @@ describe('WorkloadHorizon', () => {
     expect(model.estimateMinutes).toBe(900);
     expect(model.loggedMinutes).toBe(120);
     expect(model.committedMinutes).toBe(300);
+    expect(model.creditedLoggedMinutes).toBe(120);
+    expect(model.creditedCommittedMinutes).toBe(300);
+    expect(model.commitmentOverageMinutes).toBe(0);
     expect(model.remainingMinutes).toBe(480);
     expect(model.plannedMinutes).toBe(420);
     expect(model.remainingAfterRangeMinutes).toBe(60);
@@ -66,6 +69,46 @@ describe('WorkloadHorizon', () => {
     expect(model.shortfallMinutes).toBe(60);
     expect(model.unestimatedCount).toBe(1);
     expect(model.tasks[0].path).toBe('Courses › Physics 210 › Finish studying');
+  });
+
+  it('caps calendar credit at the task estimate so extra calendar time cannot make remaining work negative', () => {
+    const overcommittedScheduler: SchedulerResult = {
+      ...scheduler,
+      total_required_minutes: 0,
+      tasks_fit: ['overdue'],
+      tasks_overflow: [],
+      unestimated_task_ids: [],
+      capacity_days: [],
+      task_diagnostics: [{
+        task_id: 'overdue', outcome: 'fit', required_minutes: 0, due_date: '2026-08-24',
+        earliest_date: '2026-08-18', available_before_deadline_minutes: 0, allocated_minutes: 0,
+        shortfall_minutes: 0, recovery_allocated_minutes: 0, recovery_finish_date: null,
+        unscheduled_minutes: 0, days: [],
+      }],
+    };
+    const overcommittedLookup: Record<string, ScheduleTaskInfo> = {
+      overdue: {
+        ...taskLookup.overdue,
+        estimated_minutes: 600,
+        logged_minutes: 0,
+        committed_minutes: 900,
+        remaining_minutes: 0,
+      },
+    };
+
+    const model = buildWorkloadHorizonModel({
+      scheduler: overcommittedScheduler,
+      taskLookup: overcommittedLookup,
+      allTasks: tasks,
+      rangeStart: '2026-08-18',
+      rangeEnd: '2026-08-24',
+      today: '2026-08-18',
+      mode: 'week',
+    });
+
+    expect(model.creditedCommittedMinutes).toBe(600);
+    expect(model.commitmentOverageMinutes).toBe(300);
+    expect(model.tasks[0].remaining).toBe(0);
   });
 
   it('explains why later spare time does not repair an earlier deadline', () => {
@@ -84,6 +127,6 @@ describe('WorkloadHorizon', () => {
     expect(screen.getByText(/later hours cannot repair an earlier deadline/i)).toBeInTheDocument();
     expect(screen.getByText(/old date stays red, but the work is carried/i)).toBeInTheDocument();
     expect(screen.getByText(/Courses › Physics 210 › Finish studying/)).toBeInTheDocument();
-    expect(screen.getByText(/10h estimate − 2h worked − 5h calendar =/)).toHaveTextContent('3h left');
+    expect(screen.getByText(/10h estimate − 2h worked − 5h calendar credit =/)).toHaveTextContent('3h left');
   });
 });

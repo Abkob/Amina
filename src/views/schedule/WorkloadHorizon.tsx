@@ -22,6 +22,9 @@ export interface WorkloadHorizonTask {
   estimate: number;
   logged: number;
   committed: number;
+  creditedLogged: number;
+  creditedCommitted: number;
+  commitmentOverage: number;
   remaining: number;
   plannedInRange: number;
   shortfall: number;
@@ -45,6 +48,9 @@ export interface WorkloadHorizonModel {
   estimateMinutes: number;
   loggedMinutes: number;
   committedMinutes: number;
+  creditedLoggedMinutes: number;
+  creditedCommittedMinutes: number;
+  commitmentOverageMinutes: number;
   remainingMinutes: number;
   plannedMinutes: number;
   availableMinutes: number;
@@ -115,7 +121,13 @@ export function buildWorkloadHorizonModel({
 
   const tasks = diagnostics.map(item => {
     const info = taskLookup[item.task_id];
+    const estimate = Number(info?.estimated_minutes ?? 0);
+    const logged = Number(info?.logged_minutes ?? 0);
+    const committed = Number(info?.committed_minutes ?? 0);
     const remaining = Number(info?.remaining_minutes ?? item.required_minutes ?? 0);
+    const creditedTotal = Math.max(0, estimate - remaining);
+    const creditedLogged = Math.min(logged, creditedTotal);
+    const creditedCommitted = Math.min(committed, Math.max(0, creditedTotal - creditedLogged));
     return {
       id: item.task_id,
       title: info?.title ?? taskById.get(item.task_id)?.title ?? 'Untitled task',
@@ -123,9 +135,12 @@ export function buildWorkloadHorizonModel({
       goalTitle: info?.goal_title ?? null,
       dueDate: item.due_date,
       outcome: item.outcome,
-      estimate: Number(info?.estimated_minutes ?? 0),
-      logged: Number(info?.logged_minutes ?? 0),
-      committed: Number(info?.committed_minutes ?? 0),
+      estimate,
+      logged,
+      committed,
+      creditedLogged,
+      creditedCommitted,
+      commitmentOverage: Math.max(0, committed - creditedCommitted),
       remaining,
       plannedInRange: plannedByTask.get(item.task_id) ?? 0,
       shortfall: Number(item.shortfall_minutes ?? 0),
@@ -168,6 +183,9 @@ export function buildWorkloadHorizonModel({
     estimateMinutes: sum(task => task.estimate),
     loggedMinutes: sum(task => task.logged),
     committedMinutes: sum(task => task.committed),
+    creditedLoggedMinutes: sum(task => task.creditedLogged),
+    creditedCommittedMinutes: sum(task => task.creditedCommitted),
+    commitmentOverageMinutes: sum(task => task.commitmentOverage),
     remainingMinutes,
     plannedMinutes,
     availableMinutes,
@@ -243,6 +261,7 @@ export function WorkloadHorizon({
   const taskRows = (pressureTasks.length ? pressureTasks : model.tasks).slice(0, showAll ? undefined : 6);
   const rangeTitle = mode === 'week' ? `${dateLabel(rangeStart)} – ${dateLabel(rangeEnd)}` : `Next 35 days · ${dateLabel(rangeStart)} – ${dateLabel(rangeEnd)}`;
   const utilisation = model.availableMinutes > 0 ? Math.round(model.plannedMinutes / model.availableMinutes * 100) : 0;
+  const creditedHandled = model.creditedLoggedMinutes + model.creditedCommittedMinutes;
   const explanation = pressureCount > 0
     ? `${duration(model.remainingMinutes)} of known work is still unfinished in this view.${model.unestimatedCount ? ` ${model.unestimatedCount} unestimated task${model.unestimatedCount === 1 ? ' is' : 's are'} visible but excluded from the hour total.` : ''}`
     : `${duration(model.remainingMinutes)} remains, and every estimated task in this view can currently be placed.`;
@@ -266,17 +285,17 @@ export function WorkloadHorizon({
 
         <div className="mt-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <Metric label="Known estimates" value={duration(model.estimateMinutes)} note="Actionable leaf tasks only; parents are not double-counted" tone="indigo" />
-          <Metric label="Already handled" value={duration(model.loggedMinutes + model.committedMinutes)} note={`${duration(model.loggedMinutes)} worked · ${duration(model.committedMinutes)} already on calendar`} tone="emerald" />
-          <Metric label="Still left" value={duration(model.remainingMinutes)} note={`${duration(model.plannedMinutes)} placed inside this view · ${duration(model.remainingAfterRangeMinutes)} beyond it`} tone={model.overdueCount || model.missedCount ? 'red' : 'slate'} />
-          <Metric label="Usable time in view" value={duration(model.availableMinutes)} note={`${utilisation}% assigned · ${duration(model.freeMinutes)} still open after fixed events`} tone={utilisation > 90 ? 'amber' : 'slate'} />
+          <Metric label="Already handled" value={duration(creditedHandled)} note={`${duration(model.loggedMinutes)} worked · ${duration(model.committedMinutes)} recorded on calendar${model.commitmentOverageMinutes ? ` · ${duration(model.commitmentOverageMinutes)} exceeds its task estimate` : ''}`} tone="emerald" />
+          <Metric label="Still left" value={duration(model.remainingMinutes)} note={`${duration(model.plannedMinutes)} suggested by the planner in this view · ${duration(model.remainingAfterRangeMinutes)} later`} tone={model.overdueCount || model.missedCount ? 'red' : 'slate'} />
+          <Metric label="Usable time in view" value={duration(model.availableMinutes)} note={`Planner uses ${utilisation}% · ${duration(model.freeMinutes)} open after fixed events`} tone={utilisation > 90 ? 'amber' : 'slate'} />
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
           <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">Estimate {duration(model.estimateMinutes)}</span>
           <span className="text-slate-300">−</span>
-          <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-emerald-700">worked {duration(model.loggedMinutes)}</span>
+          <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-emerald-700">worked {duration(model.creditedLoggedMinutes)}</span>
           <span className="text-slate-300">−</span>
-          <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-indigo-700">calendar {duration(model.committedMinutes)}</span>
+          <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-indigo-700">calendar credit {duration(model.creditedCommittedMinutes)}</span>
           <span className="text-slate-300">=</span>
           <span className="rounded-full border border-slate-300 bg-slate-950 px-2.5 py-1 text-white">{duration(model.remainingMinutes)} left</span>
         </div>
@@ -292,10 +311,10 @@ export function WorkloadHorizon({
 
       <div className="grid gap-5 p-4 lg:p-6 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.8fr)]">
         <div className="min-w-0">
-          <div className="mb-3 flex items-end justify-between gap-3"><div><p className="text-xs font-bold text-slate-900">{mode === 'week' ? 'Day-by-day capacity' : 'Five-week load map'}</p><p className="mt-0.5 text-[11px] text-slate-500">Indigo is assigned work; pale space is usable time still open. Red dates contain a deadline miss.</p></div><span className="shrink-0 text-[10px] font-bold text-slate-400">{duration(model.plannedMinutes)} / {duration(model.availableMinutes)}</span></div>
+          <div className="mb-3 flex items-end justify-between gap-3"><div><p className="text-xs font-bold text-slate-900">{mode === 'week' ? 'Day-by-day capacity' : 'Five-week load map'}</p><p className="mt-0.5 text-[11px] text-slate-500">Indigo is the planner’s suggested task time, not saved calendar blocks. Pale space is usable time still open; red dates contain a deadline miss.</p></div><span className="shrink-0 text-[10px] font-bold text-slate-400">{duration(model.plannedMinutes)} / {duration(model.availableMinutes)}</span></div>
           <div className="overflow-x-auto pb-1">
             <div className="min-w-[700px]">
-              <div className="mb-1 grid grid-cols-7 gap-1.5 px-1 text-center text-[9px] font-bold uppercase tracking-wider text-slate-400">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => <span key={day}>{day}</span>)}</div>
+              <div className="mb-1 grid grid-cols-7 gap-1.5 px-1 text-center text-[9px] font-bold uppercase tracking-wider text-slate-400">{model.days.slice(0, 7).map(day => <span key={`heading-${day.date}`}>{parseLocalDate(day.date).toLocaleDateString('en-US', { weekday: 'short' })}</span>)}</div>
               <div className="grid grid-cols-7 gap-1.5">
                 {model.days.map((day, index) => {
                   const fill = day.available > 0 ? Math.min(100, Math.round(day.planned / day.available * 100)) : 0;
@@ -303,7 +322,7 @@ export function WorkloadHorizon({
                   const isPast = day.date < today;
                   const off = day.available <= 0;
                   return <button key={day.date} type="button" onClick={() => onSelectDate?.(day.date)} disabled={!onSelectDate} className={`relative min-h-[86px] rounded-xl border p-2 text-left transition ${day.missedCount ? 'border-red-200 bg-red-50/70' : isToday ? 'border-indigo-300 bg-indigo-50/70 ring-2 ring-indigo-100' : 'border-slate-100 bg-slate-50/70'} ${onSelectDate ? 'hover:border-indigo-300 hover:bg-indigo-50' : ''}`}>
-                    <div className="flex items-center justify-between gap-1"><span className={`text-[10px] font-bold ${isToday ? 'text-indigo-700' : 'text-slate-600'}`}>{parseLocalDate(day.date).getDate()}</span>{day.dueCount > 0 && <span className={`rounded-full px-1.5 py-0.5 text-[8px] font-bold ${day.missedCount ? 'bg-red-100 text-red-700' : 'bg-white text-slate-500'}`}>{day.dueCount} due</span>}</div>
+                    <div className="flex items-center justify-between gap-1"><span className={`text-[10px] font-bold ${isToday ? 'text-indigo-700' : 'text-slate-600'}`}>{index === 0 || parseLocalDate(day.date).getDate() === 1 ? parseLocalDate(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : parseLocalDate(day.date).getDate()}</span>{day.dueCount > 0 && <span className={`rounded-full px-1.5 py-0.5 text-[8px] font-bold ${day.missedCount ? 'bg-red-100 text-red-700' : 'bg-white text-slate-500'}`}>{day.dueCount} due</span>}</div>
                     <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><motion.div initial={reduceMotion ? false : { width: 0 }} animate={{ width: `${fill}%` }} transition={{ duration: 0.35, delay: Math.min(index * 0.01, 0.2) }} className={`h-full rounded-full ${day.missedCount ? 'bg-red-500' : fill > 90 ? 'bg-amber-500' : 'bg-indigo-500'}`} /></div>
                     <p className="mt-2 truncate text-[9px] font-semibold text-slate-500">{isPast ? 'Past' : off ? 'Off day' : `${duration(day.planned)} of ${duration(day.available)}`}</p>
                     {!isPast && !off && <p className="mt-0.5 text-[8px] text-slate-400">{duration(day.free)} open</p>}
@@ -320,11 +339,11 @@ export function WorkloadHorizon({
             {taskRows.length === 0 ? <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">No actionable task hours fall inside this view.</div> : taskRows.map(task => {
               const tone = task.overdue ? 'border-red-100 bg-red-50/60' : task.outcome === 'overflow' ? 'border-orange-100 bg-orange-50/60' : task.outcome === 'unestimated' ? 'border-amber-100 bg-amber-50/60' : 'border-emerald-100 bg-emerald-50/50';
               const status = task.overdue ? `${relativeDeadline(task.dueDate, today)} · ${duration(task.remaining)} left` : task.outcome === 'overflow' ? `${relativeDeadline(task.dueDate, today)} · short ${duration(task.shortfall)}` : task.outcome === 'unestimated' ? 'Needs a time estimate' : `${relativeDeadline(task.dueDate, today)} · fits`;
-              const recovery = task.recoveryFinishDate ? `Catch-up finishes ${dateLabel(task.recoveryFinishDate, true)}` : task.unscheduledMinutes > 0 ? `${duration(task.unscheduledMinutes)} remains outside the 35-day plan` : task.outcome === 'fit' ? `${duration(task.plannedInRange)} placed in this view` : null;
+              const recovery = task.recoveryFinishDate ? `Planner catch-up reaches ${dateLabel(task.recoveryFinishDate, true)}` : task.unscheduledMinutes > 0 ? `${duration(task.unscheduledMinutes)} remains outside the 35-day plan` : task.outcome === 'fit' ? `${duration(task.plannedInRange)} suggested in this view` : null;
               return <div key={task.id} className={`rounded-xl border p-3 ${tone}`}>
                 <div className="flex items-start gap-2"><div className="mt-0.5 shrink-0">{task.overdue || task.outcome === 'overflow' ? <AlertTriangle size={14} className={task.overdue ? 'text-red-600' : 'text-orange-600'} /> : task.outcome === 'unestimated' ? <Clock3 size={14} className="text-amber-600" /> : <CheckCircle2 size={14} className="text-emerald-600" />}</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold text-slate-900" title={task.title}>{task.title}</p><p className="mt-0.5 truncate text-[10px] text-slate-500" title={task.path}>{task.goalTitle ? `${task.goalTitle} · ` : ''}{task.path || task.title}</p></div></div>
                 <p className={`mt-2 text-[10px] font-bold ${task.overdue ? 'text-red-700' : task.outcome === 'overflow' ? 'text-orange-700' : task.outcome === 'unestimated' ? 'text-amber-700' : 'text-emerald-700'}`}>{status}</p>
-                {task.outcome !== 'unestimated' && <p className="mt-1 text-[9px] leading-4 text-slate-500">{duration(task.estimate)} estimate − {duration(task.logged)} worked − {duration(task.committed)} calendar = <strong className="text-slate-700">{duration(task.remaining)} left</strong>{recovery ? ` · ${recovery}` : ''}</p>}
+                {task.outcome !== 'unestimated' && <p className="mt-1 text-[9px] leading-4 text-slate-500">{duration(task.estimate)} estimate − {duration(task.creditedLogged)} worked − {duration(task.creditedCommitted)} calendar credit = <strong className="text-slate-700">{duration(task.remaining)} left</strong>{task.commitmentOverage ? ` · ${duration(task.commitmentOverage)} extra calendar time is not subtracted twice` : ''}{recovery ? ` · ${recovery}` : ''}</p>}
               </div>;
             })}
           </div>
@@ -332,7 +351,7 @@ export function WorkloadHorizon({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 bg-slate-50 px-5 py-3 text-[10px] text-slate-500"><span className="inline-flex items-center gap-1"><CalendarDays size={11} /> Fixed events are removed from usable capacity first.</span><span>Completed tasks add 0 remaining hours.</span><span>Unfinished parents are labels; unfinished leaves carry the estimates.</span></div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-100 bg-slate-50 px-5 py-3 text-[10px] text-slate-500"><span className="inline-flex items-center gap-1"><CalendarDays size={11} /> Fixed events are removed from usable capacity first.</span><span>The load map is a suggested plan; the calendar below is what is actually saved.</span><span>Completed tasks add 0 remaining hours.</span><span>Unfinished parents are labels; unfinished leaves carry the estimates.</span></div>
     </section>
   );
 }
