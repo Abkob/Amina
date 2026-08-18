@@ -27,6 +27,8 @@ interface TaskTreeProps {
   searchPlaceholder?: string;
   /** render tasks directly without goal section headers (drawer scoped to one goal) */
   hideGoalHeaders?: boolean;
+  /** Work can opt in after pre-filtering to started critical-path items. */
+  includeCriticalPath?: boolean;
 }
 
 function fmtMins(mins: number): string {
@@ -152,12 +154,15 @@ function SelectableRow(props: Parameters<typeof RowBody>[0] & { selected: boolea
   );
 }
 
-export function TaskTree({ tasks, goals, mode, selectedTaskId, onSelect, draggableIds, scheduledDates, searchPlaceholder, hideGoalHeaders = false }: TaskTreeProps) {
+export function TaskTree({ tasks, goals, mode, selectedTaskId, onSelect, draggableIds, scheduledDates, searchPlaceholder, hideGoalHeaders = false, includeCriticalPath = false }: TaskTreeProps) {
   const [q, setQ] = useState('');
   const [openGoals, setOpenGoals] = useState<Set<string>>(new Set());
   const [closedNodes, setClosedNodes] = useState<Set<string>>(new Set());
 
-  const forest = useMemo(() => buildTaskForest(tasks, goals), [tasks, goals]);
+  const forest = useMemo(
+    () => buildTaskForest(tasks, goals, { includeCriticalPath }),
+    [includeCriticalPath, tasks, goals],
+  );
   const shown = useMemo(() => filterForest(forest, q), [forest, q]);
   const searching = q.trim().length > 0;
 

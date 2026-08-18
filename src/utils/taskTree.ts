@@ -26,6 +26,14 @@ export function isOpenTask(t: DBTask): boolean {
 }
 
 /**
+ * Work normally hides critical-path scaffolding, but once a critical-path item
+ * is explicitly started it becomes actionable work and must be selectable.
+ */
+export function isWorkSelectableTask(t: DBTask): boolean {
+  return t.kind !== 'critical_path' || (t.status === 'in_progress' && !t.completed);
+}
+
+/**
  * Group tasks by goal and nest children under their parents. Children whose
  * parent is absent (completed, filtered, or missing) are promoted to the top
  * level of their goal group so nothing silently disappears.
@@ -33,9 +41,15 @@ export function isOpenTask(t: DBTask): boolean {
 export function buildTaskForest(
   tasks: DBTask[],
   goals: DBGoal[],
-  { includeCompleted = false }: { includeCompleted?: boolean } = {},
+  {
+    includeCompleted = false,
+    includeCriticalPath = false,
+  }: { includeCompleted?: boolean; includeCriticalPath?: boolean } = {},
 ): GoalGroup[] {
-  const visible = tasks.filter(t => t.kind !== 'critical_path' && (includeCompleted || isOpenTask(t)));
+  const visible = tasks.filter(t =>
+    (includeCriticalPath || t.kind !== 'critical_path') &&
+    (includeCompleted || isOpenTask(t)),
+  );
   const visibleIds = new Set(visible.map(t => t.id));
 
   const childrenOf = new Map<string, DBTask[]>();

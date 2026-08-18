@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DBGoal, DBTask } from '../../db/schema';
-import { buildTaskForest, filterForest } from '../taskTree';
+import { buildTaskForest, filterForest, isWorkSelectableTask } from '../taskTree';
 
 function task(overrides: Partial<DBTask>): DBTask {
   return {
@@ -80,6 +80,15 @@ describe('buildTaskForest', () => {
   it('excludes critical-path scaffolding tasks', () => {
     const groups = buildTaskForest([task({ id: 'cp', kind: 'critical_path' })], goals);
     expect(groups).toHaveLength(0);
+  });
+
+  it('can include a pre-filtered started critical-path item on the Work surface', () => {
+    const started = task({ id: 'started-cp', kind: 'critical_path', status: 'in_progress' });
+    const future = task({ id: 'future-cp', kind: 'critical_path', status: 'planned' });
+    const workTasks = [started, future].filter(isWorkSelectableTask);
+    const groups = buildTaskForest(workTasks, goals, { includeCriticalPath: true });
+
+    expect(groups[0].nodes.map(node => node.task.id)).toEqual(['started-cp']);
   });
 });
 

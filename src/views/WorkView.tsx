@@ -16,6 +16,7 @@ import { addTaskNote, deleteTaskNote, toggleTask, touchTask } from '../db/querie
 import { addNoteFile, deleteNoteFile } from '../db/queries/noteFiles';
 import { formatTaskTime, getRolledUpActualTime, getRolledUpTime } from '../utils/taskTime';
 import { getEffectiveTaskDueDate, getInheritedTaskDueDate } from '../utils/taskDates';
+import { isWorkSelectableTask } from '../utils/taskTree';
 import { readActiveWorkTimer, writeActiveWorkTimer, type ActiveWorkTimer } from '../utils/workTimer';
 
 function formatStopwatch(ms: number) {
@@ -142,16 +143,16 @@ export function WorkView() {
   }, [activeTimer]);
 
   const goalById = useMemo(() => new Map(goals.map(g => [g.id, g])), [goals]);
+  const workTasks = useMemo(() => allTasks.filter(isWorkSelectableTask), [allTasks]);
   const taskOptions = useMemo(() => {
-    return [...allTasks]
-      .filter(t => t.kind !== 'critical_path')
+    return [...workTasks]
       .sort((a, b) => {
         const ap = a.status === 'in_progress' ? 0 : a.completed ? 2 : 1;
         const bp = b.status === 'in_progress' ? 0 : b.completed ? 2 : 1;
         if (ap !== bp) return ap - bp;
         return (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.title.localeCompare(b.title);
       });
-  }, [allTasks]);
+  }, [workTasks]);
 
   useEffect(() => {
     if (workTaskId || taskOptions.length === 0) return;
@@ -294,9 +295,10 @@ export function WorkView() {
         <aside className="min-w-0">
           <div className="sticky top-20 max-h-[calc(100vh-140px)] overflow-y-auto rounded-xl border border-gray-200 bg-white p-3">
             <TaskTree
-              tasks={allTasks}
+              tasks={workTasks}
               goals={goals}
               mode="select"
+              includeCriticalPath
               selectedTaskId={currentTask?.id ?? null}
               onSelect={task => setWorkTaskId(task.id)}
               searchPlaceholder="Find a task or goal…"
