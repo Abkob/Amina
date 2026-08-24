@@ -19,3 +19,9 @@ server/uploads/
 # Playwright
 test-results/
 playwright-report/
+
+# Private operational artifacts
+backups/
+CC-Session-Logs/
+DATABASE_AUDIT_REPORT.md
+SESSION_CONTEXT.md
